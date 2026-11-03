@@ -577,7 +577,8 @@ onmessage=async e=>{const m=e.data;
   }
   async function communityLesson(id) {
     try {
-      const r = await fetch(LESSONS_URL + encodeURIComponent(id) + '.json', { cache: 'no-store' });
+      // GitHub's caches can hand out an old file for minutes; a new address each minute gets the current one
+      const r = await fetch(LESSONS_URL + encodeURIComponent(id) + '.json?m=' + Math.floor(Date.now() / 60000), { cache: 'no-store' });
       return r.ok ? readLesson(await r.text(), id) : null;
     } catch { return null; }
   }
