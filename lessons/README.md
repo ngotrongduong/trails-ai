@@ -2,7 +2,7 @@
 
 Mỗi file ở đây là bài học tốt nhất mọi người đã chia sẻ cho **một đường đua**, đặt tên theo mã điểm xuất phát của đường: `lessons/<mã đường>.json`.
 
-Khi bạn bấm **Bắt đầu học** trên một đường, AI tự tải file của đường đó (nếu có), **chạy thử nó bằng vật lý của game ngay trên máy bạn**, và chỉ dùng nếu nó thật sự giỏi hơn những gì AI của bạn đang có. Trong lúc học, cứ 10 phút AI lại xem có bài học mới hơn không. Vì vậy một file sai hay điểm khai gian không làm AI của ai tệ đi.
+Khi bạn bấm **Học lái** trên một đường, AI tự tải file của đường đó (nếu có), **chạy thử nó bằng vật lý của game ngay trên máy bạn**, và chỉ dùng nếu nó thật sự giỏi hơn những gì AI của bạn đang có. Trong lúc học, cứ 10 phút AI lại xem có bài học mới hơn không. Vì vậy một file sai hay điểm khai gian không làm AI của ai tệ đi.
 
 ## Góp bài học
 

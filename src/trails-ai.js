@@ -1008,7 +1008,8 @@ onmessage=async e=>{const m=e.data;
           out.push(p);
           continue;
         }
-        const span = 1 + Math.floor(Math.random() * 3);
+        // long stuck, the cause may lie further back (the run-up to a jump can start several sections before it)
+        const span = 1 + Math.floor(Math.random() * (this.stuck > 60 ? 5 : 3));
         for (let q = Math.max(0, k - span); q <= Math.min(S.length - 1, k + 1); q++) {
           if (Math.random() < 0.7) p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 1.5 * wide));
           if (S[q].jump && Math.random() < 0.4) p.pt[q] += gauss() * 0.15;
@@ -1042,8 +1043,10 @@ onmessage=async e=>{const m=e.data;
         const best = this.best;
         const finished = best.end === 'về đích';
         const passedJumps = S.map((s, i) => (s.jump && s.b < best.prog - 8 ? i : -1)).filter(i => i >= 0);
-        // first get through the line; every third try (or once stuck) practise tricks on jumps already cleared
-        const tricksTurn = passedJumps.length && (finished || this.stuck > 30 || this.gen % 3 === 2);
+        // First get through the whole line, and only then practise tricks on its jumps for more points. (Trick rounds
+        // while stuck, as before, kept the AI from ever trying the jump it was stuck on again: only rounds spent getting
+        // through count how long it has been stuck.)
+        const tricksTurn = passedJumps.length && finished;
         let cands, until, mode;
         if (tricksTurn) {
           const fresh = passedJumps.filter(j => !this.plan.mv[j]);
@@ -1285,6 +1288,11 @@ onmessage=async e=>{const m=e.data;
   #tai button.b.g{background:#232a33;border-color:#3a4554;font-weight:500}
   #tai button.b:disabled{opacity:.45;cursor:default}
   #tai .row{display:flex;gap:6px}#tai .row>*{flex:1}#tai .row.s button.b{font-size:12px;padding:7px 4px}
+  #tai .row.big button.b{font-size:16px;padding:12px 6px;border-radius:11px}
+  #tai button.b.on{background:#c0392b;border-color:#c0392b}
+  #tai .row.pk>select{flex:1}#tai .row.pk>button.b{flex:0 0 40px;padding:7px 0}
+  #tai details.more{margin-top:8px;border-top:1px solid #2a323c;padding-top:6px}
+  #tai details.more summary{cursor:pointer;color:#9fb0c2;padding:4px 0}
   #tai .st{color:#9fb0c2;margin:4px 0 8px;min-height:18px}
   #tai .sec{margin:12px 0 2px;padding-top:10px;border-top:1px solid #2a323c;font-weight:600;color:#fff}
   #tai .sec small{display:block;font-weight:400;color:#9fb0c2;font-size:12px}
@@ -1402,10 +1410,16 @@ onmessage=async e=>{const m=e.data;
     el.innerHTML = `
       <h3>AI tự học Trails <button class="x" title="Ẩn">×</button></h3>
       <div class="st">Đang chuẩn bị…</div>
-      <select class="pick"><option>Đang tìm đường gần bạn…</option></select>
-      <div class="row"><button class="b g refresh">Tìm lại đường gần tôi</button></div>
-      <div class="row"><button class="b go" disabled>Bắt đầu học</button></div>
-      <div class="row"><button class="b g watch" disabled>Xem AI chạy</button><button class="b drive" disabled>Để AI lái</button></div>
+      <div class="row pk"><select class="pick"><option>Đang tìm đường gần bạn…</option></select><button class="b g refresh" title="Tìm lại đường gần tôi">↻</button></div>
+      <div class="row big"><button class="b learn" disabled>Học lái</button><button class="b drive" disabled>AI lái</button></div>
+      <div class="kv">
+        <span>Đang làm</span><b class="k-now">–</b>
+        <span>Đường này</span><b class="k-line">chưa học</b>
+        <span>Bộ não chung</span><b class="k-brain">–</b>
+      </div>
+      <div class="log"></div>
+      <details class="more"><summary>Chi tiết, xem lại và chia sẻ</summary>
+      <div class="sec">Bài học của đường này<small>Kế hoạch AI tự tìm cho riêng đường đang chọn.</small></div>
       <div class="kv">
         <span>Vòng học</span><b class="k-gen">0</b>
         <span>Đang tập</span><b class="k-mode">–</b>
@@ -1417,11 +1431,11 @@ onmessage=async e=>{const m=e.data;
       </div>
       <div class="k-tricks"></div>
       <canvas width="600" height="180"></canvas>
-      <div class="log"></div>
+      <div class="row"><button class="b g watch" disabled>Xem lại lượt chạy tốt nhất</button></div>
       <div class="row s"><button class="b g export" disabled>Lưu ra file</button><button class="b g import">Mở file</button><button class="b g share" disabled>Chia sẻ GitHub</button></div>
       <input type="file" accept=".json,application/json" class="file" hidden>
       <div class="row"><button class="b g forget" disabled>Quên đường này, học lại từ đầu</button></div>
-      <div class="sec">Bộ não chung<small>Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra.</small></div>
+      <div class="sec">Bộ não chung<small>Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra. Bộ não cũng cho đường mới một cách bắt đầu.</small></div>
       <div class="kv">
         <span>Vòng luyện</span><b class="b-gen">0</b>
         <span>Luyện trên</span><b class="b-lines">–</b>
@@ -1429,10 +1443,9 @@ onmessage=async e=>{const m=e.data;
         <span>Đường chưa từng thấy</span><b class="b-test">–</b>
         <span>Tốc độ luyện</span><b class="b-speed">–</b>
       </div>
-      <div class="row"><button class="b brain-go">Luyện bộ não</button></div>
-      <div class="row"><button class="b g brain-drive">Bộ não lái đường đang chọn</button></div>
       <div class="row s"><button class="b g brain-export">Lưu bộ não</button><button class="b g brain-import">Mở bộ não</button><button class="b g brain-share">Chia sẻ GitHub</button></div>
-      <input type="file" accept=".json,application/json" class="bfile" hidden>`;
+      <input type="file" accept=".json,application/json" class="bfile" hidden>
+      </details>`;
     document.body.appendChild(el);
     const $ = s => el.querySelector(s);
     return { el, $ };
@@ -1469,6 +1482,7 @@ onmessage=async e=>{const m=e.data;
     const pct = v => `${Math.round(v * 100)}%`;
     function showBrain() {
       $('.b-gen').textContent = brain.gen;
+      $('.k-brain').textContent = !brain.gen ? 'chưa luyện' : brain.score ? `đi được ${pct(brain.score.share)} trên ${brain.trainIdx.length} đường` : `đã luyện ${brain.gen} vòng`;
       if (!brain.lines) return;
       $('.b-lines').textContent = `${brain.trainIdx.length} đường`;
       $('.b-train').textContent = `${pct(brain.score.share)} quãng đường (lúc mới: ${pct(brain.base.share)})`;
@@ -1481,7 +1495,20 @@ onmessage=async e=>{const m=e.data;
       $('.k-prog').textContent = `${b.prog} / ${trainer.N} m`;
       $('.k-end').textContent = `${b.end}, ${b.jumps} cú nhảy`;
       $('.k-tricks').innerHTML = fmtTricks(b.tricks);
-      $('.watch').disabled = $('.drive').disabled = $('.export').disabled = $('.share').disabled = false;
+      $('.watch').disabled = $('.export').disabled = $('.share').disabled = false;
+      showLine();
+    }
+    // how far the AI gets on the line chosen in the list: learning it now, or as saved by an earlier session
+    function showLine() {
+      const o = choices[+$('.pick').value];
+      let t = '–';
+      if (o && trainer.route && trainer.route.start.id === o.s.id && trainer.best) t = `AI đi được ${trainer.best.prog} / ${trainer.N} m`;
+      else if (o) {
+        let m = null;
+        try { m = JSON.parse(localStorage.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
+        t = m && m.bestRun ? `AI đi được ${m.bestRun.prog} m` : 'chưa học';
+      }
+      $('.k-line').textContent = t;
     }
     const trainer = new Trainer(ui);
     const brain = new BrainTrainer(ui);
@@ -1513,7 +1540,7 @@ onmessage=async e=>{const m=e.data;
           for (let i = 0; i < 40 && cap.chunks.size < 4; i++) await new Promise(r => setTimeout(r, 500));
           await new Promise(r => setTimeout(r, 2500));
         } else {
-          say('Chưa bắt được kết nối của game. Hãy đạp xe một chút rồi bấm “Tìm lại đường gần tôi”.');
+          say('Chưa bắt được kết nối của game. Hãy đạp xe một chút rồi bấm nút ↻ cạnh danh sách đường.');
           return;
         }
       }
@@ -1524,8 +1551,9 @@ onmessage=async e=>{const m=e.data;
       const sel = $('.pick');
       sel.innerHTML = near.length ? near.map((o, i) => `<option value="${i}">${i + 1}. Điểm xuất phát cách ${Math.round(o.d)} m${hasMemory(o.s.id) ? ' · đã học' : ''}</option>`).join('')
         : '<option>Không thấy điểm xuất phát nào gần đây</option>';
-      $('.go').disabled = !near.length;
-      say(near.length ? `Tìm thấy ${near.length} điểm xuất phát gần ${me.how}. Chọn một đường rồi bấm “Bắt đầu học”.` : 'Không có đường nào trong vòng 600 m. Hãy đến gần một đường rồi thử lại.');
+      $('.learn').disabled = $('.drive').disabled = !near.length;
+      showLine();
+      say(near.length ? `Tìm thấy ${near.length} điểm xuất phát gần ${me.how}. Chọn đường (gần nhất ở trên cùng) rồi bấm “Học lái” hoặc “AI lái”.` : 'Không có đường nào trong vòng 600 m. Hãy đến gần một đường rồi bấm ↻.');
     }
     const hasMemory = id => { try { return !!localStorage.getItem(STORE + id); } catch { return false; } };
     const savedLine = id => { try { const m = JSON.parse(localStorage.getItem(STORE + id) || 'null'); return m && m.line && m.line.X ? m.line : null; } catch { return null; } };
@@ -1539,12 +1567,13 @@ onmessage=async e=>{const m=e.data;
       else if (!quiet) log(`Bài học từ ${from}: ${r.run.prog} m, ${Math.round(r.run.fit)} điểm. AI của bạn đang giỏi hơn nên giữ nguyên.`);
     }
 
+    // Learns the line chosen in the list until stopped (by the player, or by the learning loop below). Returns false
+    // when the line could not be loaded.
+    const introduced = new Set();
     async function start() {
-      if (busy) return;
-      if (trainer.running) { trainer.stop(); $('.go').textContent = 'Học tiếp'; say('Đã tạm dừng. Trí nhớ của AI đã được lưu.'); return; }
       const o = choices[+$('.pick').value];
-      if (!o) return;
-      busy = true; $('.go').disabled = true;
+      if (busy || !o) return false;
+      busy = true;
       try {
         // one learner at a time: the brain gives its workers back
         releaseBrain();
@@ -1558,7 +1587,7 @@ onmessage=async e=>{const m=e.data;
           if (route && lineStale(route)) { log('Đường này đã được sửa trong game từ lần học trước, AI dò lại đường.'); route = null; }
           if (!route && shared && !lineStale(shared.line)) { route = shared.line; log('Lấy bản đồ đường này từ bài học cộng đồng trên GitHub.'); }
           if (!route) { route = await buildRoute(o.s); routeCache.set(o.s.id, route); }
-          if (!route) { say('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.'); return; }
+          if (!route) { say('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.'); return false; }
           say(`Đường dài ${route.length} m, ${route.pieces.length} chi tiết. Đang nạp vật lý vào ${workers} luồng (có thể mất vài chục giây)…`);
           const t0 = performance.now();
           // jumps learned on other lines, in this browser and shared on GitHub
@@ -1568,9 +1597,13 @@ onmessage=async e=>{const m=e.data;
           const mem = await trainer.prepare(route, workers);
           const kinds = Object.entries(route.kinds).map(([k, n]) => `${n} ${k}`).join(', ');
           const took = mem.from !== 'fresh';
+          // back from a turn of the brain: no need to tell it all again
+          if (mem.fromTrack && introduced.has(o.s.id)) log(`Quay lại học đường này (vòng ${trainer.gen}, đang đi được ${trainer.best.prog} m).`);
+          else {
+          introduced.add(o.s.id);
           log(`Đường mới: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
           log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
-          if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu”.');
+          if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu” (trong mục Chi tiết).');
           if (!trainer.library.length) log('Chưa có kinh nghiệm cú nhảy từ đường nào khác. Học xong đường này thì những đường sau sẽ mượn được.');
           else if (!mem.alike) log(`Kho kinh nghiệm có ${trainer.library.length} cú nhảy từ các đường khác, nhưng chưa cú nào giống cú nhảy của đường này.`);
           else {
@@ -1584,7 +1617,8 @@ onmessage=async e=>{const m=e.data;
             if (mem.from === 'brain') log(`<b>Bắt đầu từ cách lái của bộ não chung:</b> bộ não đi được ${b.prog} m trên đường này. Chép cách lái đó thành bài học thì được ngay <b>${at(b.run)}</b> (học từ con số 0: ${at(mem.fresh)}${mem.seed ? `; mượn cú nhảy: ${at(mem.seed)}` : ''}).`);
             else log(`Bộ não chung đi được ${b.prog} m trên đường này. Chép cách lái đó thành bài học thì được ${at(b.run)}, chưa hơn cách bắt đầu đang có (${at(trainer.best)}), nên không dùng.`);
           }
-          if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, bấm “Học tiếp” để AI tập trick.');
+          if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, lần học sau AI sẽ tự tập trick.');
+          }
           if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }
           $('.k-gen').textContent = trainer.gen;
           showBest(trainer.best);
@@ -1592,20 +1626,21 @@ onmessage=async e=>{const m=e.data;
           draw();
           $('.forget').disabled = false;
         }
-        say('AI đang tự học: thử, ngã, rút kinh nghiệm… Bạn có thể tiếp tục chơi.');
-        $('.go').textContent = 'Tạm dừng'; $('.go').disabled = false;
+        if (!learning || cancel) return true;
+        say('AI đang học đường này: thử, ngã, rút kinh nghiệm… Bạn có thể tiếp tục chơi.');
         busy = false;
         await trainer.run();
       } catch (err) {
         say('Lỗi: ' + (err && err.message || err));
         console.error(err);
       } finally {
-        busy = false; $('.go').disabled = false;
-        if (!trainer.running) $('.go').textContent = trainer.gen ? 'Học tiếp' : 'Bắt đầu học';
+        busy = false;
       }
+      return true;
     }
 
     async function watch() {
+      if (!trainer.pool) { say('Xem lại được khi AI đang học đường này (bấm “Học lái”).'); return; }
       say('Đang dựng lại lượt chạy tốt nhất…');
       const r = await trainer.bestRide();
       if (!r || !r.trace) return;
@@ -1647,34 +1682,28 @@ onmessage=async e=>{const m=e.data;
     function releaseBrain() {
       if (brain.running) brain.stop();
       if (brain.pool) { brain.pool.close(); brain.pool = null; }
-      $('.brain-go').textContent = brain.gen ? 'Luyện tiếp' : 'Luyện bộ não';
     }
     function releaseLine() {
       if (trainer.running) trainer.stop();
       if (trainer.pool) { trainer.pool.close(); trainer.pool = null; }
-      $('.go').textContent = trainer.gen ? 'Học tiếp' : 'Bắt đầu học';
     }
-    async function brainLearn() {
-      if (brain.running || !brain.pool) return;
-      $('.brain-go').textContent = 'Tạm dừng';
-      try { await brain.run(); } catch (err) { say('Lỗi: ' + (err && err.message || err)); console.error(err); }
-      if (!brain.running) $('.brain-go').textContent = 'Luyện tiếp';
-    }
+    // Trains the shared brain until stopped. Returns false when there are not enough lines for it.
+    let distilledKey = null, brainTold = false;
     async function brainStart() {
-      if (busy) return;
-      if (brain.running) { brain.stop(); $('.brain-go').textContent = 'Luyện tiếp'; say('Đã tạm dừng luyện bộ não. Bộ não đã được lưu.'); return; }
-      busy = true; $('.brain-go').disabled = true;
+      if (busy) return false;
+      busy = true;
       try {
         releaseLine();
         const o = choices[+$('.pick').value];
         if (!brain.pool || brain.testId !== (o ? o.s.id : null) || JSON.stringify(brain.setup) !== JSON.stringify(riderSetup())) {
-          say('Đang gom các đường để luyện bộ não…');
+          say('Đang gom các đường để luyện bộ não chung…');
           const { train, test } = await brainLines();
-          if (train.length < 2) { say('Cần ít nhất 2 đường để luyện bộ não. Hãy đến khu có nhiều đường rồi bấm “Tìm lại đường gần tôi”.'); return; }
-          say(`Đang nạp ${train.length + (test ? 1 : 0)} đường vào ${workers} luồng (có thể mất một phút)…`);
+          if (train.length < 2) { log('Bộ não chung cần ít nhất 2 đường gần đây để luyện, nên AI chỉ học đường đang chọn.'); return false; }
+          say(`Đang nạp ${train.length + (test ? 1 : 0)} đường vào ${workers} luồng cho bộ não chung (có thể mất một phút)…`);
           const t0 = performance.now();
           await brain.prepare(train, test, workers);
-          log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường (${train.map(r => r.length + ' m').join(', ')}), mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
+          if (!brainTold) log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường (${train.map(r => r.length + ' m').join(', ')}), mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
+          brainTold = true;
           const shared = await communityBrain();
           if (shared) {
             const r = await brain.offer(shared.w);
@@ -1682,10 +1711,13 @@ onmessage=async e=>{const m=e.data;
           }
           // the lessons of this browser show the brain how they ride, so it does not start from nothing
           const plans = [];
+          let key = '';
           brain.trainIdx.forEach(i => {
-            try { const m = JSON.parse(localStorage.getItem(STORE + brain.lines[i].id) || 'null'); if (m && m.plan && Array.isArray(m.plan.v)) plans.push({ line: i, plan: m.plan }); } catch { /* skip it */ }
+            try { const m = JSON.parse(localStorage.getItem(STORE + brain.lines[i].id) || 'null'); if (m && m.plan && Array.isArray(m.plan.v)) { plans.push({ line: i, plan: m.plan }); key += `${brain.lines[i].id}:${m.gen};`; } } catch { /* skip it */ }
           });
-          if (plans.length) {
+          // only when the lessons have learned more since the last time
+          if (plans.length && key !== distilledKey) {
+            distilledKey = key;
             say(`Bộ não đang xem ${plans.length} bài học đã có để bắt chước…`);
             const d = await brain.distill(plans);
             if (d && d.share === undefined) log(`Chưa có bài học nào đi xa hơn bộ não trên đường của nó, nên bộ não không cần bắt chước.`);
@@ -1693,35 +1725,81 @@ onmessage=async e=>{const m=e.data;
           }
           showBrain();
         }
-        say('Bộ não đang luyện trên nhiều đường cùng lúc… Bạn có thể tiếp tục chơi.');
-        $('.brain-go').textContent = 'Tạm dừng'; $('.brain-go').disabled = false;
+        if (!learning || cancel) return true;
+        say('AI đang luyện bộ não chung trên nhiều đường cùng lúc, vài phút nữa sẽ quay lại đường này… Bạn có thể tiếp tục chơi.');
         busy = false;
         await brain.run();
       } catch (err) {
         say('Lỗi: ' + (err && err.message || err));
         console.error(err);
       } finally {
-        busy = false; $('.brain-go').disabled = false;
-        if (!brain.running) $('.brain-go').textContent = brain.gen ? 'Luyện tiếp' : 'Luyện bộ não';
+        busy = false;
       }
+      return true;
     }
 
-    // The learning loop on the line already prepared (keeps going while the AI rides).
-    async function learn() {
-      if (trainer.running || !trainer.pool) return;
-      $('.go').textContent = 'Tạm dừng';
-      try { await trainer.run(); } catch (err) { say('Lỗi: ' + (err && err.message || err)); console.error(err); }
-      if (!trainer.running) $('.go').textContent = 'Học tiếp';
+    // ---- "Học lái": one button for all the learning. The chosen line learns until it has not got better for a few
+    // minutes, then the shared brain learns on all the lines near you for a few minutes, then back to the line, and so
+    // on. One learner at a time has every CPU thread. Each helps the other: lessons give the brain lines to learn on
+    // and plans to imitate, and the brain gives new lines a start.
+    const LINE_MIN = 2 * 60e3, LINE_STALL = 3 * 60e3, BRAIN_TIME = 5 * 60e3;
+    let learning = false, cancel = false, phase = null, phaseT0 = 0, gainT = 0, gainFit = -Infinity, brainT0 = 0, brainRestUntil = 0, loopId = 0;
+    function showNow() {
+      $('.k-now').textContent = !learning ? 'nghỉ' : phase === 'brain' ? 'luyện bộ não chung' : 'học đường này';
+      const b = $('.learn');
+      b.textContent = learning ? 'Dừng học' : 'Học lái';
+      b.classList.toggle('on', learning);
+    }
+    async function learnLoop(my) {
+      while (learning && my === loopId) {
+        cancel = false; phase = 'line'; phaseT0 = gainT = Date.now(); gainFit = -Infinity; showNow();
+        if (!(await start())) { learning = false; break; }
+        if (!learning || my !== loopId || cancel || Date.now() < brainRestUntil) continue;
+        cancel = false; phase = 'brain'; brainT0 = 0; showNow();
+        log(`Đường này ${Math.round(LINE_STALL / 60e3)} phút chưa tiến thêm: AI luyện bộ não chung vài phút rồi quay lại.`);
+        // not enough lines for the brain: keep to the line for a while
+        if (!(await brainStart())) brainRestUntil = Date.now() + 15 * 60e3;
+      }
+      if (my === loopId) { phase = null; showNow(); }
+    }
+    setInterval(() => {
+      if (!learning) return;
+      const now = Date.now();
+      if (phase === 'line' && trainer.running) {
+        if (trainer.best && trainer.best.fit > gainFit + 0.01) { gainFit = trainer.best.fit; gainT = now; }
+        if (now - phaseT0 > LINE_MIN && now - gainT > LINE_STALL && now >= brainRestUntil) trainer.stop();
+      } else if (phase === 'brain' && brain.running) {
+        if (!brainT0) brainT0 = now;
+        else if (now - brainT0 > BRAIN_TIME) brain.stop();
+      }
+    }, 2000);
+    async function learnButton() {
+      if (learning) {
+        learning = false; cancel = true; loopId++; trainer.stop(); brain.stop(); phase = null; showNow();
+        say('Đã dừng học. Những gì AI học được đã được lưu, bấm “Học lái” để học tiếp.');
+        return;
+      }
+      if (!choices[+$('.pick').value]) return;
+      learning = true; showNow();
+      // a loop stopped a moment ago may still be loading or finishing a round: let it end first
+      for (let i = 0; i < 600 && (busy || trainer.running || brain.running); i++) await new Promise(r => setTimeout(r, 200));
+      if (learning) learnLoop(++loopId);
+    }
+    // another line chosen while learning: start over on it
+    function lineChanged() {
+      showLine();
+      if (!learning) return;
+      cancel = true; trainer.stop(); brain.stop();
     }
 
-    // The AI rides your bike in the game: back to the start of the line, then its controls replace yours. Learning
-    // goes on meanwhile, and a better plan for the part of the line still ahead is used at once. After a fall the AI
-    // rides again with what it has learned since, until you press any key.
-    // again: what rides again after a fall (the line's plan or the brain); button: that one's button and its label
-    let badge = null, starting = false, looping = false, again = null, button = null;
-    const DRIVE_LABEL = { '.drive': 'Để AI lái', '.brain-drive': 'Bộ não lái đường đang chọn' };
+    // "AI lái": the AI rides your bike in the game on the line chosen in the list: back to the start of the line, then
+    // its controls replace yours. The line's lesson and the shared brain both ride the line in the simulation first,
+    // and the one that gets further drives. While the line is learning, a better plan for the part still ahead is used
+    // at once. After a fall the AI rides again with what it has learned since, until you press any key.
+    let badge = null, starting = false, looping = false;
+    const driveLabel = on => { $('.drive').textContent = on ? 'Dừng AI lái' : 'AI lái'; $('.drive').classList.toggle('on', on); };
     function stopDrive(why, byPlayer) {
-      if (byPlayer) { looping = false; for (const [b, t] of Object.entries(DRIVE_LABEL)) $(b).textContent = t; }
+      if (byPlayer) { looping = false; driveLabel(false); }
       if (!live.drive) return;
       const d = live.drive;
       live.drive = null;
@@ -1737,20 +1815,15 @@ onmessage=async e=>{const m=e.data;
       }
       if (looping) {
         say(`${d.who} lái thật: ${why} sau ${m} m. Lái lại sau 3 giây với những gì mới học được (bấm phím bất kỳ để dừng).`);
-        setTimeout(() => { if (looping && !live.drive && again) again(); }, 3000);
+        setTimeout(() => { if (looping && !live.drive) aiDrive(); }, 3000);
       } else say(`${d.who} lái thật: ${why} sau ${m} m${extra}.`);
     }
     function driveButton() {
       if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
-      looping = true; again = drive; button = '.drive';
-      drive();
+      looping = true; driveLabel(true);
+      aiDrive();
     }
-    function brainDriveButton() {
-      if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
-      looping = true; again = driveBrain; button = '.brain-drive';
-      driveBrain();
-    }
-    const cant = msg => { say(msg); looping = false; for (const [b, t] of Object.entries(DRIVE_LABEL)) $(b).textContent = t; };
+    const cant = msg => { say(msg); looping = false; driveLabel(false); };
     // still lying where the last run crashed: press the game's own "Ride again" (R) so its bail screen resets too
     async function getUp() {
       if (!(liveState()[13] > 0)) return;
@@ -1759,65 +1832,77 @@ onmessage=async e=>{const m=e.data;
       await new Promise(r => setTimeout(r, 500));
       starting = false;
     }
-    async function drive() {
-      if (starting) return;
-      if (!live.ex || !live.g) return cant('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.');
-      if (!trainer.route || !trainer.geo || !trainer.best) return cant('Hãy chọn một đường và cho AI học trước đã.');
-      if (JSON.stringify(trainer.setup) !== JSON.stringify(riderSetup())) {
-        return cant('Bạn đã đổi xe hoặc trick trong game sau khi AI học. Bấm “Học tiếp” để AI học lại với cài đặt mới, rồi hãy để AI lái.');
-      }
-      learn();
-      await getUp();
-      const geo = trainer.geo;
+    // The line's lesson rides the bike: the plan being learned now (better plans learned meanwhile are taken on the
+    // way, see takeNewer), or else plan P saved for the line, on the line's own small simulation ctx.
+    function driveLesson(ctx, P, expect) {
+      const now = !P, geo = now ? trainer.geo : ctx.geo, secs = now ? trainer.secs : ctx.secs;
       const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
-      // the rider reads this plan on every step; better plans learned meanwhile are copied into it (takeNewer)
-      const plan = clonePlan(trainer.plan);
-      const rider = makeRider(R, geo.H, trainer.secs, plan);
+      // the rider reads this plan on every step
+      const plan = clonePlan(now ? trainer.plan : P);
+      const rider = makeRider(R, geo.H, secs, plan);
       let known = trainer.plan;
-      const d = {
-        who: 'AI', route: trainer.route, rider, expect: trainer.best.prog, tricks: 0, swaps: 0,
-        // A newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
-        // gets the same states the simulation scored, so the plan's score holds for the rest of this ride too.
-        takeNewer() {
-          const p = trainer.plan;
-          if (p === known) return;
-          known = p;
-          const upto = Math.min(trainer.secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
-          for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
-          for (const k of PLAN_KEYS) plan[k] = p[k].slice();
-          d.swaps++; d.expect = trainer.best.prog;
-        },
+      const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, tricks: 0, swaps: 0 };
+      // A newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
+      // gets the same states the simulation scored, so the plan's score holds for the rest of this ride too.
+      if (now) d.takeNewer = () => {
+        const p = trainer.plan;
+        if (p === known || !trainer.running) return;
+        known = p;
+        const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
+        for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
+        for (const k of PLAN_KEYS) plan[k] = p[k].slice();
+        d.swaps++; d.expect = trainer.best.prog;
       };
       ride(d, R);
     }
-    // The brain rides the line chosen in the list, learned on or not. Its own worker rides the same brain in the
-    // simulation first, to know where it should fall; the brain keeps learning meanwhile, and rides again with the
-    // best it has after each fall.
-    let brainRide = null;
-    async function driveBrain() {
+    // A one-thread simulation of the line chosen, to ride the brain and saved plans on it before they drive.
+    let rideCtx = null;
+    async function lineCtx(o) {
+      if (rideCtx && rideCtx.id === o.s.id && JSON.stringify(rideCtx.setup) === JSON.stringify(riderSetup())) return rideCtx;
+      const route = trainer.route && trainer.route.start.id === o.s.id ? trainer.route : await lineFor(o.s);
+      if (!route) return null;
+      if (rideCtx) rideCtx.pool.close();
+      const pool = new Pool(1), setup = riderSetup();
+      const meta = await pool.init(route, setup);
+      rideCtx = { id: o.s.id, route, pool, geo: meta.geo, secs: meta.secs, setup };
+      return rideCtx;
+    }
+    async function aiDrive() {
       if (starting) return;
       if (!live.ex || !live.g) return cant('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.');
       const o = choices[+$('.pick').value];
       if (!o) return cant('Hãy chọn một đường trong danh sách trước đã.');
       starting = true;
+      let go = null;
       try {
-        if (!brainRide || brainRide.id !== o.s.id || JSON.stringify(brainRide.setup) !== JSON.stringify(riderSetup())) {
-          say('Đang dò đường cho bộ não…');
-          const route = await lineFor(o.s);
-          if (!route) return cant('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.');
-          if (brainRide) brainRide.pool.close();
-          const pool = new Pool(1), setup = riderSetup();
-          const meta = await pool.init(route, setup);
-          brainRide = { id: o.s.id, route, pool, geo: meta.geo, setup };
-        }
+        say('AI đang thử đường này trong mô phỏng trước khi lái…');
+        const ctx = await lineCtx(o);
+        if (!ctx) return cant('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.');
         const w = brain.best.slice();
-        const [sim] = await brainRide.pool.evalBrains([w], [[0, 0]]);
-        if (brain.pool && !brain.running) brainLearn();
-        await getUp();
-        const geo = brainRide.geo;
-        const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
-        ride({ who: 'Bộ não', route: brainRide.route, rider: makeBrainRider(R, geo.H, w), expect: sim.prog, tricks: 0, swaps: 0 }, R);
+        const [bs] = await ctx.pool.evalBrains([w], [[0, 0]]);
+        // the lesson: being learned now on this line, or saved in this browser for this bike and tricks
+        let ls = null, P = null;
+        const setup = JSON.stringify(riderSetup());
+        if (trainer.route && trainer.route.start.id === o.s.id && trainer.best && JSON.stringify(trainer.setup) === setup) ls = trainer.best;
+        else {
+          let m = null;
+          try { m = JSON.parse(localStorage.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
+          if (m && planFits(m.plan, ctx.secs) && JSON.stringify(m.setup) === setup) { P = m.plan; [ls] = await ctx.pool.evalAll([P]); }
+        }
+        const better = (a, b) => a.prog > b.prog || (a.prog === b.prog && a.fit >= b.fit);
+        const lesson = ls && better(ls, bs);
+        log(ls ? `AI lái bằng <b>${lesson ? 'bài học của đường này' : 'bộ não chung'}</b>: trong mô phỏng bài học đi được ${ls.prog} m, bộ não ${bs.prog} m.`
+          : `Đường này chưa có bài học, nên <b>bộ não chung</b> lái (trong mô phỏng đi được ${bs.prog} m). Bấm “Học lái” để AI học đường này.`);
+        go = lesson ? () => driveLesson(ctx, P, ls.prog) : () => {
+          const geo = ctx.geo, R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
+          ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w), expect: bs.prog, tricks: 0, swaps: 0 }, R);
+        };
+      } catch (err) {
+        cant('Lỗi: ' + (err && err.message || err)); console.error(err);
       } finally { starting = false; }
+      if (!go || !looping) return;
+      await getUp();
+      go();
     }
     // Hands the bike to rider d.rider on line R: back to the start, then its controls replace yours on every step.
     function ride(d, R) {
@@ -1847,10 +1932,10 @@ onmessage=async e=>{const m=e.data;
         if (liveState()[13] > 0) { clearInterval(watchBail); stopDrive('ngã'); }
       }, 250);
       badge = document.createElement('div'); badge.id = 'tai-badge';
-      badge.innerHTML = `${d.who} đang lái<small>Vẫn đang học ở nền · bấm phím bất kỳ để lấy lại tay lái</small>`;
+      badge.innerHTML = `${d.who} đang lái<small>${learning ? 'Vẫn đang học ở nền · ' : ''}bấm phím bất kỳ để lấy lại tay lái</small>`;
       document.body.appendChild(badge);
-      $(button).textContent = 'Dừng AI lái';
-      say(`${d.who} đang lái xe của bạn và vẫn học tiếp ở nền (bạn cần đang ngồi trên xe, không đi bộ). Bấm phím bất kỳ để lấy lại tay lái.`);
+      driveLabel(true);
+      say(`${d.who} đang lái xe của bạn${learning ? ' và vẫn học tiếp ở nền' : ''} (bạn cần đang ngồi trên xe, không đi bộ). Bấm phím bất kỳ để lấy lại tay lái.`);
     }
     // any key from the player takes the bike back
     window.addEventListener('keydown', e => { if ((live.drive || looping) && e.isTrusted) stopDrive('bạn đã lấy lại tay lái', true); }, true);
@@ -1859,13 +1944,12 @@ onmessage=async e=>{const m=e.data;
 
     $('.x').onclick = () => { el.style.display = 'none'; };
     $('.refresh').onclick = () => findTracks();
-    $('.go').onclick = () => start();
-    $('.watch').onclick = () => watch();
+    $('.learn').onclick = () => learnButton();
     $('.drive').onclick = () => driveButton();
-    $('.brain-go').onclick = () => brainStart();
-    $('.brain-drive').onclick = () => brainDriveButton();
-    if (brain.gen) $('.brain-go').textContent = 'Luyện tiếp';
-    $('.b-gen').textContent = brain.gen;
+    $('.watch').onclick = () => watch();
+    $('.pick').onchange = () => lineChanged();
+    showNow();
+    showBrain();
     // ---- sharing the brain
     function saveBrainFile() {
       const a = document.createElement('a');
@@ -1887,7 +1971,7 @@ onmessage=async e=>{const m=e.data;
       if (!f) return;
       const m = readBrain(await f.text());
       if (!m) { say('File này không phải bộ não của AI Trails.'); return; }
-      if (!brain.pool) { say('Bấm “Luyện bộ não” trước, rồi mở file lại: AI cần chạy thử bộ não trên các đường của bạn.'); return; }
+      if (!brain.pool) { say('Bộ não từ file cần được chạy thử trên các đường của bạn trước. Bấm “Học lái”, đợi tới lúc AI luyện bộ não chung, rồi mở file lại.'); return; }
       const r = await brain.offer(m.w);
       log(r.took ? `<b>Dùng bộ não từ file:</b> đi được ${pct(r.share)} quãng đường các đường của bạn, giỏi hơn bộ não đang có.` : `Bộ não từ file đi được ${pct(r.share)} quãng đường các đường của bạn, chưa hơn bộ não đang có nên giữ nguyên.`);
       showBrain();
@@ -1895,6 +1979,8 @@ onmessage=async e=>{const m=e.data;
     $('.forget').onclick = async () => {
       if (!trainer.route || !confirm('Xóa những gì AI đã học trên đường này?')) return;
       stopDrive('bạn đã dừng AI', true);
+      // learning goes on from nothing on this line
+      cancel = true;
       trainer.stop();
       // the training loop saves once more as it stops: wait for it before wiping
       for (let i = 0; i < 300 && trainer.running; i++) await new Promise(r => setTimeout(r, 100));
@@ -1906,11 +1992,12 @@ onmessage=async e=>{const m=e.data;
       $('.k-gen').textContent = '0'; $('.k-mode').textContent = '–';
       for (const k of ['.k-best', '.k-prog', '.k-end', '.k-speed', '.k-borrow']) $(k).textContent = '–';
       $('.k-tricks').innerHTML = '';
-      $('.watch').disabled = $('.drive').disabled = $('.forget').disabled = $('.export').disabled = $('.share').disabled = true;
-      $('.go').textContent = 'Bắt đầu học';
-      draw();
-      log('Đã xóa trí nhớ của đường này. Bấm “Bắt đầu học” để AI dò lại đường và học lại từ đầu.');
-      say('Đã xóa. Bấm “Bắt đầu học” để học lại từ đầu.');
+      $('.watch').disabled = $('.forget').disabled = $('.export').disabled = $('.share').disabled = true;
+      if (rideCtx) { rideCtx.pool.close(); rideCtx = null; }
+      introduced.clear();
+      draw(); showLine();
+      log(learning ? 'Đã xóa trí nhớ của đường này. AI dò lại đường và học lại từ đầu.' : 'Đã xóa trí nhớ của đường này. Bấm “Học lái” để AI dò lại đường và học lại từ đầu.');
+      say(learning ? 'Đã xóa, AI đang học lại từ đầu.' : 'Đã xóa. Bấm “Học lái” để học lại từ đầu.');
     };
 
     // ---- sharing what the AI learned
@@ -1942,10 +2029,10 @@ onmessage=async e=>{const m=e.data;
       if (!m) { say('File này không phải bài học của AI Trails.'); return; }
       const id = m.line.start.id;
       if (trainer.route && trainer.route.start.id === id && trainer.pool) { await useLesson(m, 'file'); return; }
-      if (hasMemory(id)) { say('Bài học này của một đường khác. Chọn đường đó, bấm “Bắt đầu học”, rồi mở file lại.'); return; }
+      if (hasMemory(id)) { say('Bài học này của một đường khác. Chọn đường đó, bấm “Học lái”, rồi mở file lại.'); return; }
       // a line not learned here yet: the file becomes its memory, and starting on it rides the plan before trusting it
       try { localStorage.setItem(STORE + id, JSON.stringify({ ...m, bestRun: null })); } catch { say('Trình duyệt hết chỗ lưu.'); return; }
-      say('Đã nhập bài học. Đến gần đường đó, chọn nó trong danh sách rồi bấm “Bắt đầu học”.');
+      say('Đã nhập bài học. Đến gần đường đó, chọn nó trong danh sách rồi bấm “Học lái”.');
     };
     // another tab learning the same line saved a better plan
     window.addEventListener('storage', e => {
@@ -1965,7 +2052,7 @@ onmessage=async e=>{const m=e.data;
       open() { el.style.display = ''; },
       // the extension found a newer AI on GitHub and kept it for the next page load
       newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
-      cap, trainer, brain, buildRoute, findTracks, engine, live, drive: driveButton, gatherJumps, fitBrain, freshBrain,
+      cap, trainer, brain, buildRoute, findTracks, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
     };
     if (window.__taiNewer) window.TrailsAI.newer();
     setTimeout(findTracks, 1500);

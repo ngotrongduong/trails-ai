@@ -1,11 +1,11 @@
 # Bộ não cộng đồng
 
-`brain.json` là bộ não chung: một mạng nơ-ron nhỏ lái được cả những đường nó chưa từng thấy. Khi bạn bấm **Luyện bộ não**, AI tải file này, chạy thử nó trên các đường của bạn bằng vật lý trên máy bạn, và chỉ dùng nếu nó đi giỏi hơn bộ não bạn đang có. Một bộ não tệ hay bị sửa bậy không thể làm AI của ai tệ đi.
+`brain.json` là bộ não chung: một mạng nơ-ron nhỏ lái được cả những đường nó chưa từng thấy. Mỗi lần bắt đầu luyện bộ não (trong lúc **Học lái**), AI tải file này, chạy thử nó trên các đường của bạn bằng vật lý trên máy bạn, và chỉ dùng nếu nó đi giỏi hơn bộ não bạn đang có. Một bộ não tệ hay bị sửa bậy không thể làm AI của ai tệ đi.
 
 ## Góp bộ não
 
-1. Luyện bộ não một lúc (bảng AI → **Luyện bộ não**).
-2. Bấm **Chia sẻ GitHub** trong phần bộ não. AI lưu `brain.json` và mở trang tải lên thư mục này.
+1. Bật **Học lái** một lúc lâu, để AI có nhiều lượt luyện bộ não chung.
+2. Mở mục **Chi tiết, xem lại và chia sẻ**, bấm **Chia sẻ GitHub** trong phần bộ não. AI lưu `brain.json` và mở trang tải lên thư mục này.
 3. Kéo file vào trang, bấm **Propose changes**.
 
 Pull request sẽ được nhận nếu bộ não mới đi giỏi hơn bộ não đang có trên nhiều đường.

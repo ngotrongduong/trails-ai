@@ -83,42 +83,41 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 </div>
 
 <div class="card">
-<h2>Cho AI học</h2>
+<h2>Hai nút: Học lái và AI lái</h2>
 <ol>
-<li>Đạp xe vài giây để AI biết bạn đang ở đâu, rồi bấm <b>Tìm lại đường gần tôi</b>.</li>
-<li>Chọn một điểm xuất phát trong danh sách, bấm <b>Bắt đầu học</b>. Lần đầu nạp vật lý mất khoảng 10–40 giây.</li>
-<li>AI học theo vòng: mỗi vòng nó thử vài chục cách chạy khác nhau trong mô phỏng (dùng gần hết các luồng CPU của máy) và giữ cách tốt nhất. Đầu tiên nó học cách vượt hết đường (tốc độ cho từng đoạn, góc xe khi bay), sau đó tập trick trên những cú nhảy đã qua được. Cứ để AI chạy 15–30 phút hoặc lâu hơn.</li>
-<li><b>Mượn kinh nghiệm:</b> mỗi cú nhảy AI vượt qua được ghi lại cùng hình dạng của nó (mép nhảy, khoảng hở, chỗ tiếp đất). Khi học một đường mới, AI tìm những cú nhảy giống nhất ở các đường đã học, trên máy bạn và của mọi người trên GitHub, rồi bắt đầu từ cách đã thành công ở đó. Khi bị kẹt ở một cú nhảy, nó cũng thử những cách đó. Càng học nhiều đường, đường mới càng học nhanh. Ô <b>Mượn kinh nghiệm</b> cho biết bao nhiêu cú nhảy tìm được cú giống và kinh nghiệm cũ đã giúp bao nhiêu lần.</li>
-<li>Bấm <b>Xem AI chạy</b> để xem lại lượt chạy tốt nhất ở dạng mặt cắt của đường, có tên trick và điểm.</li>
-<li>Bấm <b>Tạm dừng</b> bất cứ lúc nào. AI nhớ những gì đã học trên từng đường (lưu trong trình duyệt), lần sau bấm <b>Học tiếp</b>.</li>
+<li>Đạp xe vài giây để AI biết bạn đang ở đâu. Danh sách đường xếp theo khoảng cách, gần nhất ở trên cùng; bấm <b>↻</b> để tìm lại. Chọn một đường.</li>
+<li>Bấm <b>Học lái</b> rồi cứ để đó, càng lâu càng giỏi. AI tự lo phần còn lại:
+<ul>
+<li>Học đường đang chọn: mỗi vòng thử vài chục cách chạy trong mô phỏng (dùng gần hết các luồng CPU) và giữ cách tốt nhất. Nó tập vượt hết đường trước, về đích được rồi mới tập trick để thêm điểm.</li>
+<li>Khi đường này 3 phút không tiến thêm, AI luyện <b>bộ não chung</b> trên các đường quanh bạn khoảng 5 phút, rồi quay lại đường.</li>
+<li>Đường mới bắt đầu từ cách tốt nhất trong ba cách: học từ con số 0, mượn cú nhảy giống ở đường khác, hoặc chép cách lái của bộ não chung.</li>
+</ul></li>
+<li>Bấm <b>AI lái</b> để AI lái xe thật của bạn trên đường đang chọn (bạn phải đang <b>ngồi trên xe</b>, không đi bộ, không mở menu). AI chạy thử cả bài học của đường này lẫn bộ não chung trong mô phỏng, rồi để cái nào đi xa hơn lái. Đường chưa học thì bộ não chung lái.</li>
+<li>Bấm lại một trong hai nút (lúc đó là <b>Dừng học</b> / <b>Dừng AI lái</b>) để dừng. Mọi thứ AI học được đều lưu trong trình duyệt.</li>
+<li>Mục <b>Chi tiết, xem lại và chia sẻ</b> (thu gọn ở cuối bảng) có số liệu chi tiết, nút xem lại lượt chạy tốt nhất, lưu/mở file và chia sẻ lên GitHub.</li>
 </ol>
 <p class="note">AI học trong mô phỏng chạy trên máy bạn, dùng đúng bộ vật lý, đúng xe và đúng các trick mà tài khoản của bạn đang có. Lúc học nó không gửi gì lên máy chủ của game.</p>
 </div>
 
 <div class="card">
-<h2>Bộ não chung (mạng nơ-ron)</h2>
-<p>Bài học của mỗi đường chỉ dùng được trên đường đó. Bộ não là một mạng nơ-ron nhỏ. Nó nhìn xe và mặt đất 2–33 m phía trước, rồi tự quyết tốc độ, lúc nhấc xe, lúc pump và góc xe khi bay, nên lái được cả đường chưa từng thấy.</p>
-<ol>
-<li>Chọn một đường trong danh sách. Đường này được <b>để riêng làm bài kiểm tra</b>: bộ não không bao giờ luyện trên nó.</li>
-<li>Bấm <b>Luyện bộ não</b>. AI gom các đường đã học và các đường gần bạn (tối đa 12), mỗi luồng CPU giữ một đường. Lần đầu nạp mất khoảng nửa phút. Trước tiên bộ não xem các bài học đã có để bắt chước, sau đó tự luyện: mỗi vòng thử 20 bộ não hơi khác nhau trên tất cả các đường và nhích về phía những bộ đi xa hơn.</li>
-<li>Ô <b>Trên các đường luyện</b> và <b>Đường chưa từng thấy</b> cho biết bộ não đi được bao nhiêu phần đường. Bộ não học chậm hơn bài học của một đường, nên hãy để nó luyện lâu (hàng giờ). Bấm <b>Tạm dừng</b> lúc nào cũng được, bộ não được lưu trong trình duyệt.</li>
-<li>Bấm <b>Bộ não lái đường đang chọn</b> để bộ não lái xe thật của bạn (phải đang ngồi trên xe).</li>
-<li><b>Lưu bộ não</b> / <b>Mở bộ não</b> cất bộ não ra file. <b>Chia sẻ GitHub</b> mở trang tải lên thư mục <code>brain/</code>. Khi bắt đầu luyện, AI tải bộ não cộng đồng và chỉ dùng nếu nó đi giỏi hơn trên các đường của bạn.</li>
-</ol>
+<h2>Bên trong: bài học, mượn kinh nghiệm và bộ não chung</h2>
+<ul>
+<li><b>Bài học</b> của một đường là kế hoạch cho từng đoạn: tốc độ, chỗ nhấc xe trước mép nhảy, pump, góc xe khi bay. Nó chỉ dùng được trên đúng đường đó.</li>
+<li><b>Mượn kinh nghiệm:</b> mỗi cú nhảy AI vượt qua được ghi lại cùng hình dạng của nó (mép nhảy, khoảng hở, chỗ tiếp đất). Ở đường mới, AI tìm những cú giống nhất ở các đường đã học, trên máy bạn và của mọi người trên GitHub, và thử cách đã thành công ở đó.</li>
+<li><b>Bộ não chung</b> là một mạng nơ-ron nhỏ: nhìn xe và mặt đất 2–33 m phía trước rồi tự quyết tốc độ, lúc nhấc xe, lúc pump và góc xe khi bay, nên lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra, bộ não không luyện trên nó. Bộ não học chậm hơn bài học của một đường, cần luyện hàng giờ.</li>
+</ul>
 </div>
 
 <div class="card">
-<h2>Để AI lái thật trong game</h2>
+<h2>Khi AI lái thật trong game</h2>
 <ol>
-<li>Cho AI học trên một đường trước. Khi ô <b>Lượt chạy tốt nhất</b> báo “về đích” là AI đã vượt hết đường trong mô phỏng.</li>
-<li>Bạn phải đang <b>ngồi trên xe</b> (đang Ride, không đi bộ, không mở menu).</li>
-<li>Bấm <b>Để AI lái</b>. Xe của bạn được đưa về điểm xuất phát và AI tự đạp, lái, nhảy qua từng cú nhảy. Phía trên màn hình hiện “AI đang lái · số mét đã đi”.</li>
-<li><b>Vừa lái vừa học:</b> trong lúc AI lái, phần nền vẫn tiếp tục học. Tìm ra cách tốt hơn cho những đoạn phía trước xe là AI dùng ngay trong lượt đang chạy (trên huy hiệu hiện “học thêm N lần”).</li>
+<li>Xe của bạn được đưa về điểm xuất phát và AI tự đạp, lái, nhảy qua từng cú nhảy. Phía trên màn hình hiện “AI đang lái · số mét đã đi”.</li>
+<li><b>Vừa lái vừa học:</b> nếu đang bật Học lái trên đường này, tìm ra cách tốt hơn cho những đoạn phía trước xe là AI dùng ngay trong lượt đang chạy (trên huy hiệu hiện “học thêm N lần”).</li>
 <li>Ngã hoặc về đích xong, AI tự lái lại từ đầu sau 3 giây với bài học mới nhất, cứ thế liên tục.</li>
 <li>Mỗi lượt lái thật, AI so chỗ ngã thật với dự đoán của mô phỏng và kiểm tra bản đồ trong mô phỏng với những gì game vừa tải dọc đường. Nếu đường đã bị sửa, AI báo để bạn cho nó dò lại đường.</li>
 <li>Muốn lấy lại tay lái: bấm <b>phím bất kỳ</b> hoặc bấm <b>Dừng AI lái</b>.</li>
 </ol>
-<p class="note">Ngoài game AI chạy đúng như lượt tốt nhất trong mô phỏng: nếu mô phỏng ngã ở mét 800 thì ngoài game cũng ngã ở đó. Người chơi khác đang online thấy xe bạn chạy như thường, và game có thể tính lượt chạy này vào thống kê của bạn. Đổi xe hoặc mở khóa thêm trick thì bấm <b>Học tiếp</b> để AI học lại với cài đặt mới. Tài khoản chưa mở khóa trick (game mở khi đủ 200 cú nhảy và 5 đường) thì AI chỉ chạy, không làm trick.</p>
+<p class="note">Ngoài game AI chạy đúng như lượt tốt nhất trong mô phỏng: nếu mô phỏng ngã ở mét 800 thì ngoài game cũng ngã ở đó. Người chơi khác đang online thấy xe bạn chạy như thường, và game có thể tính lượt chạy này vào thống kê của bạn. Đổi xe hoặc mở khóa thêm trick thì bấm <b>Học lái</b> để AI học lại với cài đặt mới. Tài khoản chưa mở khóa trick (game mở khi đủ 200 cú nhảy và 5 đường) thì AI chỉ chạy, không làm trick.</p>
 </div>
 
 <div class="card">

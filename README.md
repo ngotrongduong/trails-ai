@@ -14,13 +14,17 @@ Với từng đường, AI không dùng mạng nơ-ron. Nó học bằng **thử
 2. **Chia thành đoạn.** Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
 3. **Kế hoạch (plan).** Với mỗi đoạn, AI giữ vài con số: tốc độ cần giữ, góc xe khi bay, có nhấc xe ở mép nhảy không, có pump không, làm trick gì, ở độ cao nào. Việc lái (bẻ lái theo đường, đạp tới tốc độ, cân xe trên không) do một bộ điều khiển cố định làm.
 4. **Thử trong mô phỏng.** Mỗi luồng CPU chạy một bản **vật lý thật của game** (đúng file WebAssembly game dùng). Mỗi vòng AI tạo vài chục bản sao của kế hoạch, mỗi bản đổi một chút quanh chỗ hay ngã, chạy thử tất cả, và giữ bản tốt nhất.
-5. **Hai giai đoạn.** Đầu tiên học vượt hết đường; khi đã qua được các cú nhảy, AI xen kẽ tập trick trên chúng.
+5. **Hai giai đoạn.** Đầu tiên học vượt hết đường. Chỉ khi đã về đích được, AI mới tập trick trên các cú nhảy để thêm điểm.
+
+Trước đây AI xen kẽ tập trick ngay khi còn đang kẹt. Nhưng bộ đếm "đang kẹt" chỉ chạy ở những vòng tập vượt đường, nên kẹt quá 30 vòng là AI tập trick mãi và không bao giờ thử lại cú nhảy đang kẹt nữa (có máy chạy hơn 100.000 vòng vẫn đứng yên). Đã sửa: trên đường bị kẹt ở 106 m, sau khi sửa AI lên 124 m trong khoảng một phút.
+
+Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng giữa học đường đang chọn và luyện bộ não chung, xem bên dưới) và **AI lái**. Mọi thứ khác nằm trong mục **Chi tiết, xem lại và chia sẻ** thu gọn ở cuối bảng.
 
 Vật lý của game cho kết quả giống hệt nhau mỗi lần chạy, nên những gì AI làm được trong mô phỏng thì ngoài game nó cũng làm được y như vậy. Đã kiểm tra: mô phỏng ngã ở mét 1096 thì AI lái thật ngã ở mét 1094.
 
 ### Vừa lái thật vừa học
 
-Khi bấm **Để AI lái**, AI lái xe của bạn trong game, còn phần nền vẫn tiếp tục học. Mỗi giây AI xem đã có kế hoạch mới tốt hơn chưa. Nếu kế hoạch mới giữ nguyên cách chạy ở phần đường xe đã đi qua, nghĩa là chỉ đổi những đoạn phía trước, thì AI dùng nó ngay trong lượt đang chạy, vì khi đó trạng thái xe ngoài game đúng bằng trạng thái mà mô phỏng đã chấm điểm. Ngã xong, AI tự lái lại từ đầu với bài học mới nhất.
+Khi bấm **AI lái**, AI lái xe của bạn trong game. Bài học của đường này và bộ não chung đều chạy thử trong mô phỏng trước, cái nào đi xa hơn thì lái. Nếu **Học lái** đang bật, phần nền vẫn tiếp tục học. Mỗi giây AI xem đã có kế hoạch mới tốt hơn chưa. Nếu kế hoạch mới giữ nguyên cách chạy ở phần đường xe đã đi qua, nghĩa là chỉ đổi những đoạn phía trước, thì AI dùng nó ngay trong lượt đang chạy, vì khi đó trạng thái xe ngoài game đúng bằng trạng thái mà mô phỏng đã chấm điểm. Ngã xong, AI tự lái lại từ đầu với bài học mới nhất.
 
 Mỗi lượt lái thật cũng là một lần kiểm tra mô phỏng: AI so chỗ ngã thật với chỗ mô phỏng dự đoán, và so bản đồ trong mô phỏng với những chi tiết game vừa tải dọc đường. Lệch là dấu hiệu đường đã bị sửa và AI cần dò lại đường.
 
@@ -39,11 +43,11 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 
 - **Nó thấy gì** (22 con số, cứ 2 khung hình một lần): tốc độ, góc xe và góc đang xoay nhanh cỡ nào, đang bay hay chạm đất, đang lên hay xuống, cao hơn mặt đất bao nhiêu, mặt đất ở 2, 4, 6, 8, 11, 14, 18, 22, 27 và 33 m phía trước, còn bao xa tới mép nhảy kế tiếp, dốc của chỗ tiếp đất, và xe đang ở trên mép nhảy, mặt tiếp đất hay mô pump.
 - **Nó quyết định gì** (4 con số): tốc độ cần giữ, có nhấc xe không, pump mạnh bao nhiêu, và góc xe khi bay. Phần bẻ lái theo đường vẫn do bộ điều khiển cố định làm. Mạng có 22 đầu vào, 16 nơ-ron ẩn và 4 đầu ra (420 trọng số).
-- **Cách luyện:** bấm **Luyện bộ não**. AI gom các đường đã học trong trình duyệt và các đường gần bạn (tối đa 12). Mỗi luồng CPU giữ một đường, và mỗi đường được chấm trên 400 m đầu. Mỗi vòng AI thử 20 bộ não hơi khác nhau trên tất cả các đường cùng lúc, rồi nhích bộ não về phía những bộ đi xa hơn. Cách này gọi là chiến lược tiến hóa (evolution strategies). Cứ 5 vòng, bộ não được giữ lại nếu nó đi giỏi hơn bộ tốt nhất trước đó.
+- **Cách luyện:** bộ não luyện trong lúc **Học lái** đang bật, mỗi khi đường đang chọn 3 phút không tiến thêm (khoảng 5 phút mỗi lượt, rồi AI quay lại đường). AI gom các đường đã học trong trình duyệt và các đường gần bạn (tối đa 12). Mỗi luồng CPU giữ một đường, và mỗi đường được chấm trên 400 m đầu. Mỗi vòng AI thử 20 bộ não hơi khác nhau trên tất cả các đường cùng lúc, rồi nhích bộ não về phía những bộ đi xa hơn. Cách này gọi là chiến lược tiến hóa (evolution strategies). Cứ 5 vòng, bộ não được giữ lại nếu nó đi giỏi hơn bộ tốt nhất trước đó.
 - **Đường đang chọn được để riêng:** bộ não không bao giờ luyện trên nó. Con số trên đường đó cho biết bộ não lái giỏi cỡ nào trên một đường lạ.
 - **Bắt chước bài học:** trước khi tự luyện, bộ não xem các bài học đã có trên máy chạy đường của chúng và học làm giống vậy. Sau đó nó tự chạy, còn bài học chỉ cho nó nên làm gì ở những chỗ nó đến. Kết quả chỉ được giữ nếu giỏi hơn.
-- **Bộ não lái đường đang chọn:** bộ não lái xe thật của bạn trên đường đang chọn, kể cả đường nó chưa từng thấy.
-- **Bộ não giúp bài học ở đường mới:** khi bạn bấm **Bắt đầu học** trên một đường chưa học, bộ não (nếu đã luyện) chạy đường đó trong mô phỏng. Cách nó lái được chép thành kế hoạch, từng đoạn một: tốc độ, chỗ nhấc xe trước mép nhảy, độ pump, góc xe khi bay. Có 4 cách chép tốc độ: theo tốc độ bộ não nhắm hay tốc độ xe thật sự chạy, tính trên cả đoạn hay chỉ 8 m cuối đoạn. AI chạy thử cả 4, và bài học chỉ bắt đầu từ cách tốt nhất nếu nó hơn học từ con số 0 và hơn cách mượn cú nhảy.
+- **Bộ não lái:** khi bấm **AI lái**, bộ não lái nếu nó đi xa hơn bài học của đường đó trong mô phỏng, hoặc nếu đường chưa có bài học.
+- **Bộ não giúp bài học ở đường mới:** khi AI bắt đầu học một đường chưa học, bộ não (nếu đã luyện) chạy đường đó trong mô phỏng. Cách nó lái được chép thành kế hoạch, từng đoạn một: tốc độ, chỗ nhấc xe trước mép nhảy, độ pump, góc xe khi bay. Có 4 cách chép tốc độ: theo tốc độ bộ não nhắm hay tốc độ xe thật sự chạy, tính trên cả đoạn hay chỉ 8 m cuối đoạn. AI chạy thử cả 4, và bài học chỉ bắt đầu từ cách tốt nhất nếu nó hơn học từ con số 0 và hơn cách mượn cú nhảy.
 - **Chia sẻ:** **Lưu bộ não** / **Mở bộ não** ra file. **Chia sẻ GitHub** trong phần bộ não lưu file và mở trang tải lên thư mục [`brain/`](brain/). Khi bắt đầu luyện, AI tải bộ não cộng đồng `brain/brain.json`, chạy thử trên các đường của bạn, và chỉ dùng nếu nó giỏi hơn.
 
 Đo lần đầu trên 12 đường luyện và 1 đường để riêng (150 m), máy 16 luồng:
