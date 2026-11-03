@@ -14,7 +14,7 @@ fs.writeFileSync(path.join(root, 'dist', 'trails-ai.js'), slim);
 
 // the bookmark is a small loader, so everyone always runs the latest AI from the repo
 const RAW = `https://raw.githubusercontent.com/${REPO}/main/dist/trails-ai.js`;
-const bookmarklet = 'javascript:' + encodeURIComponent(`fetch('${RAW}?m='+Math.floor(Date.now()/6e4),{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text()}).then(c=>(0,eval)(c)).catch(e=>alert('Không tải được AI Trails: '+e.message));void 0`);
+const bookmarklet = 'javascript:' + encodeURIComponent(`fetch('${RAW}?t='+Date.now(),{cache:'no-store'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.text()}).then(c=>(0,eval)(c)).catch(e=>alert('Không tải được AI Trails: '+e.message));void 0`);
 const esc = s => s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
 const html = `<!doctype html>

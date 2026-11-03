@@ -496,7 +496,7 @@ return false;
 }
 async function communityLesson(id) {
 try {
-const r = await fetch(LESSONS_URL + encodeURIComponent(id) + '.json?m=' + Math.floor(Date.now() / 60000), { cache: 'no-store' });
+const r = await fetch(LESSONS_URL + encodeURIComponent(id) + '.json?t=' + Date.now(), { cache: 'no-store' });
 return r.ok ? readLesson(await r.text(), id) : null;
 } catch { return null; }
 }
