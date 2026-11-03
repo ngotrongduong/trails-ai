@@ -1,0 +1,22 @@
+name: check
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: AI code parses
+        run: node --check src/trails-ai.js
+      - name: Built files are up to date (run "node tools/build.js" after changing src)
+        run: |
+          node tools/build.js
+          git diff --exit-code -- dist docs
+      - name: Lesson files are valid
+        run: node tools/check-lessons.js
