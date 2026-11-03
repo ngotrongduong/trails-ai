@@ -8,7 +8,7 @@ Một AI tự học cách chạy bất kỳ đường đua nào trong [Trails: T
 
 ## AI học như thế nào
 
-Không có mạng nơ-ron nào ở đây. AI học bằng **thử và sai có chọn lọc**, kiểu tiến hóa:
+Với từng đường, AI không dùng mạng nơ-ron. Nó học bằng **thử và sai có chọn lọc**, kiểu tiến hóa (phần [bộ não chung](#bộ-não-chung-mạng-nơ-ron) bên dưới mới là mạng nơ-ron):
 
 1. **Đọc đường đua.** AI đọc các chi tiết của đường (mép nhảy, mặt tiếp đất, cua nghiêng, mô pump…) từ chính dữ liệu game gửi về, rồi nối chúng thành một lộ trình chia theo từng mét.
 2. **Chia thành đoạn.** Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
@@ -31,7 +31,26 @@ Kế hoạch của AI gắn với từng đoạn của một đường, nên t�
 - Khi bắt đầu một đường mới, với mỗi cú nhảy AI tìm cú giống nhất trong kho, cả kho trên máy bạn và kho cộng đồng [`experience/jumps.json`](experience/jumps.json). Nó thử chạy cả đường bằng cách mượn được, và chỉ giữ nếu cách đó đi xa hơn học từ con số 0.
 - Khi bị kẹt ở một cú nhảy, một phần sáu số lần thử mỗi vòng dùng cách đã thành công ở những cú nhảy giống nó.
 
-Đo lần đầu trên 4 đường mới, mỗi đường 25 vòng: có mượn thì điểm cao hơn ở 3/4 đường, nhưng chỉ một lần cải thiện là do cách mượn trực tiếp, nên chưa thể nói nó giúp nhiều. Kho hiện mới có 16 cú nhảy từ một đường. Kho càng lớn thì càng dễ tìm được cú giống. Đây cũng là bước chuẩn bị cho một “bộ não” chung (mạng nơ-ron) nhìn hình dạng địa hình phía trước để tự lái trên bất kỳ đường nào.
+Đo lần đầu trên 4 đường mới, mỗi đường 25 vòng: có mượn thì điểm cao hơn ở 3/4 đường, nhưng chỉ một lần cải thiện là do cách mượn trực tiếp, nên chưa thể nói nó giúp nhiều. Kho hiện mới có 16 cú nhảy từ một đường. Kho càng lớn thì càng dễ tìm được cú giống.
+
+### Bộ não chung (mạng nơ-ron)
+
+Kế hoạch của từng đường chỉ dùng được trên đường đó. **Bộ não** thì khác: nó là một mạng nơ-ron nhỏ, không nhớ đường nào cả mà **nhìn** rồi quyết định, nên lái được cả những đường nó chưa từng thấy.
+
+- **Nó thấy gì** (22 con số, cứ 2 khung hình một lần): tốc độ, góc xe và góc đang xoay nhanh cỡ nào, đang bay hay chạm đất, đang lên hay xuống, cao hơn mặt đất bao nhiêu, mặt đất ở 2, 4, 6, 8, 11, 14, 18, 22, 27 và 33 m phía trước, còn bao xa tới mép nhảy kế tiếp, dốc của chỗ tiếp đất, và xe đang ở trên mép nhảy, mặt tiếp đất hay mô pump.
+- **Nó quyết định gì** (4 con số): tốc độ cần giữ, có nhấc xe không, pump mạnh bao nhiêu, và góc xe khi bay. Phần bẻ lái theo đường vẫn do bộ điều khiển cố định làm. Mạng có 22 đầu vào, 16 nơ-ron ẩn và 4 đầu ra (420 trọng số).
+- **Cách luyện:** bấm **Luyện bộ não**. AI gom các đường đã học trong trình duyệt và các đường gần bạn (tối đa 12). Mỗi luồng CPU giữ một đường, và mỗi đường được chấm trên 400 m đầu. Mỗi vòng AI thử 20 bộ não hơi khác nhau trên tất cả các đường cùng lúc, rồi nhích bộ não về phía những bộ đi xa hơn. Cách này gọi là chiến lược tiến hóa (evolution strategies). Cứ 5 vòng, bộ não được giữ lại nếu nó đi giỏi hơn bộ tốt nhất trước đó.
+- **Đường đang chọn được để riêng:** bộ não không bao giờ luyện trên nó. Con số trên đường đó cho biết bộ não lái giỏi cỡ nào trên một đường lạ.
+- **Bắt chước bài học:** trước khi tự luyện, bộ não xem các bài học đã có trên máy chạy đường của chúng và học làm giống vậy. Sau đó nó tự chạy, còn bài học chỉ cho nó nên làm gì ở những chỗ nó đến. Kết quả chỉ được giữ nếu giỏi hơn.
+- **Bộ não lái đường đang chọn:** bộ não lái xe thật của bạn trên đường đang chọn, kể cả đường nó chưa từng thấy.
+- **Chia sẻ:** **Lưu bộ não** / **Mở bộ não** ra file. **Chia sẻ GitHub** trong phần bộ não lưu file và mở trang tải lên thư mục [`brain/`](brain/). Khi bắt đầu luyện, AI tải bộ não cộng đồng `brain/brain.json`, chạy thử trên các đường của bạn, và chỉ dùng nếu nó giỏi hơn.
+
+Đo lần đầu trên 12 đường luyện và 1 đường để riêng (150 m), máy 16 luồng:
+
+- Mỗi vòng mất 12–19 giây. Sau 80 vòng (khoảng 16 phút), bộ não đi được **61%** của 400 m đầu các đường luyện. Bộ não mới tinh đi được 49%.
+- Trên đường để riêng, bộ não chưa giỏi hơn: bộ não mới đi được 35 m, bộ não đã luyện đi được 27–41 m. Với 12 đường, nó mới học thuộc các đường luyện chứ chưa học được cách lái chung. Cần nhiều đường hơn và luyện lâu hơn nhiều.
+- Bắt chước bài học giúp ít hơn mong đợi. Bộ não làm theo khá sát (tốc độ lệch khoảng 0,7 m/s, nhấc xe đúng 95/97 lần). Nhưng bài học được tìm bằng thử-sai cho đúng một đường đi, nên chỉ lệch một chút là xe ngóc đầu và ngã ở chỗ bài học đi qua được. Trong 3 lần thử, kết quả bắt chước được giữ một lần.
+- Bộ não lái xe thật trong game ngã ở mét 36, đúng như mô phỏng dự đoán.
 
 ### Điểm AI tự chấm cho mỗi lượt thử
 
@@ -76,8 +95,9 @@ docs/trails-ai-extension.zip  extension đóng gói sẵn để cài (dựng t�
 extension/                 extension cho Edge/Chrome: chạy AI trước khi game khởi động
 lessons/<mã đường>.json    bài học cộng đồng, mỗi đường một file
 experience/jumps.json      kho kinh nghiệm cú nhảy, gom từ lessons/ (workflow tự dựng)
+brain/brain.json           bộ não chung của cộng đồng (mạng nơ-ron, 420 trọng số)
 tools/build.js             dựng dist/ và docs/
-tools/check-lessons.js     kiểm tra các file bài học
+tools/check-lessons.js     kiểm tra các file bài học và bộ não
 tools/gather-experience.js gom kinh nghiệm cú nhảy vào experience/
 ```
 
@@ -90,6 +110,6 @@ tools/gather-experience.js gom kinh nghiệm cú nhảy vào experience/
 
 ## English
 
-A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. Contributions welcome: lessons via the in-game "Chia sẻ GitHub" button, code via pull requests (run `node tools/build.js` first).
+A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. Contributions welcome: lessons via the in-game "Chia sẻ GitHub" button, code via pull requests (run `node tools/build.js` first).
 
 Giấy phép: MIT.

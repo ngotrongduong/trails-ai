@@ -96,6 +96,18 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 </div>
 
 <div class="card">
+<h2>Bộ não chung (mạng nơ-ron)</h2>
+<p>Bài học của mỗi đường chỉ dùng được trên đường đó. Bộ não là một mạng nơ-ron nhỏ. Nó nhìn xe và mặt đất 2–33 m phía trước, rồi tự quyết tốc độ, lúc nhấc xe, lúc pump và góc xe khi bay, nên lái được cả đường chưa từng thấy.</p>
+<ol>
+<li>Chọn một đường trong danh sách. Đường này được <b>để riêng làm bài kiểm tra</b>: bộ não không bao giờ luyện trên nó.</li>
+<li>Bấm <b>Luyện bộ não</b>. AI gom các đường đã học và các đường gần bạn (tối đa 12), mỗi luồng CPU giữ một đường. Lần đầu nạp mất khoảng nửa phút. Trước tiên bộ não xem các bài học đã có để bắt chước, sau đó tự luyện: mỗi vòng thử 20 bộ não hơi khác nhau trên tất cả các đường và nhích về phía những bộ đi xa hơn.</li>
+<li>Ô <b>Trên các đường luyện</b> và <b>Đường chưa từng thấy</b> cho biết bộ não đi được bao nhiêu phần đường. Bộ não học chậm hơn bài học của một đường, nên hãy để nó luyện lâu (hàng giờ). Bấm <b>Tạm dừng</b> lúc nào cũng được, bộ não được lưu trong trình duyệt.</li>
+<li>Bấm <b>Bộ não lái đường đang chọn</b> để bộ não lái xe thật của bạn (phải đang ngồi trên xe).</li>
+<li><b>Lưu bộ não</b> / <b>Mở bộ não</b> cất bộ não ra file. <b>Chia sẻ GitHub</b> mở trang tải lên thư mục <code>brain/</code>. Khi bắt đầu luyện, AI tải bộ não cộng đồng và chỉ dùng nếu nó đi giỏi hơn trên các đường của bạn.</li>
+</ol>
+</div>
+
+<div class="card">
 <h2>Để AI lái thật trong game</h2>
 <ol>
 <li>Cho AI học trên một đường trước. Khi ô <b>Lượt chạy tốt nhất</b> báo “về đích” là AI đã vượt hết đường trong mô phỏng.</li>

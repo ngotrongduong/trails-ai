@@ -394,16 +394,143 @@
         }
         me.prevP = s[4];
         me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, Math.round(whip * 127)];
+        // what the plan asks for here, in the brain's terms (for the brain to learn from lessons)
+        me.want = air ? [0, 0, 0, P.pt[me.airSec], 1] : [P.v[sec], btn & 1, pump, 0, 0];
       }
       return me.inp;
     };
     return me;
   }
 
+  // The brain: a small neural network that rides any line from what it sees, instead of a plan learned for one line.
+  // Every other step it looks at the bike (speed, pitch and how fast it turns, in the air or not, rising or falling,
+  // height above the ground) and the ground 2 to 33 m ahead, and sets the speed to hold, whether to pull up, how hard
+  // to pump and the angle to hold in the air. Steering stays the fixed controller's. Weights w: 22 inputs to 16 hidden
+  // (tanh), then 4 outputs (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
+  const BRAIN = { inp: 22, hid: 16, out: 4 };
+  BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
+  function makeBrainRider(R, H, w) {
+    const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
+    let nextTake = R.nextTake, nextLand = R.nextLand;
+    if (!nextTake) {
+      nextTake = new Int32Array(N).fill(-1); nextLand = new Int32Array(N).fill(-1);
+      let a = -1, b = -1;
+      for (let i = N - 1; i >= 0; i--) { if (R.KIND[i] === 'takeoff') a = i; if (R.KIND[i] === 'landing') b = i; nextTake[i] = a; nextLand[i] = b; }
+    }
+    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, inp: [0, 0, 0, 0, 0, 0, 0] };
+    const x = new Float64Array(NI), h = new Float64Array(NH), o = new Float64Array(NO), W2 = NI * NH, B2 = W2 + NH * NO;
+    const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
+    // the slope to land on for a jump whose lip is at i
+    const landSlope = i => { const nl = nextLand[i]; const j = nl >= 0 && nl - i < 45 ? nl : Math.min(N - 5, i + 12); return clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2); };
+    me.step = (s, t) => {
+      const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
+      if (me.prevP === null) { me.prevP = s[4]; me.prevY = by; }
+      me.vy = (by - me.prevY) * 60; me.prevY = by;
+      let bi = me.idx, bd = Infinity;
+      for (let i = Math.max(0, me.idx - 4); i < Math.min(N, me.idx + 45); i++) { const d = (R.X[i] - bx) ** 2 + (R.Z[i] - bz) ** 2; if (d < bd) { bd = d; bi = i; } }
+      me.idx = bi;
+      me.off = Math.sqrt(bd);
+      if (air && !me.wasAir) me.landPt = landSlope(me.idx);
+      me.landed = !air && me.wasAir;
+      me.wasAir = air;
+      if (t % 2 === 0) {
+        const a1 = look(3 + Math.abs(sp) * 0.35), a2 = look(10 + Math.abs(sp) * 0.6);
+        const e1 = wrapA(Math.atan2(R.Z[a1] - bz, R.X[a1] - bx) - bh), e2 = wrapA(Math.atan2(R.Z[a2] - bz, R.X[a2] - bx) - bh);
+        let st = air ? 0 : clamp(2.2 * e1 + 0.6 * e2, -1, 1), pedal = 0, brake = 0, lean = 0, btn = 0, pump = 0;
+        const dp = (s[4] - me.prevP) * 30, idx = me.idx, gy = H[idx], nt = nextTake[idx];
+        // what the brain sees, each number roughly between -1 and 1
+        x[0] = sp / 10; x[1] = s[4]; x[2] = clamp(dp / 3, -3, 3); x[3] = air ? 1 : 0; x[4] = clamp(me.vy / 5, -3, 3); x[5] = clamp((by - gy) / 3, -2, 3);
+        for (let k = 0; k < 10; k++) x[6 + k] = clamp((H[look(AHEAD[k])] - gy) / 3, -3, 3);
+        x[16] = nt < 0 ? 1 : Math.min(1, (nt - idx) / 30);
+        x[17] = air ? me.landPt : nt >= 0 ? landSlope(nt) : 0;
+        x[18] = R.KIND[idx] === 'takeoff' ? 1 : 0; x[19] = R.KIND[idx] === 'landing' ? 1 : 0; x[20] = R.KIND[idx] === 'pump' ? 1 : 0; x[21] = 1;
+        // without weights the brain only watches (while a lesson's plan rides, to learn from it)
+        if (!w) { me.prevP = s[4]; me.seen = true; return me.inp; }
+        me.seen = false;
+        for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
+        for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
+        if (!air) {
+          const e = clamp(8 + 5 * o[0], 2, 18) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+          if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
+          if (o[1] > 0.5) btn |= 1;
+          if (o[2] > 0) pump = o[2];
+        } else lean = clamp(2.2 * (s[4] - (me.landPt + 0.4 * o[3])) + 0.35 * dp, -1, 1);
+        me.prevP = s[4];
+        me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, 0];
+      }
+      return me.inp;
+    };
+    me.x = x;
+    return me;
+  }
+  // Teach brain w to do what the plans did (rows from watchPlan: 22 seen, 5 asked for, landing slope). Each output is
+  // fitted before its tanh, only where it means something: speed, pull and pump on the ground, the air angle in the
+  // air. Pull is rare, so its rows count more. Returns new weights; w is not changed.
+  async function fitBrain(w, rows, epochs = 40) {
+    const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = 28, n = rows.length / RW | 0;
+    const at = v => Math.atanh(clamp(v, -0.95, 0.95));
+    const T = new Float64Array(n * NO), M = new Float64Array(n * NO);
+    let pulls = 0;
+    for (let r = 0; r < n; r++) if (!(rows[r * RW + NI + 4] > 0) && rows[r * RW + NI + 1] > 0) pulls++;
+    const pullW = clamp((n - pulls) / Math.max(1, pulls) / 4, 1, 8);
+    for (let r = 0; r < n; r++) {
+      const q = r * RW + NI, air = rows[q + 4] > 0;
+      if (air) { T[r * NO + 3] = at((rows[q + 3] - rows[q + 5]) / 0.4); M[r * NO + 3] = 1; continue; }
+      T[r * NO] = at((rows[q] - 8) / 5); M[r * NO] = 1;
+      T[r * NO + 1] = rows[q + 1] > 0 ? 1.2 : -1.2; M[r * NO + 1] = rows[q + 1] > 0 ? pullW : 1;
+      T[r * NO + 2] = rows[q + 2] > 0 ? at(rows[q + 2]) : -1; M[r * NO + 2] = 1;
+    }
+    const p = w.slice(), m = new Float64Array(p.length), v = new Float64Array(p.length), g = new Float64Array(p.length);
+    const h = new Float64Array(NH), dh = new Float64Array(NH), d = new Float64Array(NO), order = Array.from({ length: n }, (_, i) => i);
+    const LR = 0.005, BATCH = 64;
+    let t = 0;
+    for (let ep = 0; ep < epochs; ep++) {
+      for (let i = n - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [order[i], order[j]] = [order[j], order[i]]; }
+      for (let b0 = 0; b0 < n; b0 += BATCH) {
+        g.fill(0);
+        const b1 = Math.min(n, b0 + BATCH);
+        for (let bi = b0; bi < b1; bi++) {
+          const r = order[bi], x0 = r * RW;
+          for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += rows[x0 + i] * p[i * NH + j]; h[j] = Math.tanh(a); }
+          dh.fill(0);
+          for (let k = 0; k < NO; k++) {
+            const mk = M[r * NO + k];
+            if (!mk) { d[k] = 0; continue; }
+            let a = p[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * p[W2 + j * NO + k];
+            d[k] = mk * (a - T[r * NO + k]);
+            g[B2 + k] += d[k];
+            for (let j = 0; j < NH; j++) { g[W2 + j * NO + k] += d[k] * h[j]; dh[j] += d[k] * p[W2 + j * NO + k]; }
+          }
+          for (let j = 0; j < NH; j++) { const dz = dh[j] * (1 - h[j] * h[j]); if (dz) for (let i = 0; i < NI; i++) g[i * NH + j] += dz * rows[x0 + i]; }
+        }
+        t++;
+        const nb = b1 - b0;
+        for (let i = 0; i < p.length; i++) {
+          const gi = g[i] / nb;
+          m[i] = 0.9 * m[i] + 0.1 * gi; v[i] = 0.999 * v[i] + 0.001 * gi * gi;
+          p[i] -= LR * (m[i] / (1 - 0.9 ** t)) / (Math.sqrt(v[i] / (1 - 0.999 ** t)) + 1e-8);
+        }
+      }
+      await new Promise(r => setTimeout(r, 0));
+    }
+    return p;
+  }
+  // A new brain: hidden weights from a fixed random draw, outputs all zero.
+  function freshBrain() {
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const w = new Array(BRAIN.size).fill(0);
+    for (let i = 0; i < BRAIN.inp * BRAIN.hid; i++) { const u = rnd() || 1e-9, v = rnd(); w[i] = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v) * 0.6; }
+    return w;
+  }
+
   // ---------------------------------------------------------------- worker
   const workerSrc = `
 'use strict';
-let l,g,SL,R,H,K,kidx,FF,fmt;
+let l,SL,K,kidx,FF,fmt;
+// a worker can hold several lines, each in its own game; g, R, H and S are those of the line being ridden
+let g,R,H,S=null;const lines=[];
+function use(i){({g,R,H,S}=lines[i]);}
 const wrapA=a=>Math.atan2(Math.sin(a),Math.cos(a));
 function state(){const p=l.trails_game_state(g);return new Float64Array(l.memory.buffer,p,SL);}
 async function init(m){
@@ -414,7 +541,10 @@ async function init(m){
   const txt=n=>{const b=l.trails_buf(g);return new TextDecoder().decode(new Uint8Array(l.memory.buffer,b,n))};
   K=JSON.parse(txt(l.trails_kinds_json(g)));kidx=Object.fromEntries(K.map((k,i)=>[k.key,i]));
   FF=l.trails_world_sizes()&65535;const wp=l.trails_world_flat(g,1);fmt=new Float64Array(l.memory.buffer,wp,1)[0];
-  R=m.route;
+  (m.routes||[m.route]).forEach((route,i)=>{if(i)g=l.trails_game_new(1);addLine(route,m.setup)});
+}
+function addLine(route,setup){
+  R=route;
   // the route starts at the first piece after the start hill: add a straight run-in from the spawn
   {const d=Math.hypot(R.X[0]-R.start.x,R.Z[0]-R.start.z),n=Math.floor(d);
     if(n>=2){const X=[],Z=[],KI=[];for(let i=0;i<n;i++){const f=i/d;X.push(R.start.x+(R.X[0]-R.start.x)*f);Z.push(R.start.z+(R.Z[0]-R.start.z)*f);KI.push('start')}
@@ -426,19 +556,21 @@ async function init(m){
   const h=arr.length*8+8,c=l.trails_alloc(h),d=c+7&-8;new Float64Array(l.memory.buffer,d,arr.length).set(arr);
   l.trails_draft(g,d,arr.length);l.trails_dealloc(c,h);l.trails_draft_apply(g);
   // ride with your setup from the game: unlocked tricks, bike, tunes
-  const su=m.setup||{tricks:511,bike:0,tunes:{}};
+  const su=setup||{tricks:511,bike:0,tunes:{}};
   if(su.bike)l.trails_bike_select(g,su.bike);
   for(const [i,v] of Object.entries(su.tunes||{}))l.trails_tune(g,+i,v);
   l.trails_set_tricks(g,su.tricks);
   H=new Float64Array(R.length);for(let i=0;i<R.length;i++)H[i]=l.trails_draft_height(g,R.X[i],R.Z[i]);
   R.nextTake=new Int32Array(R.length).fill(-1);R.nextLand=new Int32Array(R.length).fill(-1);
   let t=-1,ld=-1;for(let i=R.length-1;i>=0;i--){if(R.KIND[i]==='takeoff')t=i;if(R.KIND[i]==='landing')ld=i;R.nextTake[i]=t;R.nextLand[i]=ld}
+  S=sections();
+  lines.push({g,R,H,S});
 }
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
 const MOVES=${JSON.stringify(MOVES)};
 ${makeRider.toString()}
-let S=null;
+${makeBrainRider.toString()}
 // Cut the line into sections: one ends at every takeoff lip, the others every 40 m.
 // A jump section also gets the jump's shape (f), so what was learned on a similar jump of another line can be borrowed:
 // lip angle, ramp height, the ground 3, 6, 9, 12 and 16 m past the lip (gap and landing) and the slope of the run-up.
@@ -458,14 +590,14 @@ function sections(){
   }
   return out;
 }
-// One ride of the line with plan P. Returns how far it got, the points and why it ended.
+// One ride of the line with plan P (or the brain opt.brain). Returns how far it got, the points and why it ended.
 function episode(P,opt){
   opt=opt||{};const rec=opt.rec,until=opt.until||1e9;
   l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
   let s=state();
   const N=R.length;let idx=0,prog=0,pts=0,seq=s[16],stall=0,t=0,crash=0,end='hết giờ';
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
-  const rider=makeRider(R,H,S,P);
+  const rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
   // with rec: every other tick [distance along the line, height, pitch, in air, speed], plus trick and crash events
   const tr=rec?[]:null,ev=rec?[]:null;
   const tricks={};let pending=null,manualM=0,landT=-1e9,jumps=0,landAt=-1,lastJ=-1,progAt=0,progT=0;
@@ -504,11 +636,41 @@ function episode(P,opt){
   if(rec)res.trace={tr,ev,H:Array.from(H,h=>+h.toFixed(2))};
   return res;
 }
+// A lesson's plan rides the line while a brain without weights watches. Every other step: what the brain sees (22),
+// what the plan asks for (speed, pull, pump, angle in the air, in the air) and the slope the brain would land on.
+// The last second before a fall is left out: that is no example to follow.
+// With brain w, the brain rides instead and the plan only says what it would do: so the brain also learns what to do
+// where its own mistakes take it, places the plan never went.
+function watchPlan(P,until,w){
+  l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
+  // the line here may be cut short: keep the plan's first sections, fresh values past its end
+  const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
+  for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
+  let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
+  let prog=0,progT=0,fell=false;
+  for(let t=0;t<18000;t++){
+    let inp=rider.step(s,t);eye.step(s,t);
+    if(me)inp=me.step(s,t);
+    if(t%2===0&&eye.seen&&rider.want){for(const v of eye.x)rows.push(v);for(const v of rider.want)rows.push(v);rows.push(eye.landPt)}
+    if(rider.idx>prog){prog=rider.idx;progT=t}else if(t-progT>480)break;
+    if(rider.idx>=Math.min(N-3,until))break;
+    if(rider.off>7&&!(s[12]>0))break;
+    l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
+    if(s[13]>0){fell=true;break}
+  }
+  if(fell&&!me)rows.length=Math.max(0,rows.length-30*28);
+  return {rows,prog};
+}
 onmessage=async e=>{const m=e.data;
   try{
-    if(m.type==='init'){await init(m);S=sections();postMessage({type:'ready',id:m.id,secs:S,length:R.length,geo:{X:Array.from(R.X),Z:Array.from(R.Z),KIND:Array.from(R.KIND),H:Array.from(H)}})}
-    else if(m.type==='eval'){const out=m.plans.map(p=>episode(p,{until:m.until}));postMessage({type:'evals',id:m.id,out})}
-    else if(m.type==='replay'){postMessage({type:'replay',id:m.id,r:episode(m.plan,{rec:true})})}
+    if(m.type==='init'){await init(m);
+      const metas=lines.map(L=>({secs:L.S,length:L.R.length,geo:m.geo===false?null:{X:Array.from(L.R.X),Z:Array.from(L.R.Z),KIND:Array.from(L.R.KIND),H:Array.from(L.H)}}));
+      postMessage({type:'ready',id:m.id,...metas[0],metas})}
+    else if(m.type==='eval'){use(0);const out=m.plans.map(p=>episode(p,{until:m.until}));postMessage({type:'evals',id:m.id,out})}
+    else if(m.type==='replay'){use(0);postMessage({type:'replay',id:m.id,r:episode(m.plan,{rec:true})})}
+    // brains: each task is [brain, line]; only what the learning needs comes back
+    else if(m.type==='watch'){use(m.line);postMessage({type:'watch',id:m.id,...watchPlan(m.plan,m.until,m.brain)})}
+    else if(m.type==='brains'){const out=m.tasks.map(([b,i])=>{use(i);const r=episode(null,{brain:m.brains[b],until:m.until});return {fit:r.fit,prog:r.prog,end:r.end,jumps:r.jumps}});postMessage({type:'brains',id:m.id,out})}
   }catch(err){postMessage({type:'error',id:m.id,error:String(err&&err.stack||err)})}
 };`;
 
@@ -530,12 +692,53 @@ onmessage=async e=>{const m=e.data;
         w.postMessage({ ...msg, id }, transfer || []);
       });
     }
-    async init(route, setup) {
+    async assets() {
       const a = assets();
       const wasm = await (await fetch(a.wasm)).arrayBuffer();
       const land = await Promise.all(a.land.map(u => fetch(u).then(r => r.arrayBuffer())));
-      const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), route, setup })));
-      return { secs: r[0].secs, length: r[0].length, geo: r[0].geo };
+      return { wasm, land };
+    }
+    // Every worker gets the line.
+    async init(route, setup) {
+      const { wasm, land } = await this.assets();
+      this.held = this.ws.map(() => [0]);
+      const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup })));
+      return r[0].metas[0];
+    }
+    // The workers share the lines out: with fewer lines than workers each worker holds one line, and the spare workers
+    // go to the longest lines (rides there take longest); else each holds a few. A line takes seconds to load and tens
+    // of MB in each worker holding it.
+    async initSpread(routes, setup) {
+      const { wasm, land } = await this.assets();
+      const W = this.ws.length, L = routes.length;
+      if (L <= W) {
+        const count = routes.map(() => 1);
+        for (let k = L; k < W; k++) { let bi = 0; routes.forEach((r, l) => { if (r.length / count[l] > routes[bi].length / count[bi]) bi = l; }); count[bi]++; }
+        this.held = [];
+        count.forEach((c, l) => { for (let k = 0; k < c; k++) this.held.push([l]); });
+      } else this.held = this.ws.map((_, i) => routes.map((_, l) => l).filter(l => l % W === i));
+      const r = await Promise.all(this.ws.map((w, i) => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: this.held[i].map(l => routes[l]), setup, geo: false })));
+      return routes.map((_, l) => { const i = this.held.findIndex(h => h.includes(l)); return r[i].metas[this.held[i].indexOf(l)]; });
+    }
+    // Rides of brains on lines: tasks are [brain index, line index], each sent to a worker holding that line, in turn.
+    // Results come back in the same order.
+    async evalBrains(brains, tasks, until) {
+      const holders = new Map(), turn = new Map(), parts = this.ws.map(() => []);
+      tasks.forEach((t, i) => {
+        const l = t[1];
+        if (!holders.has(l)) holders.set(l, this.held.map((h, wi) => (h.includes(l) ? wi : -1)).filter(wi => wi >= 0));
+        const hs = holders.get(l), k = turn.get(l) || 0;
+        turn.set(l, k + 1);
+        const wi = hs[k % hs.length];
+        parts[wi].push([i, this.held[wi].indexOf(l)]);
+      });
+      const res = new Array(tasks.length);
+      await Promise.all(parts.map(async (ix, wi) => {
+        if (!ix.length) return;
+        const r = await this.call(this.ws[wi], { type: 'brains', brains, tasks: ix.map(([i, local]) => [tasks[i][0], local]), until });
+        r.out.forEach((o, k) => { res[ix[k][0]] = o; });
+      }));
+      return res;
     }
     async evalAll(plans, until) {
       const n = this.ws.length, parts = Array.from({ length: n }, () => []);
@@ -549,6 +752,14 @@ onmessage=async e=>{const m=e.data;
       return res;
     }
     replay(plan) { return this.call(this.ws[0], { type: 'replay', plan }).then(r => r.r); }
+    // Each { line, plan } ridden by a worker holding the line, with a brain watching (see watchPlan in the worker);
+    // with brain, that brain rides and the plan only says what it would do.
+    watchPlans(items, until, brain) {
+      return Promise.all(items.map(({ line, plan }) => {
+        const wi = this.held.findIndex(h => h.includes(line));
+        return this.call(this.ws[wi], { type: 'watch', line: this.held[wi].indexOf(line), plan, until, brain }).then(r => ({ rows: r.rows, prog: r.prog }));
+      }));
+    }
     close() { this.ws.forEach(w => w.terminate()); }
   }
 
@@ -832,6 +1043,187 @@ onmessage=async e=>{const m=e.data;
     async bestRide() { return this.pool ? this.pool.replay(this.plan) : null; }
   }
 
+  // ---------------------------------------------------------------- the shared brain
+  // One brain learns to ride many lines at once by evolution strategies: each round it rides many slightly changed
+  // copies of itself (every change tried both ways) on a few of its lines, and moves its weights toward the changes
+  // that rode better. The line chosen in the list is kept aside and never learned on: how far the brain rides it shows
+  // whether it can ride a line it has never seen. The best brain so far on all its lines is the one kept and used.
+  const BRAIN_KEY = 'trailsai.brain';
+  const BRAIN_FORMAT = 'trails-ai-brain';
+  const BRAIN_URL = `https://raw.githubusercontent.com/${REPO}/main/brain/brain.json`;
+  const BRAIN_CAP = 400;   // metres of each line a brain is scored on (a long line would hold every round up)
+  const weightsOk = w => Array.isArray(w) && w.length === BRAIN.size && w.every(num);
+  const readBrain = raw => {
+    let m;
+    try { m = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
+    return m && m.format === BRAIN_FORMAT && m.version === 1 && weightsOk(m.w) ? m : null;
+  };
+  // The first n metres of a line with only the pieces near them: brains are scored on the start of each line, and
+  // fewer pieces load much faster.
+  function truncLine(route, n) {
+    if (route.length <= n) return route;
+    const X = Array.from(route.X).slice(0, n), Z = Array.from(route.Z).slice(0, n);
+    const near = (x, z, r) => { for (let i = 0; i < n; i += 3) if (Math.hypot(X[i] - x, Z[i] - z) < r) return true; return false; };
+    const pieces = route.pieces.filter(p => near(p.x, p.z, p.kind === 'shape' || p.kind === 'ground' ? 70 : 35));
+    return { ...route, X, Z, KIND: route.KIND.slice(0, n), length: n, pieces };
+  }
+  async function communityBrain() {
+    try {
+      const r = await fetch(BRAIN_URL + '?t=' + Date.now(), { cache: 'no-store' });
+      return r.ok ? readBrain(await r.text()) : null;
+    } catch { return null; }
+  }
+
+  class BrainTrainer {
+    constructor(ui) { this.ui = ui; this.running = false; this.pool = null; this.load(); }
+    load() {
+      let m = null;
+      try { m = readBrain(localStorage.getItem(BRAIN_KEY) || 'null'); } catch { m = null; }
+      this.best = m ? m.w : freshBrain();
+      this.mean = m && weightsOk(m.mean) ? m.mean : this.best.slice();
+      this.adam = m && m.adam && weightsOk(m.adam.m) && weightsOk(m.adam.v) ? m.adam : null;
+      this.gen = m && num(m.gen) ? m.gen : 0;
+      this.seen = m && Array.isArray(m.lines) ? m.lines.filter(id => typeof id === 'string') : [];
+      this.hist = m && Array.isArray(m.hist) ? m.hist : [];
+    }
+    record() {
+      return { format: BRAIN_FORMAT, version: 1, arch: BRAIN, w: this.best, mean: this.mean, adam: this.adam, gen: this.gen, lines: this.seen, score: this.score, test: this.test, hist: this.hist.slice(-400), savedAt: Date.now() };
+    }
+    save() { try { localStorage.setItem(BRAIN_KEY, JSON.stringify(this.record())); } catch { /* storage full: keep learning anyway */ } }
+    stop() { this.running = false; }
+    // Each worker holds every line; train are learned on, test (may be null) only ridden.
+    async prepare(train, test, workers) {
+      this.stop();
+      if (this.pool) this.pool.close();
+      this.setup = riderSetup();
+      this.pool = new Pool(workers);
+      const routes = (test ? train.concat([test]) : train).map(r => truncLine(r, BRAIN_CAP + 60));
+      const metas = await this.pool.initSpread(routes, this.setup);
+      this.lines = routes.map((r, i) => ({ id: r.start.id, len: metas[i].length }));
+      this.trainIdx = train.map((_, i) => i);
+      this.testIdx = test ? train.length : -1;
+      this.testId = test ? test.start.id : null;
+      for (const r of train) if (!this.seen.includes(r.start.id)) this.seen.push(r.start.id);
+      // the kept brain and a new one, on all the lines: where the brain stands, and where it started from
+      const all = this.trainIdx.concat(test ? [this.testIdx] : []);
+      const [b, f] = await this.rate([this.best, freshBrain()], all);
+      const part = (r, idx) => ({ fit: r.fit(idx), share: r.share(idx), runs: idx.map(i => r.runs[all.indexOf(i)]) });
+      this.score = part(b, this.trainIdx); this.base = part(f, this.trainIdx);
+      this.test = test ? part(b, [this.testIdx]) : null; this.testBase = test ? part(f, [this.testIdx]) : null;
+    }
+    // Rides of each brain on lines idx (scored on their first BRAIN_CAP metres). Per brain: the rides, and for any
+    // subset of the lines the mean score per metre (what learning compares) and the mean share of the line ridden.
+    async rate(brains, idx) {
+      const tasks = [];
+      brains.forEach((_, b) => idx.forEach(i => tasks.push([b, i])));
+      const res = await this.pool.evalBrains(brains, tasks, BRAIN_CAP);
+      const cap = i => Math.min(this.lines[i].len, BRAIN_CAP);
+      return brains.map((_, b) => {
+        const runs = idx.map((i, k) => res[b * idx.length + k]);
+        const over = (sub, f) => sub.reduce((s, i) => s + f(runs[idx.indexOf(i)], i), 0) / sub.length;
+        return {
+          runs,
+          fit: (sub = idx) => over(sub, (r, i) => r.fit / cap(i)),
+          share: (sub = idx) => over(sub, (r, i) => Math.min(r.prog, cap(i)) / cap(i)),
+        };
+      });
+    }
+    // A brain from elsewhere (a file, the community repo) is ridden on this computer's lines first and kept only if better.
+    async offer(w) {
+      if (!this.pool || !weightsOk(w)) return null;
+      const [r] = await this.rate([w], this.trainIdx);
+      const took = await this.keep(w, r);
+      return { took, share: r.share() };
+    }
+    // w (rated r on the training lines) becomes the brain if it rides them better
+    async keep(w, r) {
+      if (!(r.fit() > this.score.fit + 1e-6)) return false;
+      this.best = w.slice(); this.mean = w.slice(); this.adam = null;
+      this.score = { fit: r.fit(), share: r.share(), runs: r.runs };
+      if (this.testIdx >= 0) { const [t] = await this.rate([this.best], [this.testIdx]); this.test = { fit: t.fit(), share: t.share(), runs: t.runs }; }
+      this.save();
+      return true;
+    }
+    // Learn from lessons: plans ([{ line, plan }], line = index into the training lines) ride their lines while the brain
+    // watches, then a new brain is taught to do what they did. Only plans that ride further than the brain on their line
+    // are teachers. Then a few times over: the taught brain rides those lines itself while the plans say what they would
+    // do where it goes, and it is taught again on all of it. The best of these is kept only if it rides the training
+    // lines better than the brain already does.
+    async distill(plans, rounds = 2) {
+      if (!this.pool || !plans.length) return null;
+      const seen = await this.pool.watchPlans(plans, BRAIN_CAP);
+      const mine = i => this.score.runs[this.trainIdx.indexOf(i)].prog;
+      const ok = seen.map((r, k) => r.prog > mine(plans[k].line) + 5);
+      const teach = plans.filter((_, k) => ok[k]), sets = seen.filter((_, k) => ok[k]).map(r => r.rows);
+      const join = () => {
+        const out = new Float64Array(sets.reduce((s, a) => s + a.length, 0));
+        let at = 0;
+        for (const a of sets) { out.set(a, at); at += a.length; }
+        return out;
+      };
+      const info = { lines: teach.length, rows: 0, took: false, steps: [], plans: seen.map((r, k) => [plans[k].line, r.prog, mine(plans[k].line)]) };
+      this.lastDistill = info;
+      let rows = join();
+      if (rows.length < 28 * 200) return info;
+      let w = await fitBrain(freshBrain(), rows, 60), bestW = null, bestR = null;
+      for (let k = 0; ; k++) {
+        const [r] = await this.rate([w], this.trainIdx);
+        info.steps.push(+r.share().toFixed(3));
+        if (!bestR || r.fit() > bestR.fit()) { bestW = w; bestR = r; }
+        if (k >= rounds - 1) break;
+        for (const m of await this.pool.watchPlans(teach, BRAIN_CAP, w)) sets.push(m.rows);
+        rows = join();
+        w = await fitBrain(w, rows, 30);
+      }
+      Object.assign(info, { rows: rows.length / 28 | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
+      return info;
+    }
+    async run() {
+      if (this.running || !this.pool) return;
+      this.running = true;
+      // P changes, each tried both ways, every one on all the lines (each worker holds one line, so all of them work)
+      const n = BRAIN.size, P = 10, SIG = 0.15, LR = 0.03, WD = 0.002, pick = this.trainIdx;
+      if (!this.adam) this.adam = { m: new Array(n).fill(0), v: new Array(n).fill(0), t: 0 };
+      const A = this.adam;
+      while (this.running) {
+        const t0 = performance.now();
+        const eps = Array.from({ length: P }, () => Array.from({ length: n }, gauss));
+        const brains = [];
+        for (const e of eps) { brains.push(this.mean.map((w, i) => w + SIG * e[i])); brains.push(this.mean.map((w, i) => w - SIG * e[i])); }
+        const rates = await this.rate(brains, pick);
+        if (!this.running) break;
+        // by rank, not raw score: one lucky ride cannot swing the step
+        const fits = rates.map(r => r.fit());
+        const order = fits.map((_, i) => i).sort((a, b) => fits[a] - fits[b]);
+        const rank = new Array(fits.length);
+        order.forEach((i, k) => { rank[i] = k / (fits.length - 1) - 0.5; });
+        const g = new Array(n).fill(0);
+        eps.forEach((e, p) => { const d = rank[2 * p] - rank[2 * p + 1]; for (let i = 0; i < n; i++) g[i] += d * e[i]; });
+        A.t++;
+        for (let i = 0; i < n; i++) {
+          const gi = g[i] / (2 * P * SIG) - WD * this.mean[i];
+          A.m[i] = 0.9 * A.m[i] + 0.1 * gi; A.v[i] = 0.999 * A.v[i] + 0.001 * gi * gi;
+          this.mean[i] += LR * (A.m[i] / (1 - 0.9 ** A.t)) / (Math.sqrt(A.v[i] / (1 - 0.999 ** A.t)) + 1e-8);
+        }
+        this.gen++;
+        let improved = false;
+        // every 5 rounds the brain itself rides all its lines, and is kept if it rides them better than the best so far
+        if (this.gen % 5 === 0) {
+          const [r] = await this.rate([this.mean], this.trainIdx);
+          if (r.fit() > this.score.fit + 1e-6) {
+            this.best = this.mean.slice(); this.score = { fit: r.fit(), share: r.share(), runs: r.runs }; improved = true;
+            if (this.testIdx >= 0) { const [t] = await this.rate([this.best], [this.testIdx]); this.test = { fit: t.fit(), share: t.share(), runs: t.runs }; }
+          }
+          this.hist.push([this.gen, +this.score.share.toFixed(4), +r.share().toFixed(4), this.test ? +this.test.share.toFixed(4) : null]);
+          this.save();
+        }
+        this.ui.brainProgress({ gen: this.gen, ms: performance.now() - t0, tries: brains.length * pick.length, improved });
+      }
+      this.save();
+      this.running = false;
+    }
+  }
+
   // ---------------------------------------------------------------- panel
   const css = `
   #tai{position:fixed;top:64px;right:12px;width:330px;max-height:calc(100vh - 80px);overflow:auto;z-index:2147483000;
@@ -844,6 +1236,8 @@ onmessage=async e=>{const m=e.data;
   #tai button.b:disabled{opacity:.45;cursor:default}
   #tai .row{display:flex;gap:6px}#tai .row>*{flex:1}#tai .row.s button.b{font-size:12px;padding:7px 4px}
   #tai .st{color:#9fb0c2;margin:4px 0 8px;min-height:18px}
+  #tai .sec{margin:12px 0 2px;padding-top:10px;border-top:1px solid #2a323c;font-weight:600;color:#fff}
+  #tai .sec small{display:block;font-weight:400;color:#9fb0c2;font-size:12px}
   #tai .kv{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:6px 0}
   #tai .kv b{color:#fff;font-weight:600;text-align:right}
   #tai canvas{width:100%;height:90px;background:#141920;border-radius:8px;margin:6px 0}
@@ -976,7 +1370,19 @@ onmessage=async e=>{const m=e.data;
       <div class="log"></div>
       <div class="row s"><button class="b g export" disabled>Lưu ra file</button><button class="b g import">Mở file</button><button class="b g share" disabled>Chia sẻ GitHub</button></div>
       <input type="file" accept=".json,application/json" class="file" hidden>
-      <div class="row"><button class="b g forget" disabled>Quên đường này, học lại từ đầu</button></div>`;
+      <div class="row"><button class="b g forget" disabled>Quên đường này, học lại từ đầu</button></div>
+      <div class="sec">Bộ não chung<small>Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra.</small></div>
+      <div class="kv">
+        <span>Vòng luyện</span><b class="b-gen">0</b>
+        <span>Luyện trên</span><b class="b-lines">–</b>
+        <span>Trên các đường luyện</span><b class="b-train">–</b>
+        <span>Đường chưa từng thấy</span><b class="b-test">–</b>
+        <span>Tốc độ luyện</span><b class="b-speed">–</b>
+      </div>
+      <div class="row"><button class="b brain-go">Luyện bộ não</button></div>
+      <div class="row"><button class="b g brain-drive">Bộ não lái đường đang chọn</button></div>
+      <div class="row s"><button class="b g brain-export">Lưu bộ não</button><button class="b g brain-import">Mở bộ não</button><button class="b g brain-share">Chia sẻ GitHub</button></div>
+      <input type="file" accept=".json,application/json" class="bfile" hidden>`;
     document.body.appendChild(el);
     const $ = s => el.querySelector(s);
     return { el, $ };
@@ -1004,7 +1410,21 @@ onmessage=async e=>{const m=e.data;
         showBorrow();
         draw();
       },
+      brainProgress(p) {
+        $('.b-speed').textContent = `${(p.ms / 1000).toFixed(1)} s / vòng (${p.tries} lượt chạy)`;
+        showBrain();
+        if (p.improved) log(`Bộ não vòng ${p.gen}: kỷ lục mới, đi được ${pct(brain.score.share)} quãng đường các đường luyện${brain.test ? `, ${brain.test.runs[0].prog} m trên đường chưa từng thấy` : ''}.`);
+      },
     };
+    const pct = v => `${Math.round(v * 100)}%`;
+    function showBrain() {
+      $('.b-gen').textContent = brain.gen;
+      if (!brain.lines) return;
+      $('.b-lines').textContent = `${brain.trainIdx.length} đường`;
+      $('.b-train').textContent = `${pct(brain.score.share)} quãng đường (lúc mới: ${pct(brain.base.share)})`;
+      const cap = brain.testIdx >= 0 ? Math.min(brain.lines[brain.testIdx].len, BRAIN_CAP) : 0;
+      $('.b-test').textContent = brain.test ? `${brain.test.runs[0].prog} / ${cap} m (lúc mới: ${brain.testBase.runs[0].prog} m)` : '–';
+    }
     function showBest(b) {
       if (!b) return;
       $('.k-best').textContent = Math.round(b.fit);
@@ -1014,6 +1434,7 @@ onmessage=async e=>{const m=e.data;
       $('.watch').disabled = $('.drive').disabled = $('.export').disabled = $('.share').disabled = false;
     }
     const trainer = new Trainer(ui);
+    const brain = new BrainTrainer(ui);
     function showBorrow() {
       if (!trainer.borrow) return;
       const alike = trainer.borrow.filter(Boolean).length, jumps = trainer.secs.filter(s => s.jump).length;
@@ -1075,9 +1496,11 @@ onmessage=async e=>{const m=e.data;
       if (!o) return;
       busy = true; $('.go').disabled = true;
       try {
-        // a new line, or the rider changed bike or tricks in the game since training started
+        // one learner at a time: the brain gives its workers back
+        releaseBrain();
+        // a new line, the rider changed bike or tricks in the game since training started, or the workers were given away
         const setupChanged = trainer.setup && JSON.stringify(trainer.setup) !== JSON.stringify(riderSetup());
-        if (!trainer.route || trainer.route.start.id !== o.s.id || setupChanged) {
+        if (!trainer.route || trainer.route.start.id !== o.s.id || setupChanged || !trainer.pool) {
           say('Đang dò đường đi từ điểm xuất phát…');
           // the line comes from this browser's memory, else from the community repo, else from the pieces the game has loaded
           const shared = await communityLesson(o.s.id);
@@ -1132,6 +1555,99 @@ onmessage=async e=>{const m=e.data;
       showRide(r);
     }
 
+    // ---- the shared brain
+    // The line from a start: this browser's memory if still right, else the pieces the game has loaded.
+    async function lineFor(s) {
+      let route = routeCache.get(s.id) || savedLine(s.id);
+      if (route && lineStale(route)) route = null;
+      if (!route) { route = await buildRoute(s); if (route) routeCache.set(s.id, route); }
+      return route;
+    }
+    // Lines for the brain: every line learned in this browser, then the lines near you, up to one per worker (and at most
+    // 12) with one more worker for the chosen line, which is kept aside.
+    async function brainLines() {
+      const o = choices[+$('.pick').value];
+      const most = Math.min(12, Math.max(3, workers - 1));
+      const testId = o ? o.s.id : null, got = new Map();
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (!key || !key.startsWith(STORE)) continue;
+          const id = key.slice(STORE.length), L = savedLine(id);
+          if (L && id !== testId && !lineStale(L)) got.set(id, L);
+        }
+      } catch { /* storage blocked */ }
+      for (const c of choices) {
+        if (got.size >= most) break;
+        if (c.s.id === testId || got.has(c.s.id)) continue;
+        const r = await lineFor(c.s);
+        if (r && r.length >= 40) got.set(c.s.id, r);
+      }
+      return { train: [...got.values()].slice(0, most), test: o ? await lineFor(o.s) : null };
+    }
+    // one learner at a time: CPU threads go to the line or to the brain
+    function releaseBrain() {
+      if (brain.running) brain.stop();
+      if (brain.pool) { brain.pool.close(); brain.pool = null; }
+      $('.brain-go').textContent = brain.gen ? 'Luyện tiếp' : 'Luyện bộ não';
+    }
+    function releaseLine() {
+      if (trainer.running) trainer.stop();
+      if (trainer.pool) { trainer.pool.close(); trainer.pool = null; }
+      $('.go').textContent = trainer.gen ? 'Học tiếp' : 'Bắt đầu học';
+    }
+    async function brainLearn() {
+      if (brain.running || !brain.pool) return;
+      $('.brain-go').textContent = 'Tạm dừng';
+      try { await brain.run(); } catch (err) { say('Lỗi: ' + (err && err.message || err)); console.error(err); }
+      if (!brain.running) $('.brain-go').textContent = 'Luyện tiếp';
+    }
+    async function brainStart() {
+      if (busy) return;
+      if (brain.running) { brain.stop(); $('.brain-go').textContent = 'Luyện tiếp'; say('Đã tạm dừng luyện bộ não. Bộ não đã được lưu.'); return; }
+      busy = true; $('.brain-go').disabled = true;
+      try {
+        releaseLine();
+        const o = choices[+$('.pick').value];
+        if (!brain.pool || brain.testId !== (o ? o.s.id : null) || JSON.stringify(brain.setup) !== JSON.stringify(riderSetup())) {
+          say('Đang gom các đường để luyện bộ não…');
+          const { train, test } = await brainLines();
+          if (train.length < 2) { say('Cần ít nhất 2 đường để luyện bộ não. Hãy đến khu có nhiều đường rồi bấm “Tìm lại đường gần tôi”.'); return; }
+          say(`Đang nạp ${train.length + (test ? 1 : 0)} đường vào ${workers} luồng (có thể mất một phút)…`);
+          const t0 = performance.now();
+          await brain.prepare(train, test, workers);
+          log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường (${train.map(r => r.length + ' m').join(', ')}), mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
+          const shared = await communityBrain();
+          if (shared) {
+            const r = await brain.offer(shared.w);
+            if (r) log(r.took ? `<b>Dùng bộ não từ cộng đồng trên GitHub:</b> đi được ${pct(r.share)} quãng đường các đường của bạn, giỏi hơn bộ não đang có.` : `Bộ não cộng đồng trên GitHub đi được ${pct(r.share)} quãng đường các đường của bạn, chưa hơn bộ não đang có.`);
+          }
+          // the lessons of this browser show the brain how they ride, so it does not start from nothing
+          const plans = [];
+          brain.trainIdx.forEach(i => {
+            try { const m = JSON.parse(localStorage.getItem(STORE + brain.lines[i].id) || 'null'); if (m && m.plan && Array.isArray(m.plan.v)) plans.push({ line: i, plan: m.plan }); } catch { /* skip it */ }
+          });
+          if (plans.length) {
+            say(`Bộ não đang xem ${plans.length} bài học đã có để bắt chước…`);
+            const d = await brain.distill(plans);
+            if (d && d.share === undefined) log(`Chưa có bài học nào đi xa hơn bộ não trên đường của nó, nên bộ não không cần bắt chước.`);
+            else if (d) log(d.took ? `<b>Bộ não đã bắt chước ${d.lines} bài học</b> (${d.rows} khoảnh khắc): giờ đi được ${pct(d.share)} quãng đường các đường luyện.` : `Bộ não thử bắt chước ${d.lines} bài học nhưng chỉ đi được ${pct(d.share)}, chưa hơn bộ não đang có nên giữ nguyên.`);
+          }
+          showBrain();
+        }
+        say('Bộ não đang luyện trên nhiều đường cùng lúc… Bạn có thể tiếp tục chơi.');
+        $('.brain-go').textContent = 'Tạm dừng'; $('.brain-go').disabled = false;
+        busy = false;
+        await brain.run();
+      } catch (err) {
+        say('Lỗi: ' + (err && err.message || err));
+        console.error(err);
+      } finally {
+        busy = false; $('.brain-go').disabled = false;
+        if (!brain.running) $('.brain-go').textContent = brain.gen ? 'Luyện tiếp' : 'Luyện bộ não';
+      }
+    }
+
     // The learning loop on the line already prepared (keeps going while the AI rides).
     async function learn() {
       if (trainer.running || !trainer.pool) return;
@@ -1143,60 +1659,65 @@ onmessage=async e=>{const m=e.data;
     // The AI rides your bike in the game: back to the start of the line, then its controls replace yours. Learning
     // goes on meanwhile, and a better plan for the part of the line still ahead is used at once. After a fall the AI
     // rides again with what it has learned since, until you press any key.
-    let badge = null, starting = false, looping = false;
+    // again: what rides again after a fall (the line's plan or the brain); button: that one's button and its label
+    let badge = null, starting = false, looping = false, again = null, button = null;
+    const DRIVE_LABEL = { '.drive': 'Để AI lái', '.brain-drive': 'Bộ não lái đường đang chọn' };
     function stopDrive(why, byPlayer) {
-      if (byPlayer) { looping = false; $('.drive').textContent = 'Để AI lái'; }
+      if (byPlayer) { looping = false; for (const [b, t] of Object.entries(DRIVE_LABEL)) $(b).textContent = t; }
       if (!live.drive) return;
       const d = live.drive;
       live.drive = null;
       if (badge) { badge.remove(); badge = null; }
       const m = Math.max(0, d.rider.idx - d.runIn), e = Math.max(0, d.expect - d.runIn);
       const extra = (d.tricks ? `, ${d.tricks} trick` : '') + (d.swaps ? `, dùng ${d.swaps} cách mới học được giữa chừng` : '');
-      log(`<b>AI lái thật:</b> ${why} sau ${m} m${extra}.`);
+      log(`<b>${d.who} lái thật:</b> ${why} sau ${m} m${extra}.`);
       if (!byPlayer) {
         // what a real ride teaches: whether the simulation still matches the game (the game has now loaded the whole way ridden)
-        if (lineStale(trainer.route)) log('<b>Bản đồ trong mô phỏng không còn khớp với game</b> (đường đã được sửa). Bấm “Quên đường này, học lại từ đầu” để AI dò lại đường.');
+        if (lineStale(d.route)) log('<b>Bản đồ trong mô phỏng không còn khớp với game</b> (đường đã được sửa). Bấm “Quên đường này, học lại từ đầu” để AI dò lại đường.');
         else if (Math.abs(m - e) > 15) log(`Lượt thật lệch so với mô phỏng (dự đoán ${e} m), dù bản đồ vẫn khớp.`);
         else log(`Đúng như mô phỏng dự đoán (${e} m).`);
       }
       if (looping) {
-        say(`AI lái thật: ${why} sau ${m} m. Lái lại sau 3 giây với bài học mới nhất (bấm phím bất kỳ để dừng).`);
-        setTimeout(() => { if (looping && !live.drive) drive(); }, 3000);
-      } else say(`AI lái thật: ${why} sau ${m} m${extra}.`);
+        say(`${d.who} lái thật: ${why} sau ${m} m. Lái lại sau 3 giây với những gì mới học được (bấm phím bất kỳ để dừng).`);
+        setTimeout(() => { if (looping && !live.drive && again) again(); }, 3000);
+      } else say(`${d.who} lái thật: ${why} sau ${m} m${extra}.`);
     }
     function driveButton() {
       if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
-      looping = true;
+      looping = true; again = drive; button = '.drive';
       drive();
+    }
+    function brainDriveButton() {
+      if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
+      looping = true; again = driveBrain; button = '.brain-drive';
+      driveBrain();
+    }
+    const cant = msg => { say(msg); looping = false; for (const [b, t] of Object.entries(DRIVE_LABEL)) $(b).textContent = t; };
+    // still lying where the last run crashed: press the game's own "Ride again" (R) so its bail screen resets too
+    async function getUp() {
+      if (!(liveState()[13] > 0)) return;
+      starting = true;
+      for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: 'r', code: 'KeyR', bubbles: true }));
+      await new Promise(r => setTimeout(r, 500));
+      starting = false;
     }
     async function drive() {
       if (starting) return;
-      const cant = msg => { say(msg); looping = false; $('.drive').textContent = 'Để AI lái'; };
       if (!live.ex || !live.g) return cant('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.');
-      if (!trainer.route || !trainer.geo) return cant('Hãy chọn một đường và cho AI học trước đã.');
+      if (!trainer.route || !trainer.geo || !trainer.best) return cant('Hãy chọn một đường và cho AI học trước đã.');
       if (JSON.stringify(trainer.setup) !== JSON.stringify(riderSetup())) {
         return cant('Bạn đã đổi xe hoặc trick trong game sau khi AI học. Bấm “Học tiếp” để AI học lại với cài đặt mới, rồi hãy để AI lái.');
       }
       learn();
-      if (liveState()[13] > 0) {
-        // still lying where the last run crashed: press the game's own "Ride again" (R) so its bail screen resets too
-        starting = true;
-        for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: 'r', code: 'KeyR', bubbles: true }));
-        await new Promise(r => setTimeout(r, 500));
-        starting = false;
-      }
-      const st = trainer.route.start, geo = trainer.geo;
+      await getUp();
+      const geo = trainer.geo;
       const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
       // the rider reads this plan on every step; better plans learned meanwhile are copied into it (takeNewer)
       const plan = clonePlan(trainer.plan);
       const rider = makeRider(R, geo.H, trainer.secs, plan);
-      // the training line starts with a straight run-in from the spawn; distances shown are along the real line
-      const runIn = Math.max(0, R.length - trainer.route.length);
-      live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
-      live.ex.trails_game_reset(live.g);
-      let t = 0, seq = null, known = trainer.plan;
+      let known = trainer.plan;
       const d = {
-        rider, runIn, tricks: 0, swaps: 0, expect: trainer.best.prog,
+        who: 'AI', route: trainer.route, rider, expect: trainer.best.prog, tricks: 0, swaps: 0,
         // A newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
         // gets the same states the simulation scored, so the plan's score holds for the rest of this ride too.
         takeNewer() {
@@ -1208,18 +1729,58 @@ onmessage=async e=>{const m=e.data;
           for (const k of PLAN_KEYS) plan[k] = p[k].slice();
           d.swaps++; d.expect = trainer.best.prog;
         },
-        step() {
-          const s = liveState();
-          if (seq === null) seq = s[16];
-          if (s[13] > 0) { setTimeout(() => stopDrive('ngã'), 0); return null; }
-          if (s[16] !== seq) { seq = s[16]; if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++; }
-          if (t % 30 === 0) d.takeNewer();
-          const inp = rider.step(s, t++);
-          if (rider.idx >= R.length - 3) { setTimeout(() => stopDrive('về đích'), 0); return null; }
-          if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive('lạc khỏi đường'), 0); return null; }
-          if (badge && t % 15 === 0) badge.firstChild.textContent = `AI đang lái · ${Math.max(0, rider.idx - runIn)} m${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
-          return inp;
-        },
+      };
+      ride(d, R);
+    }
+    // The brain rides the line chosen in the list, learned on or not. Its own worker rides the same brain in the
+    // simulation first, to know where it should fall; the brain keeps learning meanwhile, and rides again with the
+    // best it has after each fall.
+    let brainRide = null;
+    async function driveBrain() {
+      if (starting) return;
+      if (!live.ex || !live.g) return cant('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.');
+      const o = choices[+$('.pick').value];
+      if (!o) return cant('Hãy chọn một đường trong danh sách trước đã.');
+      starting = true;
+      try {
+        if (!brainRide || brainRide.id !== o.s.id || JSON.stringify(brainRide.setup) !== JSON.stringify(riderSetup())) {
+          say('Đang dò đường cho bộ não…');
+          const route = await lineFor(o.s);
+          if (!route) return cant('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.');
+          if (brainRide) brainRide.pool.close();
+          const pool = new Pool(1), setup = riderSetup();
+          const meta = await pool.init(route, setup);
+          brainRide = { id: o.s.id, route, pool, geo: meta.geo, setup };
+        }
+        const w = brain.best.slice();
+        const [sim] = await brainRide.pool.evalBrains([w], [[0, 0]]);
+        if (brain.pool && !brain.running) brainLearn();
+        await getUp();
+        const geo = brainRide.geo;
+        const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
+        ride({ who: 'Bộ não', route: brainRide.route, rider: makeBrainRider(R, geo.H, w), expect: sim.prog, tricks: 0, swaps: 0 }, R);
+      } finally { starting = false; }
+    }
+    // Hands the bike to rider d.rider on line R: back to the start, then its controls replace yours on every step.
+    function ride(d, R) {
+      const st = d.route.start;
+      // the training line starts with a straight run-in from the spawn; distances shown are along the real line
+      d.runIn = Math.max(0, R.length - d.route.length);
+      live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
+      live.ex.trails_game_reset(live.g);
+      let t = 0, seq = null;
+      const rider = d.rider;
+      d.step = () => {
+        const s = liveState();
+        if (seq === null) seq = s[16];
+        if (s[13] > 0) { setTimeout(() => stopDrive('ngã'), 0); return null; }
+        if (s[16] !== seq) { seq = s[16]; if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++; }
+        if (d.takeNewer && t % 30 === 0) d.takeNewer();
+        const inp = rider.step(s, t++);
+        if (rider.idx >= R.length - 3) { setTimeout(() => stopDrive('về đích'), 0); return null; }
+        if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive('lạc khỏi đường'), 0); return null; }
+        if (badge && t % 15 === 0) badge.firstChild.textContent = `${d.who} đang lái · ${Math.max(0, rider.idx - d.runIn)} m${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
+        return inp;
       };
       live.drive = d;
       // after a bail the game stops stepping the bike, so watch for it from outside too
@@ -1228,10 +1789,10 @@ onmessage=async e=>{const m=e.data;
         if (liveState()[13] > 0) { clearInterval(watchBail); stopDrive('ngã'); }
       }, 250);
       badge = document.createElement('div'); badge.id = 'tai-badge';
-      badge.innerHTML = 'AI đang lái<small>Vẫn đang học ở nền · bấm phím bất kỳ để lấy lại tay lái</small>';
+      badge.innerHTML = `${d.who} đang lái<small>Vẫn đang học ở nền · bấm phím bất kỳ để lấy lại tay lái</small>`;
       document.body.appendChild(badge);
-      $('.drive').textContent = 'Dừng AI lái';
-      say('AI đang lái xe của bạn và vẫn học tiếp ở nền (bạn cần đang ngồi trên xe, không đi bộ). Bấm phím bất kỳ để lấy lại tay lái.');
+      $(button).textContent = 'Dừng AI lái';
+      say(`${d.who} đang lái xe của bạn và vẫn học tiếp ở nền (bạn cần đang ngồi trên xe, không đi bộ). Bấm phím bất kỳ để lấy lại tay lái.`);
     }
     // any key from the player takes the bike back
     window.addEventListener('keydown', e => { if ((live.drive || looping) && e.isTrusted) stopDrive('bạn đã lấy lại tay lái', true); }, true);
@@ -1243,6 +1804,36 @@ onmessage=async e=>{const m=e.data;
     $('.go').onclick = () => start();
     $('.watch').onclick = () => watch();
     $('.drive').onclick = () => driveButton();
+    $('.brain-go').onclick = () => brainStart();
+    $('.brain-drive').onclick = () => brainDriveButton();
+    if (brain.gen) $('.brain-go').textContent = 'Luyện tiếp';
+    $('.b-gen').textContent = brain.gen;
+    // ---- sharing the brain
+    function saveBrainFile() {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([JSON.stringify({ ...brain.record(), adam: null })], { type: 'application/json' }));
+      a.download = 'brain.json';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+    $('.brain-export').onclick = () => { saveBrainFile(); say('Đã lưu bộ não vào file brain.json (trong thư mục Tải xuống).'); };
+    $('.brain-share').onclick = () => {
+      saveBrainFile();
+      window.open(`https://github.com/${REPO}/upload/main/brain`, '_blank', 'noopener');
+      log('Đã lưu file <b>brain.json</b>. Trên trang GitHub vừa mở, kéo file đó vào rồi bấm nút xanh ở cuối trang (Propose changes). Cần tài khoản GitHub.');
+    };
+    $('.brain-import').onclick = () => $('.bfile').click();
+    $('.bfile').onchange = async () => {
+      const f = $('.bfile').files[0];
+      $('.bfile').value = '';
+      if (!f) return;
+      const m = readBrain(await f.text());
+      if (!m) { say('File này không phải bộ não của AI Trails.'); return; }
+      if (!brain.pool) { say('Bấm “Luyện bộ não” trước, rồi mở file lại: AI cần chạy thử bộ não trên các đường của bạn.'); return; }
+      const r = await brain.offer(m.w);
+      log(r.took ? `<b>Dùng bộ não từ file:</b> đi được ${pct(r.share)} quãng đường các đường của bạn, giỏi hơn bộ não đang có.` : `Bộ não từ file đi được ${pct(r.share)} quãng đường các đường của bạn, chưa hơn bộ não đang có nên giữ nguyên.`);
+      showBrain();
+    };
     $('.forget').onclick = async () => {
       if (!trainer.route || !confirm('Xóa những gì AI đã học trên đường này?')) return;
       stopDrive('bạn đã dừng AI', true);
@@ -1316,7 +1907,7 @@ onmessage=async e=>{const m=e.data;
       open() { el.style.display = ''; },
       // the extension found a newer AI on GitHub and kept it for the next page load
       newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
-      cap, trainer, buildRoute, findTracks, engine, live, drive: driveButton, gatherJumps,
+      cap, trainer, brain, buildRoute, findTracks, engine, live, drive: driveButton, gatherJumps, fitBrain, freshBrain,
     };
     if (window.__taiNewer) window.TrailsAI.newer();
     setTimeout(findTracks, 1500);

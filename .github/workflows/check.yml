@@ -18,5 +18,5 @@ jobs:
         run: |
           node tools/build.js
           git diff --exit-code -- dist docs
-      - name: Lesson files are valid
+      - name: Lesson and brain files are valid
         run: node tools/check-lessons.js

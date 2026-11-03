@@ -46,6 +46,18 @@ for (const name of fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort()) 
   const b = m.bestRun || {};
   rows.push(`| ${m.line.start.id} | ${m.line.X.length} m | ${b.prog ?? '?'} m | ${b.fit !== undefined ? Math.round(b.fit) : '?'} | ${b.end ?? '?'} | ${m.gen ?? '?'} | ${m.setup ? m.setup.tricks : '?'} |`);
 }
+// brain/brain.json: the shared brain, a list of weights (22 inputs, 16 hidden, 4 outputs)
+const BRAIN_SIZE = 22 * 16 + 16 * 4 + 4;
+const brainFile = path.join(__dirname, '..', 'brain', 'brain.json');
+if (fs.existsSync(brainFile)) {
+  let m = null, errs = [];
+  if (fs.statSync(brainFile).size > MAX_BYTES) errs.push('brain.json is too big');
+  else { try { m = JSON.parse(fs.readFileSync(brainFile, 'utf8')); } catch (e) { errs.push('not valid JSON: ' + e.message); } }
+  if (m && (m.format !== 'trails-ai-brain' || m.version !== 1)) errs.push('format must be "trails-ai-brain", version 1');
+  if (m && (!Array.isArray(m.w) || m.w.length !== BRAIN_SIZE || !m.w.every(num))) errs.push(`w must be ${BRAIN_SIZE} numbers`);
+  if (errs.length) { bad++; console.log(`✗ brain/brain.json\n  - ${errs.join('\n  - ')}`); }
+  else console.log(`brain/brain.json: ${m.gen ?? '?'} rounds on ${Array.isArray(m.lines) ? m.lines.length : '?'} lines\n`);
+}
 console.log('| line | length | best ride | score | ended | rounds | tricks mask |');
 console.log('|---|---|---|---|---|---|---|');
 for (const r of rows) console.log(r);
