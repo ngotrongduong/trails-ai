@@ -4,7 +4,7 @@ Một AI tự học cách chạy bất kỳ đường đua nào trong [Trails: T
 
 Đây là dự án cho vui, để mọi người cùng chơi, cùng góp sức và cùng học cách huấn luyện một AI.
 
-**👉 Dùng ngay: [ngotrongduong.github.io/trails-ai](https://ngotrongduong.github.io/trails-ai/)** (kéo nút “AI Trails” lên thanh dấu trang, rồi bấm nó trong game).
+**👉 Dùng ngay: [ngotrongduong.github.io/trails-ai](https://ngotrongduong.github.io/trails-ai/)**. Cách nhanh nhất là cài extension cho Edge/Chrome một lần, rồi AI tự bật mỗi khi bạn vào game. Hoặc kéo nút “AI Trails” lên thanh dấu trang rồi bấm nó trong game.
 
 ## AI học như thế nào
 
@@ -23,6 +23,15 @@ Vật lý của game cho kết quả giống hệt nhau mỗi lần chạy, nên
 Khi bấm **Để AI lái**, AI lái xe của bạn trong game, còn phần nền vẫn tiếp tục học. Mỗi giây AI xem đã có kế hoạch mới tốt hơn chưa. Nếu kế hoạch mới giữ nguyên cách chạy ở phần đường xe đã đi qua, nghĩa là chỉ đổi những đoạn phía trước, thì AI dùng nó ngay trong lượt đang chạy, vì khi đó trạng thái xe ngoài game đúng bằng trạng thái mà mô phỏng đã chấm điểm. Ngã xong, AI tự lái lại từ đầu với bài học mới nhất.
 
 Mỗi lượt lái thật cũng là một lần kiểm tra mô phỏng: AI so chỗ ngã thật với chỗ mô phỏng dự đoán, và so bản đồ trong mô phỏng với những chi tiết game vừa tải dọc đường. Lệch là dấu hiệu đường đã bị sửa và AI cần dò lại đường.
+
+### Mượn kinh nghiệm giữa các đường
+
+Kế hoạch của AI gắn với từng đoạn của một đường, nên tự nó không dùng được ở đường khác. Vì vậy AI ghi lại **hình dạng** của mỗi cú nhảy nó đã vượt qua: góc mép nhảy, độ cao mép, mặt đất sau mép ở 3/6/9/12/16 m (khoảng hở và chỗ tiếp đất), độ dốc đoạn lấy đà. Kèm theo đó là cách đã dùng: tốc độ, góc xe khi bay, có nhấc xe hay pump không.
+
+- Khi bắt đầu một đường mới, với mỗi cú nhảy AI tìm cú giống nhất trong kho, cả kho trên máy bạn và kho cộng đồng [`experience/jumps.json`](experience/jumps.json). Nó thử chạy cả đường bằng cách mượn được, và chỉ giữ nếu cách đó đi xa hơn học từ con số 0.
+- Khi bị kẹt ở một cú nhảy, một phần sáu số lần thử mỗi vòng dùng cách đã thành công ở những cú nhảy giống nó.
+
+Đo lần đầu trên 4 đường mới, mỗi đường 25 vòng: có mượn thì điểm cao hơn ở 3/4 đường, nhưng chỉ một lần cải thiện là do cách mượn trực tiếp, nên chưa thể nói nó giúp nhiều. Kho hiện mới có 16 cú nhảy từ một đường. Kho càng lớn thì càng dễ tìm được cú giống. Đây cũng là bước chuẩn bị cho một “bộ não” chung (mạng nơ-ron) nhìn hình dạng địa hình phía trước để tự lái trên bất kỳ đường nào.
 
 ### Điểm AI tự chấm cho mỗi lượt thử
 
@@ -60,12 +69,16 @@ Trick chỉ được tính khi tiếp đất xong vẫn đứng vững. Đây l�
 ## Cấu trúc
 
 ```text
-src/trails-ai.js        mã nguồn AI (có chú thích)
-dist/trails-ai.js       bản gọn mà nút “AI Trails” tải về (dựng từ src)
-docs/index.html         trang hướng dẫn trên GitHub Pages (dựng từ src)
-lessons/<mã đường>.json bài học cộng đồng, mỗi đường một file
-tools/build.js          dựng dist/ và docs/
-tools/check-lessons.js  kiểm tra các file bài học
+src/trails-ai.js           mã nguồn AI (có chú thích)
+dist/trails-ai.js          bản gọn mà extension và nút “AI Trails” tải về (dựng từ src)
+docs/index.html            trang hướng dẫn trên GitHub Pages (dựng từ src)
+docs/trails-ai-extension.zip  extension đóng gói sẵn để cài (dựng từ extension/)
+extension/                 extension cho Edge/Chrome: chạy AI trước khi game khởi động
+lessons/<mã đường>.json    bài học cộng đồng, mỗi đường một file
+experience/jumps.json      kho kinh nghiệm cú nhảy, gom từ lessons/ (workflow tự dựng)
+tools/build.js             dựng dist/ và docs/
+tools/check-lessons.js     kiểm tra các file bài học
+tools/gather-experience.js gom kinh nghiệm cú nhảy vào experience/
 ```
 
 ## Quy tắc chơi đẹp

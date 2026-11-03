@@ -1,6 +1,6 @@
 (function TAI() {
 'use strict';
-if (window.top === window) { boot(TAI); return; }
+if (window.top === window && !window.__taiDirect) { boot(TAI); return; }
 if (window.TrailsAI) { window.TrailsAI.open(); return; }
 function boot(fn) {
 const old = document.getElementById('tai-frame');
@@ -37,6 +37,8 @@ const STORE = 'trailsai.v2.';
 const REPO = 'ngotrongduong/trails-ai';
 const LESSONS_URL = `https://raw.githubusercontent.com/${REPO}/main/lessons/`;
 const LESSON_FORMAT = 'trails-ai-lesson';
+const EXPERIENCE_URL = `https://raw.githubusercontent.com/${REPO}/main/experience/jumps.json`;
+const JUMPS_VERSION = 1;
 const TRICK_NAMES = {
 flip: 'Backflip', spin: '360', whip: 'Whip', table: 'Table', tailwhip: 'Tailwhip',
 barspin: 'Barspin', tbog: 'T-bog', xup: 'X-up', manual: 'Manual',
@@ -365,12 +367,16 @@ let S=null;
 function sections(){
 const N=R.length,out=[];let a=0;
 const isT=i=>i<N&&R.KIND[i]==='takeoff';
+const at=k=>H[clamp(k,0,N-1)];
 for(let i=0;i<N;i++){
 const lip=isT(i)&&!isT(i+1);
 if(lip||i-a>=40||i===N-1){
-let pt=0;
-if(lip){const nl=R.nextLand[i];const j=nl>=0&&nl-i<45?nl:Math.min(N-5,i+12);pt=clamp(Math.atan2(H[Math.min(N-1,j+4)]-H[j],4),-0.7,0.2)}
-out.push({a,b:i,jump:lip,pt:+pt.toFixed(3)});a=i+1}
+let pt=0,f=null;
+if(lip){const nl=R.nextLand[i];const j=nl>=0&&nl-i<45?nl:Math.min(N-5,i+12);pt=clamp(Math.atan2(H[Math.min(N-1,j+4)]-H[j],4),-0.7,0.2);
+let lo=H[i];for(let k=Math.max(0,i-15);k<i;k++)lo=Math.min(lo,H[k]);
+f=[Math.atan2(at(i)-at(i-3),3),H[i]-lo].concat([3,6,9,12,16].map(d=>at(i+d)-H[i]),[(at(i-5)-at(i-25))/20]).map(v=>+v.toFixed(3))}
+const sec={a,b:i,jump:lip,pt:+pt.toFixed(3)};if(f)sec.f=f;
+out.push(sec);a=i+1}
 }
 return out;
 }
@@ -501,6 +507,48 @@ const r = await fetch(LESSONS_URL + encodeURIComponent(id) + '.json?t=' + Date.n
 return r.ok ? readLesson(await r.text(), id) : null;
 } catch { return null; }
 }
+const JUMP_KEYS = ['v', 'dpt', 'pl', 'pu'];
+const goodJump = j => j && typeof j.id === 'string' && Array.isArray(j.f) && j.f.length === JUMP_SCALE.length && j.f.every(num) && JUMP_KEYS.every(k => num(j[k]));
+function localJumps() {
+const out = [];
+try {
+for (let i = 0; i < localStorage.length; i++) {
+const key = localStorage.key(i);
+if (!key || !key.startsWith(STORE)) continue;
+let m = null;
+try { m = JSON.parse(localStorage.getItem(key)); } catch { continue; }
+const J = m && m.jumps, id = m && m.line && m.line.start && m.line.start.id;
+if (!J || J.version !== JUMPS_VERSION || !Array.isArray(J.list) || typeof id !== 'string') continue;
+for (const j of J.list) if (goodJump({ ...j, id })) out.push({ ...j, id });
+}
+} catch { /* storage blocked */ }
+return out;
+}
+async function communityJumps() {
+try {
+const r = await fetch(EXPERIENCE_URL + '?t=' + Date.now(), { cache: 'no-store' });
+const m = r.ok ? await r.json() : null;
+return m && m.version === JUMPS_VERSION && Array.isArray(m.jumps) ? m.jumps.filter(goodJump) : [];
+} catch { return []; }
+}
+async function gatherJumps() {
+const mine = localJumps(), have = new Set(mine.map(j => j.id));
+return mine.concat((await communityJumps()).filter(j => !have.has(j.id)));
+}
+const JUMP_SCALE = [0.12, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.06];
+const jumpDist = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + ((v - b[i]) / JUMP_SCALE[i]) ** 2, 0));
+function matchJumps(secs, lib, ownId) {
+const out = secs.map(() => null);
+secs.forEach((s, k) => {
+if (!s.f) return;
+const near = lib.filter(j => j.id !== ownId).map(j => ({ j, d: jumpDist(s.f, j.f) })).filter(o => o.d < 4).sort((a, b) => a.d - b.d).slice(0, 5);
+if (near.length) out[k] = near;
+});
+return out;
+}
+function applyJump(p, s, k, j) {
+p.v[k] = j.v; p.pt[k] = s.pt + j.dpt; p.pl[k] = j.pl; p.pu[k] = j.pu;
+}
 class Trainer {
 constructor(ui) { this.ui = ui; this.running = false; this.pool = null; }
 key() { return STORE + (this.route ? this.route.start.id : 'none'); }
@@ -518,7 +566,12 @@ return { fromTrack: !!ok };
 }
 lesson() {
 const { start, X, Z, KIND, pieces, kinds, length } = this.route;
-return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, savedAt: Date.now() };
+return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+}
+jumpRecord() {
+const S = this.secs, P = this.plan, b = this.best, list = [];
+if (b) S.forEach((s, k) => { if (s.f && s.b + 25 < b.prog) list.push({ f: s.f, v: +P.v[k].toFixed(3), dpt: +(P.pt[k] - s.pt).toFixed(4), pl: P.pl[k], pu: P.pu[k] }); });
+return { version: JUMPS_VERSION, list };
 }
 save() {
 if (this.takeStored()) return;
@@ -549,13 +602,37 @@ const meta = await this.pool.init(route, this.setup);
 this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
 const mem = this.load();
 this.best = (await this.pool.evalAll([this.plan]))[0];
+this.borrow = matchJumps(this.secs, this.library || [], route.start.id);
+this.borrowed = new Set(); this.borrowWins = 0;
+const alike = this.borrow.filter(Boolean);
+mem.jumps = this.secs.filter(s => s.jump).length;
+mem.alike = alike.length;
+mem.lines = new Set(alike.map(b => b[0].j.id)).size;
+if (!mem.fromTrack && alike.length) {
+const seed = clonePlan(this.plan);
+this.borrow.forEach((b, k) => { if (b) applyJump(seed, this.secs[k], k, b[0].j); });
+mem.fresh = this.best;
+mem.seed = (await this.pool.evalAll([seed]))[0];
+if (mem.seed.fit > this.best.fit + 0.01) { this.plan = seed; this.best = mem.seed; }
+}
 return mem;
 }
 stop() { this.running = false; }
 rideCandidates(k, n, wide) {
-const S = this.secs, out = [];
+const S = this.secs, out = [], opts = [];
+for (let q = Math.max(0, k - 1); q <= Math.min(S.length - 1, k + 1); q++) for (const o of (this.borrow && this.borrow[q]) || []) opts.push([q, o.j]);
+const nb = Math.min(opts.length, Math.floor(n / 6));
+this.borrowed = new Set();
 for (let i = 0; i < n; i++) {
 const p = clonePlan(this.plan);
+if (i < nb) {
+const [q, j] = opts[(this.gen * nb + i) % opts.length];
+applyJump(p, S[q], q, j);
+if (Math.random() < 0.5) { p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 0.7)); p.pt[q] += gauss() * 0.06; }
+this.borrowed.add(i);
+out.push(p);
+continue;
+}
 const span = 1 + Math.floor(Math.random() * 3);
 for (let q = Math.max(0, k - span); q <= Math.min(S.length - 1, k + 1); q++) {
 if (Math.random() < 0.7) p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 1.5 * wide));
@@ -595,7 +672,8 @@ const fresh = passedJumps.filter(j => !this.plan.mv[j]);
 const from = fresh.length && Math.random() < 0.7 ? fresh : passedJumps;
 const j = from[Math.floor(Math.random() * from.length)];
 cands = this.trickCandidates(j, LAMBDA);
-until = finished ? undefined : Math.min(this.N, S[Math.min(S.length - 1, j + 2)].b + 20);
+this.borrowed = new Set();
+until =finished ? undefined : Math.min(this.N, S[Math.min(S.length - 1, j + 2)].b + 20);
 mode = 'trick';
 } else {
 const k = Math.min(S.length - 1, best.crashSec);
@@ -608,16 +686,19 @@ const res = await this.pool.evalAll(cands, until);
 if (!this.running && !res) break;
 let bi = 0;
 res.forEach((r, i) => { if (r.fit > res[bi].fit + 0.01) bi = i; });
-let improved = false;
+let improved = false, borrowed = false;
 if (bi > 0) {
 const full = until === undefined ? res[bi] : (await this.pool.evalAll([cands[bi]]))[0];
-if (full.fit > this.best.fit + 0.01) { this.plan = cands[bi]; this.best = full; improved = true; }
+if (full.fit > this.best.fit + 0.01) {
+this.plan = cands[bi]; this.best = full; improved = true;
+if (this.borrowed.has(bi - 1)) { borrowed = true; this.borrowWins++; }
+}
 }
 if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;
 this.lastProg = Math.max(this.lastProg, this.best.prog);
 const news = [];
 for (const k of Object.keys(this.best.tricks)) if (!this.found[k]) { this.found[k] = this.gen + 1; news.push(TRICK_NAMES[k] || k); }
-if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved);
+if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved, borrowed);
 this.gen++;
 const mean = res.reduce((a, r) => a + r.fit, 0) / res.length;
 this.hist.push([this.gen, Math.round(this.best.fit), Math.round(mean), this.best.prog]);
@@ -754,6 +835,7 @@ el.innerHTML = `
 <span>Quãng đường tốt nhất</span><b class="k-prog">–</b>
 <span>Lượt chạy tốt nhất</span><b class="k-end">–</b>
 <span>Tốc độ học</span><b class="k-speed">–</b>
+<span>Mượn kinh nghiệm</span><b class="k-borrow">–</b>
 </div>
 <div class="k-tricks"></div>
 <canvas width="600" height="180"></canvas>
@@ -773,15 +855,16 @@ const say = t => { $('.st').textContent = t; };
 const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; $('.log').prepend(d); };
 const fmtTricks = tr => Object.entries(tr || {}).map(([k, n]) => `<span class="tag">${TRICK_NAMES[k] || k}${k === 'whip' ? '' : k === 'manual' ? ' ' + n + ' m' : n > 1 ? ' ×' + n : ''}</span>`).join('') || '<span style="color:#7d8a97">chưa có trick nào</span>';
 const ui = {
-record(gen, run, news, onlyNews) {
+record(gen, run, news, onlyNews, borrowed) {
 if (news.length) log(`<b>Vòng ${gen}:</b> lần đầu làm được ${news.map(n => `<span class="tag">${n}</span>`).join('')}`);
-if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${Math.round(run.fit)} điểm (${run.prog} m, ${run.jumps} cú nhảy, ${run.end})`);
+if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${Math.round(run.fit)} điểm (${run.prog} m, ${run.jumps} cú nhảy, ${run.end})${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
 },
 progress(p) {
 $('.k-gen').textContent = p.gen;
 $('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : 'vượt hết đường';
 showBest(p.best);
 $('.k-speed').textContent = `${(p.ms / 1000).toFixed(1)} s / vòng (${p.tries} lần thử, ${workers} luồng)`;
+showBorrow();
 draw();
 },
 };
@@ -794,6 +877,11 @@ $('.k-tricks').innerHTML = fmtTricks(b.tricks);
 $('.watch').disabled = $('.drive').disabled = $('.export').disabled = $('.share').disabled = false;
 }
 const trainer = new Trainer(ui);
+function showBorrow() {
+if (!trainer.borrow) return;
+const alike = trainer.borrow.filter(Boolean).length, jumps = trainer.secs.filter(s => s.jump).length;
+$('.k-borrow').textContent = alike ? `${alike}/${jumps} cú nhảy giống · giúp ${trainer.borrowWins} lần` : `chưa có cú nhảy giống`;
+}
 function draw() {
 const c = $('canvas'), x = c.getContext('2d'), h = trainer.hist;
 x.clearRect(0, 0, c.width, c.height);
@@ -856,15 +944,25 @@ if (!route) { route = await buildRoute(o.s); routeCache.set(o.s.id, route); }
 if (!route) { say('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.'); return; }
 say(`Đường dài ${route.length} m, ${route.pieces.length} chi tiết. Đang nạp vật lý vào ${workers} luồng (có thể mất vài chục giây)…`);
 const t0 = performance.now();
+trainer.library = await gatherJumps();
 const mem = await trainer.prepare(route, workers);
 const kinds = Object.entries(route.kinds).map(([k, n]) => `${n} ${k}`).join(', ');
+const took = mem.seed && trainer.best === mem.seed;
 log(`Đường mới: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
-log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `Bắt đầu học từ con số 0 (đường chia thành ${trainer.secs.length} đoạn, ${trainer.secs.filter(s => s.jump).length} cú nhảy).`);
+log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
 if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu”.');
+if (!trainer.library.length) log('Chưa có kinh nghiệm cú nhảy từ đường nào khác. Học xong đường này thì những đường sau sẽ mượn được.');
+else if (!mem.alike) log(`Kho kinh nghiệm có ${trainer.library.length} cú nhảy từ các đường khác, nhưng chưa cú nào giống cú nhảy của đường này.`);
+else {
+log(`<b>Mượn kinh nghiệm:</b> ${mem.alike}/${mem.jumps} cú nhảy của đường này giống cú nhảy AI đã học ở ${mem.lines} đường khác. Mỗi khi bị kẹt ở một cú nhảy, AI thử cách đã thành công ở những cú giống nó.`);
+if (took) log(`Bắt đầu bằng cách chạy mượn được: đi được ngay <b>${mem.seed.prog} m</b> (học từ con số 0 thì chỉ ${mem.fresh.prog} m).`);
+else if (mem.seed) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m, chưa hơn học từ con số 0 (${mem.fresh.prog} m), nên AI mượn dần từng cú nhảy.`);
+}
 if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, bấm “Học tiếp” để AI tập trick.');
 if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }
 $('.k-gen').textContent = trainer.gen;
 showBest(trainer.best);
+showBorrow();
 draw();
 $('.forget').disabled = false;
 }
@@ -992,9 +1090,9 @@ const key = trainer.key();
 try { localStorage.removeItem(key); } catch { /* ignore */ }
 routeCache.delete(trainer.route.start.id);
 if (trainer.pool) trainer.pool.close();
-trainer.pool = null; trainer.route = null; trainer.best = null; trainer.hist = [];
+trainer.pool = null; trainer.route = null; trainer.best = null; trainer.hist = []; trainer.borrow = null;
 $('.k-gen').textContent = '0'; $('.k-mode').textContent = '–';
-for (const k of ['.k-best', '.k-prog', '.k-end', '.k-speed']) $(k).textContent = '–';
+for (const k of ['.k-best', '.k-prog', '.k-end', '.k-speed', '.k-borrow']) $(k).textContent = '–';
 $('.k-tricks').innerHTML = '';
 $('.watch').disabled = $('.drive').disabled = $('.forget').disabled = $('.export').disabled = $('.share').disabled = true;
 $('.go').textContent = 'Bắt đầu học';
@@ -1047,8 +1145,10 @@ await useLesson(m, 'cộng đồng trên GitHub', true);
 }, 10 * 60 * 1000);
 window.TrailsAI = {
 open() { el.style.display = ''; },
-cap, trainer, buildRoute, findTracks, engine, live, drive: driveButton,
+newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
+cap, trainer, buildRoute, findTracks, engine, live, drive: driveButton, gatherJumps,
 };
+if (window.__taiNewer) window.TrailsAI.newer();
 setTimeout(findTracks, 1500);
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main); else main();

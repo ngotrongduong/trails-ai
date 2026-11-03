@@ -20,10 +20,14 @@
 //   a side view of the line (the game's own replay links carry no start
 //   position, so they would play from wherever the viewer spawns).
 // - "Let the AI ride" drives your own bike in the real game. For that the
-//   script must be in place before the game builds its physics engine, so on
-//   first use it quiets the game already open in this tab and opens the game
+//   script must be in place before the game builds its physics engine. The
+//   browser extension (extension/) runs it before the game starts; from the
+//   bookmark it quiets the game already open in this tab and opens the game
 //   again in a full-page frame with the AI loaded first. While the AI rides,
 //   its controls replace yours at the engine; any key gives the bike back.
+// - Jumps are described by their shape. What worked on a jump is borrowed by
+//   similar jumps of other lines: a new line starts from it, and the AI tries
+//   it whenever it is stuck at a jump.
 // - Learning is spread over most CPU threads. What the AI learned on a line (a
 //   "lesson") is kept in this browser, shared at once with other tabs on the
 //   same line, and can be saved to a file or shared to the community repo on
@@ -31,7 +35,8 @@
 //   first and kept only if they do better.
 (function TAI() {
   'use strict';
-  if (window.top === window) { boot(TAI); return; }
+  // the browser extension runs the AI before the game starts (__taiDirect), so it needs no frame
+  if (window.top === window && !window.__taiDirect) { boot(TAI); return; }
   if (window.TrailsAI) { window.TrailsAI.open(); return; }
 
   // Runs in the tab itself: quiet the game that is already open, then open it again in a frame with the AI loaded first.
@@ -74,6 +79,9 @@
   const REPO = 'ngotrongduong/trails-ai';
   const LESSONS_URL = `https://raw.githubusercontent.com/${REPO}/main/lessons/`;
   const LESSON_FORMAT = 'trails-ai-lesson';
+  // experience/jumps.json there gathers the jumps of every shared lesson (rebuilt by a GitHub workflow)
+  const EXPERIENCE_URL = `https://raw.githubusercontent.com/${REPO}/main/experience/jumps.json`;
+  const JUMPS_VERSION = 1;
   const TRICK_NAMES = {
     flip: 'Backflip', spin: '360', whip: 'Whip', table: 'Table', tailwhip: 'Tailwhip',
     barspin: 'Barspin', tbog: 'T-bog', xup: 'X-up', manual: 'Manual',
@@ -432,15 +440,21 @@ const MOVES=${JSON.stringify(MOVES)};
 ${makeRider.toString()}
 let S=null;
 // Cut the line into sections: one ends at every takeoff lip, the others every 40 m.
+// A jump section also gets the jump's shape (f), so what was learned on a similar jump of another line can be borrowed:
+// lip angle, ramp height, the ground 3, 6, 9, 12 and 16 m past the lip (gap and landing) and the slope of the run-up.
 function sections(){
   const N=R.length,out=[];let a=0;
   const isT=i=>i<N&&R.KIND[i]==='takeoff';
+  const at=k=>H[clamp(k,0,N-1)];
   for(let i=0;i<N;i++){
     const lip=isT(i)&&!isT(i+1);
     if(lip||i-a>=40||i===N-1){
-      let pt=0;
-      if(lip){const nl=R.nextLand[i];const j=nl>=0&&nl-i<45?nl:Math.min(N-5,i+12);pt=clamp(Math.atan2(H[Math.min(N-1,j+4)]-H[j],4),-0.7,0.2)}
-      out.push({a,b:i,jump:lip,pt:+pt.toFixed(3)});a=i+1}
+      let pt=0,f=null;
+      if(lip){const nl=R.nextLand[i];const j=nl>=0&&nl-i<45?nl:Math.min(N-5,i+12);pt=clamp(Math.atan2(H[Math.min(N-1,j+4)]-H[j],4),-0.7,0.2);
+        let lo=H[i];for(let k=Math.max(0,i-15);k<i;k++)lo=Math.min(lo,H[k]);
+        f=[Math.atan2(at(i)-at(i-3),3),H[i]-lo].concat([3,6,9,12,16].map(d=>at(i+d)-H[i]),[(at(i-5)-at(i-25))/20]).map(v=>+v.toFixed(3))}
+      const sec={a,b:i,jump:lip,pt:+pt.toFixed(3)};if(f)sec.f=f;
+      out.push(sec);a=i+1}
   }
   return out;
 }
@@ -584,6 +598,57 @@ onmessage=async e=>{const m=e.data;
     } catch { return null; }
   }
 
+  // ---------------------------------------------------------------- borrowed experience
+  // Every lesson keeps, for each jump its line has got over, the jump's shape and the plan that did it. On a new line
+  // the AI looks for the most similar jump learned anywhere else and starts from what worked there; while learning it
+  // keeps trying those when stuck at a jump. A borrowed plan is ridden first and kept only if it does better.
+  const JUMP_KEYS = ['v', 'dpt', 'pl', 'pu'];
+  const goodJump = j => j && typeof j.id === 'string' && Array.isArray(j.f) && j.f.length === JUMP_SCALE.length && j.f.every(num) && JUMP_KEYS.every(k => num(j[k]));
+  function localJumps() {
+    const out = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (!key || !key.startsWith(STORE)) continue;
+        let m = null;
+        try { m = JSON.parse(localStorage.getItem(key)); } catch { continue; }
+        const J = m && m.jumps, id = m && m.line && m.line.start && m.line.start.id;
+        if (!J || J.version !== JUMPS_VERSION || !Array.isArray(J.list) || typeof id !== 'string') continue;
+        for (const j of J.list) if (goodJump({ ...j, id })) out.push({ ...j, id });
+      }
+    } catch { /* storage blocked */ }
+    return out;
+  }
+  async function communityJumps() {
+    try {
+      const r = await fetch(EXPERIENCE_URL + '?t=' + Date.now(), { cache: 'no-store' });
+      const m = r.ok ? await r.json() : null;
+      return m && m.version === JUMPS_VERSION && Array.isArray(m.jumps) ? m.jumps.filter(goodJump) : [];
+    } catch { return []; }
+  }
+  // this browser's own lessons count over the community copy of the same line
+  async function gatherJumps() {
+    const mine = localJumps(), have = new Set(mine.map(j => j.id));
+    return mine.concat((await communityJumps()).filter(j => !have.has(j.id)));
+  }
+  // how different two jumps are (each number divided by a difference that matters); under 4 they count as alike.
+  // Jumps of different lines are mostly 2.5 to 5 apart; a loose match costs little, since every borrowed plan is ridden first.
+  const JUMP_SCALE = [0.12, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.06];
+  const jumpDist = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + ((v - b[i]) / JUMP_SCALE[i]) ** 2, 0));
+  // For every jump section of this line: the most similar jumps learned on other lines, nearest first.
+  function matchJumps(secs, lib, ownId) {
+    const out = secs.map(() => null);
+    secs.forEach((s, k) => {
+      if (!s.f) return;
+      const near = lib.filter(j => j.id !== ownId).map(j => ({ j, d: jumpDist(s.f, j.f) })).filter(o => o.d < 4).sort((a, b) => a.d - b.d).slice(0, 5);
+      if (near.length) out[k] = near;
+    });
+    return out;
+  }
+  function applyJump(p, s, k, j) {
+    p.v[k] = j.v; p.pt[k] = s.pt + j.dpt; p.pl[k] = j.pl; p.pu[k] = j.pu;
+  }
+
   class Trainer {
     constructor(ui) { this.ui = ui; this.running = false; this.pool = null; }
     key() { return STORE + (this.route ? this.route.start.id : 'none'); }
@@ -603,7 +668,14 @@ onmessage=async e=>{const m=e.data;
       // the line is kept with the memory: rebuilt later from whatever the game has loaded, it could come out shorter
       const { start, X, Z, KIND, pieces, kinds, length } = this.route;
       // numbers are kept exact: the ride is so sensitive that a route rounded to the centimetre rides differently
-      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, savedAt: Date.now() };
+      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+    }
+    // What the jumps this line's best ride got over teach other lines: each jump's shape and the plan used on it.
+    jumpRecord() {
+      const S = this.secs, P = this.plan, b = this.best, list = [];
+      // landed and rode on: 25 m past the lip
+      if (b) S.forEach((s, k) => { if (s.f && s.b + 25 < b.prog) list.push({ f: s.f, v: +P.v[k].toFixed(3), dpt: +(P.pt[k] - s.pt).toFixed(4), pl: P.pl[k], pu: P.pu[k] }); });
+      return { version: JUMPS_VERSION, list };
     }
     save() {
       // another tab learning the same line may have stored a better plan: take it instead of writing over it
@@ -637,15 +709,44 @@ onmessage=async e=>{const m=e.data;
       this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
       const mem = this.load();
       this.best = (await this.pool.evalAll([this.plan]))[0];
+      // jumps of this line that look like jumps learned on other lines (this.library is set by the panel)
+      this.borrow = matchJumps(this.secs, this.library || [], route.start.id);
+      this.borrowed = new Set(); this.borrowWins = 0;
+      const alike = this.borrow.filter(Boolean);
+      mem.jumps = this.secs.filter(s => s.jump).length;
+      mem.alike = alike.length;
+      mem.lines = new Set(alike.map(b => b[0].j.id)).size;
+      if (!mem.fromTrack && alike.length) {
+        // a new line starts from the nearest borrowed jump everywhere it has one, if that rides better than starting from nothing
+        const seed = clonePlan(this.plan);
+        this.borrow.forEach((b, k) => { if (b) applyJump(seed, this.secs[k], k, b[0].j); });
+        mem.fresh = this.best;
+        mem.seed = (await this.pool.evalAll([seed]))[0];
+        if (mem.seed.fit > this.best.fit + 0.01) { this.plan = seed; this.best = mem.seed; }
+      }
       return mem;
     }
     stop() { this.running = false; }
 
     // Changed copies of the plan around section k: speed, landing angle, pull and pump.
+    // Up to a sixth of them use what worked on a similar jump of another line, around where the AI falls
+    // (more would leave too few of the AI's own tries: measured, a third slowed learning down on some lines).
     rideCandidates(k, n, wide) {
-      const S = this.secs, out = [];
+      const S = this.secs, out = [], opts = [];
+      for (let q = Math.max(0, k - 1); q <= Math.min(S.length - 1, k + 1); q++) for (const o of (this.borrow && this.borrow[q]) || []) opts.push([q, o.j]);
+      const nb = Math.min(opts.length, Math.floor(n / 6));
+      this.borrowed = new Set();
       for (let i = 0; i < n; i++) {
         const p = clonePlan(this.plan);
+        if (i < nb) {
+          // a different borrowed jump each round; as is, or nudged a little to fit this line
+          const [q, j] = opts[(this.gen * nb + i) % opts.length];
+          applyJump(p, S[q], q, j);
+          if (Math.random() < 0.5) { p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 0.7)); p.pt[q] += gauss() * 0.06; }
+          this.borrowed.add(i);
+          out.push(p);
+          continue;
+        }
         const span = 1 + Math.floor(Math.random() * 3);
         for (let q = Math.max(0, k - span); q <= Math.min(S.length - 1, k + 1); q++) {
           if (Math.random() < 0.7) p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 1.5 * wide));
@@ -688,7 +789,8 @@ onmessage=async e=>{const m=e.data;
           const from = fresh.length && Math.random() < 0.7 ? fresh : passedJumps;
           const j = from[Math.floor(Math.random() * from.length)];
           cands = this.trickCandidates(j, LAMBDA);
-          until = finished ? undefined : Math.min(this.N, S[Math.min(S.length - 1, j + 2)].b + 20);
+          this.borrowed = new Set();
+          until =finished ? undefined : Math.min(this.N, S[Math.min(S.length - 1, j + 2)].b + 20);
           mode = 'trick';
         } else {
           const k = Math.min(S.length - 1, best.crashSec);
@@ -701,17 +803,21 @@ onmessage=async e=>{const m=e.data;
         if (!this.running && !res) break;
         let bi = 0;
         res.forEach((r, i) => { if (r.fit > res[bi].fit + 0.01) bi = i; });
-        let improved = false;
+        let improved = false, borrowed = false;
         if (bi > 0) {
           const full = until === undefined ? res[bi] : (await this.pool.evalAll([cands[bi]]))[0];
           // compared with the current best, which a lesson from elsewhere may have raised during this round
-          if (full.fit > this.best.fit + 0.01) { this.plan = cands[bi]; this.best = full; improved = true; }
+          if (full.fit > this.best.fit + 0.01) {
+            this.plan = cands[bi]; this.best = full; improved = true;
+            // cands[0] is the current plan, so try i of rideCandidates is cands[i + 1]
+            if (this.borrowed.has(bi - 1)) { borrowed = true; this.borrowWins++; }
+          }
         }
         if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;
         this.lastProg = Math.max(this.lastProg, this.best.prog);
         const news = [];
         for (const k of Object.keys(this.best.tricks)) if (!this.found[k]) { this.found[k] = this.gen + 1; news.push(TRICK_NAMES[k] || k); }
-        if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved);
+        if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved, borrowed);
         this.gen++;
         const mean = res.reduce((a, r) => a + r.fit, 0) / res.length;
         this.hist.push([this.gen, Math.round(this.best.fit), Math.round(mean), this.best.prog]);
@@ -863,6 +969,7 @@ onmessage=async e=>{const m=e.data;
         <span>Quãng đường tốt nhất</span><b class="k-prog">–</b>
         <span>Lượt chạy tốt nhất</span><b class="k-end">–</b>
         <span>Tốc độ học</span><b class="k-speed">–</b>
+        <span>Mượn kinh nghiệm</span><b class="k-borrow">–</b>
       </div>
       <div class="k-tricks"></div>
       <canvas width="600" height="180"></canvas>
@@ -885,15 +992,16 @@ onmessage=async e=>{const m=e.data;
     const fmtTricks = tr => Object.entries(tr || {}).map(([k, n]) => `<span class="tag">${TRICK_NAMES[k] || k}${k === 'whip' ? '' : k === 'manual' ? ' ' + n + ' m' : n > 1 ? ' ×' + n : ''}</span>`).join('') || '<span style="color:#7d8a97">chưa có trick nào</span>';
 
     const ui = {
-      record(gen, run, news, onlyNews) {
+      record(gen, run, news, onlyNews, borrowed) {
         if (news.length) log(`<b>Vòng ${gen}:</b> lần đầu làm được ${news.map(n => `<span class="tag">${n}</span>`).join('')}`);
-        if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${Math.round(run.fit)} điểm (${run.prog} m, ${run.jumps} cú nhảy, ${run.end})`);
+        if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${Math.round(run.fit)} điểm (${run.prog} m, ${run.jumps} cú nhảy, ${run.end})${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
       },
       progress(p) {
         $('.k-gen').textContent = p.gen;
         $('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : 'vượt hết đường';
         showBest(p.best);
         $('.k-speed').textContent = `${(p.ms / 1000).toFixed(1)} s / vòng (${p.tries} lần thử, ${workers} luồng)`;
+        showBorrow();
         draw();
       },
     };
@@ -906,6 +1014,11 @@ onmessage=async e=>{const m=e.data;
       $('.watch').disabled = $('.drive').disabled = $('.export').disabled = $('.share').disabled = false;
     }
     const trainer = new Trainer(ui);
+    function showBorrow() {
+      if (!trainer.borrow) return;
+      const alike = trainer.borrow.filter(Boolean).length, jumps = trainer.secs.filter(s => s.jump).length;
+      $('.k-borrow').textContent = alike ? `${alike}/${jumps} cú nhảy giống · giúp ${trainer.borrowWins} lần` : `chưa có cú nhảy giống`;
+    }
 
     function draw() {
       const c = $('canvas'), x = c.getContext('2d'), h = trainer.hist;
@@ -975,15 +1088,26 @@ onmessage=async e=>{const m=e.data;
           if (!route) { say('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.'); return; }
           say(`Đường dài ${route.length} m, ${route.pieces.length} chi tiết. Đang nạp vật lý vào ${workers} luồng (có thể mất vài chục giây)…`);
           const t0 = performance.now();
+          // jumps learned on other lines, in this browser and shared on GitHub
+          trainer.library = await gatherJumps();
           const mem = await trainer.prepare(route, workers);
           const kinds = Object.entries(route.kinds).map(([k, n]) => `${n} ${k}`).join(', ');
+          const took = mem.seed && trainer.best === mem.seed;
           log(`Đường mới: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
-          log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `Bắt đầu học từ con số 0 (đường chia thành ${trainer.secs.length} đoạn, ${trainer.secs.filter(s => s.jump).length} cú nhảy).`);
+          log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
           if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu”.');
+          if (!trainer.library.length) log('Chưa có kinh nghiệm cú nhảy từ đường nào khác. Học xong đường này thì những đường sau sẽ mượn được.');
+          else if (!mem.alike) log(`Kho kinh nghiệm có ${trainer.library.length} cú nhảy từ các đường khác, nhưng chưa cú nào giống cú nhảy của đường này.`);
+          else {
+            log(`<b>Mượn kinh nghiệm:</b> ${mem.alike}/${mem.jumps} cú nhảy của đường này giống cú nhảy AI đã học ở ${mem.lines} đường khác. Mỗi khi bị kẹt ở một cú nhảy, AI thử cách đã thành công ở những cú giống nó.`);
+            if (took) log(`Bắt đầu bằng cách chạy mượn được: đi được ngay <b>${mem.seed.prog} m</b> (học từ con số 0 thì chỉ ${mem.fresh.prog} m).`);
+            else if (mem.seed) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m, chưa hơn học từ con số 0 (${mem.fresh.prog} m), nên AI mượn dần từng cú nhảy.`);
+          }
           if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, bấm “Học tiếp” để AI tập trick.');
           if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }
           $('.k-gen').textContent = trainer.gen;
           showBest(trainer.best);
+          showBorrow();
           draw();
           $('.forget').disabled = false;
         }
@@ -1129,9 +1253,9 @@ onmessage=async e=>{const m=e.data;
       try { localStorage.removeItem(key); } catch { /* ignore */ }
       routeCache.delete(trainer.route.start.id);
       if (trainer.pool) trainer.pool.close();
-      trainer.pool = null; trainer.route = null; trainer.best = null; trainer.hist = [];
+      trainer.pool = null; trainer.route = null; trainer.best = null; trainer.hist = []; trainer.borrow = null;
       $('.k-gen').textContent = '0'; $('.k-mode').textContent = '–';
-      for (const k of ['.k-best', '.k-prog', '.k-end', '.k-speed']) $(k).textContent = '–';
+      for (const k of ['.k-best', '.k-prog', '.k-end', '.k-speed', '.k-borrow']) $(k).textContent = '–';
       $('.k-tricks').innerHTML = '';
       $('.watch').disabled = $('.drive').disabled = $('.forget').disabled = $('.export').disabled = $('.share').disabled = true;
       $('.go').textContent = 'Bắt đầu học';
@@ -1190,8 +1314,11 @@ onmessage=async e=>{const m=e.data;
 
     window.TrailsAI = {
       open() { el.style.display = ''; },
-      cap, trainer, buildRoute, findTracks, engine, live, drive: driveButton,
+      // the extension found a newer AI on GitHub and kept it for the next page load
+      newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
+      cap, trainer, buildRoute, findTracks, engine, live, drive: driveButton, gatherJumps,
     };
+    if (window.__taiNewer) window.TrailsAI.newer();
     setTimeout(findTracks, 1500);
   }
 

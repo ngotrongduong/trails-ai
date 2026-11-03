@@ -22,4 +22,11 @@ plan      kế hoạch theo từng đoạn: v (tốc độ m/s), pt (góc xe khi
 bestRun   lượt chạy tốt nhất: fit (điểm), prog (mét), end, jumps, tricks
 setup     cài đặt khi học: tricks (trick đã mở khóa), bike, tunes
 gen       số vòng đã học
+jumps     kinh nghiệm cú nhảy (version 1): list[] gồm mỗi cú nhảy lượt tốt nhất đã vượt qua,
+          f (hình dạng: góc mép nhảy, độ cao mép, mặt đất sau mép 3/6/9/12/16 m, độ dốc đoạn lấy đà),
+          v, dpt (chênh góc bay so với dốc tiếp đất), pl, pu
 ```
+
+## Kho kinh nghiệm
+
+Sau mỗi lần thư mục này thay đổi, một workflow của GitHub gom phần `jumps` của mọi bài học vào [`experience/jumps.json`](../experience/jumps.json). Khi bắt đầu học một đường mới, AI tải file đó, tìm những cú nhảy giống nhất với từng cú nhảy của đường mới, rồi mượn cách đã thành công ở đó (vẫn chạy thử trước, chỉ giữ nếu tốt hơn). Vì vậy mỗi bài học bạn góp không chỉ giúp đường của nó, mà còn giúp mọi đường có cú nhảy giống.

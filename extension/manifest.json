@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "AI tự học Trails",
+  "version": "1.0.0",
+  "description": "Mở AI tự học Trails mỗi khi bạn vào trailsthegame.com. Luôn dùng bản AI mới nhất trên GitHub.",
+  "homepage_url": "https://ngotrongduong.github.io/trails-ai/",
+  "content_scripts": [
+    {
+      "matches": ["https://trailsthegame.com/*"],
+      "js": ["loader.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    }
+  ]
+}

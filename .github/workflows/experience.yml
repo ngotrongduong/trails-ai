@@ -1,0 +1,33 @@
+# After lessons change on main, gather their jumps into experience/jumps.json (what the AI borrows on new lines).
+# It only reads the lesson files as data and commits the one gathered file.
+name: experience
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'lessons/**'
+      - 'tools/gather-experience.js'
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: experience
+  cancel-in-progress: false
+jobs:
+  gather:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Lesson files are valid
+        run: node tools/check-lessons.js
+      - name: Gather jumps
+        run: node tools/gather-experience.js
+      - name: Commit if changed
+        run: |
+          git add experience/jumps.json
+          if git diff --cached --quiet; then echo "no change"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898099+github-actions[bot]@users.noreply.github.com" commit -m "Gather jumps from lessons"
+          git push

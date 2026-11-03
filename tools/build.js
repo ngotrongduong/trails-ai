@@ -49,7 +49,20 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <p class="sub">Một AI tự thử, tự ngã và rút kinh nghiệm trên bất kỳ đường đua nào trong trailsthegame.com, tập trick để lấy điểm cao nhất, rồi tự lái xe của bạn trong game. Dự án vui, mã nguồn mở trên <a href="https://github.com/${REPO}">GitHub</a>: ai cũng có thể góp bài học và cải tiến AI.</p>
 
 <div class="card">
-<h2>Cách 1 · Nút trên thanh dấu trang (dễ nhất)</h2>
+<h2>Cách 1 · Extension cho Edge / Chrome (nhanh nhất)</h2>
+<p>Cài một lần. Sau đó mỗi khi bạn mở trailsthegame.com, AI tự bật, game không phải tải lại lần hai, và AI luôn là bản mới nhất.</p>
+<ol>
+<li>Tải file <a href="trails-ai-extension.zip" download><b>trails-ai-extension.zip</b></a>, bấm chuột phải vào file → <b>Extract All</b> (Giải nén tất cả). Bạn sẽ có thư mục <code>trails-ai-extension</code>. Hãy để thư mục này ở chỗ cố định, đừng xóa.</li>
+<li>Gõ <code>edge://extensions</code> vào thanh địa chỉ (Chrome: <code>chrome://extensions</code>).</li>
+<li>Bật <b>Developer mode</b> (Chế độ dành cho nhà phát triển).</li>
+<li>Bấm <b>Load unpacked</b> (Tải tiện ích đã giải nén) và chọn thư mục <code>trails-ai-extension</code> (thư mục có file <code>manifest.json</code>).</li>
+<li>Mở <b>trailsthegame.com</b>. Lần đầu trang tự tải lại một lần, rồi bảng AI hiện ở góc phải.</li>
+</ol>
+<p class="note">Khi có bản AI mới, bảng AI báo “Có bản AI mới”: bấm <kbd>F5</kbd> là xong, không phải cài lại. Edge có thể nhắc rằng bạn đang dùng extension ở chế độ nhà phát triển; đó là bình thường với extension tự cài. Muốn gỡ: vào lại <code>edge://extensions</code> và bấm <b>Remove</b>.</p>
+</div>
+
+<div class="card">
+<h2>Cách 2 · Nút trên thanh dấu trang</h2>
 <ol>
 <li>Trong Edge (hoặc Chrome), bật thanh dấu trang: <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>B</kbd>.</li>
 <li>Giữ chuột vào nút xanh dưới đây và <b>kéo nó lên thanh dấu trang</b>:<br><br>
@@ -61,7 +74,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 </div>
 
 <div class="card">
-<h2>Cách 2 · Dán vào Console</h2>
+<h2>Cách 3 · Dán vào Console</h2>
 <ol>
 <li>Bấm nút này để chép đoạn mã: <button id="copy">Chép mã AI</button> <span id="copied" class="ok"></span></li>
 <li>Trong trang game, bấm <kbd>F12</kbd>, chọn thẻ <b>Console</b>.</li>
@@ -75,6 +88,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <li>Đạp xe vài giây để AI biết bạn đang ở đâu, rồi bấm <b>Tìm lại đường gần tôi</b>.</li>
 <li>Chọn một điểm xuất phát trong danh sách, bấm <b>Bắt đầu học</b>. Lần đầu nạp vật lý mất khoảng 10–40 giây.</li>
 <li>AI học theo vòng: mỗi vòng nó thử vài chục cách chạy khác nhau trong mô phỏng (dùng gần hết các luồng CPU của máy) và giữ cách tốt nhất. Đầu tiên nó học cách vượt hết đường (tốc độ cho từng đoạn, góc xe khi bay), sau đó tập trick trên những cú nhảy đã qua được. Cứ để AI chạy 15–30 phút hoặc lâu hơn.</li>
+<li><b>Mượn kinh nghiệm:</b> mỗi cú nhảy AI vượt qua được ghi lại cùng hình dạng của nó (mép nhảy, khoảng hở, chỗ tiếp đất). Khi học một đường mới, AI tìm những cú nhảy giống nhất ở các đường đã học, trên máy bạn và của mọi người trên GitHub, rồi bắt đầu từ cách đã thành công ở đó. Khi bị kẹt ở một cú nhảy, nó cũng thử những cách đó. Càng học nhiều đường, đường mới càng học nhanh. Ô <b>Mượn kinh nghiệm</b> cho biết bao nhiêu cú nhảy tìm được cú giống và kinh nghiệm cũ đã giúp bao nhiêu lần.</li>
 <li>Bấm <b>Xem AI chạy</b> để xem lại lượt chạy tốt nhất ở dạng mặt cắt của đường, có tên trick và điểm.</li>
 <li>Bấm <b>Tạm dừng</b> bất cứ lúc nào. AI nhớ những gì đã học trên từng đường (lưu trong trình duyệt), lần sau bấm <b>Học tiếp</b>.</li>
 </ol>
@@ -135,4 +149,37 @@ document.getElementById('copy').onclick = async () => {
 `;
 fs.mkdirSync(path.join(root, 'docs'), { recursive: true });
 fs.writeFileSync(path.join(root, 'docs', 'index.html'), html);
-console.log('dist', slim.length, 'page', html.length, 'bookmarklet', bookmarklet.length);
+
+// docs/trails-ai-extension.zip: the browser extension in one folder, ready for "Load unpacked".
+// Stored without compression and with a fixed date, so the same files always give the same zip.
+const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = b => { let c = 0xffffffff; for (const x of b) c = crcTable[(c ^ x) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function zip(files) {
+  const parts = [], dir = [];
+  let at = 0;
+  for (const [name, data] of files) {
+    const nm = Buffer.from(name), crc = crc32(data);
+    const head = Buffer.alloc(30);
+    head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(10, 4); head.writeUInt16LE(0x0800, 6);
+    head.writeUInt16LE(0, 8); head.writeUInt16LE(0, 10); head.writeUInt16LE(0x21, 12);
+    head.writeUInt32LE(crc, 14); head.writeUInt32LE(data.length, 18); head.writeUInt32LE(data.length, 22);
+    head.writeUInt16LE(nm.length, 26); head.writeUInt16LE(0, 28);
+    parts.push(head, nm, data);
+    const cd = Buffer.alloc(46);
+    cd.writeUInt32LE(0x02014b50, 0); cd.writeUInt16LE(20, 4); cd.writeUInt16LE(10, 6); cd.writeUInt16LE(0x0800, 8);
+    cd.writeUInt16LE(0, 10); cd.writeUInt16LE(0, 12); cd.writeUInt16LE(0x21, 14);
+    cd.writeUInt32LE(crc, 16); cd.writeUInt32LE(data.length, 20); cd.writeUInt32LE(data.length, 24);
+    cd.writeUInt16LE(nm.length, 28); cd.writeUInt32LE(at, 42);
+    dir.push(cd, nm);
+    at += 30 + nm.length + data.length;
+  }
+  const cdBuf = Buffer.concat(dir), end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(cdBuf.length, 12); end.writeUInt32LE(at, 16);
+  return Buffer.concat([...parts, cdBuf, end]);
+}
+const extDir = path.join(root, 'extension');
+const extFiles = fs.readdirSync(extDir).sort().map(f => [`trails-ai-extension/${f}`, fs.readFileSync(path.join(extDir, f))]);
+const ext = zip(extFiles);
+fs.writeFileSync(path.join(root, 'docs', 'trails-ai-extension.zip'), ext);
+console.log('dist', slim.length, 'page', html.length, 'bookmarklet', bookmarklet.length, 'extension', ext.length);
