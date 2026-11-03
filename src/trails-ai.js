@@ -460,7 +460,7 @@
       }
       return me.inp;
     };
-    me.x = x;
+    me.x = x; me.o = o;
     return me;
   }
   // Teach brain w to do what the plans did (rows from watchPlan: 22 seen, 5 asked for, landing slope). Each output is
@@ -661,6 +661,45 @@ function watchPlan(P,until,w){
   if(fell&&!me)rows.length=Math.max(0,rows.length-30*28);
   return {rows,prog};
 }
+// The brain w rides the line and its riding is written down as a plan, section by section: the speed it held (as it
+// aimed, and as it went), where it pulled before a lip, how hard it pumped down slopes, the angle it held in the air.
+// Sections past its fall keep fresh values. Returns how far the brain got and four plans (the speed as aimed or as
+// ridden, on the whole section or on its end): which one rides closest to the brain differs from line to line.
+function brainPlan(w){
+  l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
+  const N=R.length,K=S.length,me=makeBrainRider(R,H,w);
+  const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0)};
+  const tk=makeRider(R,H,S,Q),z=()=>new Float64Array(K);
+  const aim=z(),went=z(),nv=z(),aimE=z(),wentE=z(),nE=z(),pu=z(),np=z(),pt=z(),na=z(),pl=z();
+  const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
+  let s=state(),prog=0,progT=0,stall=0;
+  for(let t=0;t<maxT;t++){
+    const air=s[12]>0,inp=me.step(s,t);tk.step(s,t);
+    const i=me.idx;if(i>prog){prog=i;progT=t}else if(t-progT>480)break;
+    if(me.off>7&&!air||i>=N-3)break;
+    if(t%2===0){
+      if(!air){const k=tk.sec,a=clamp(8+5*me.o[0],2,18),v=Math.abs(s[8]);aim[k]+=a;went[k]+=v;nv[k]++;
+        if(i>=S[k].b-8){aimE[k]+=a;wentE[k]+=v;nE[k]++}
+        if((inp[5]&1)&&R.KIND[i]==='takeoff'&&i<=S[k].b)pl[k]=Math.max(pl[k],S[k].b-i+1);
+        if((H[Math.min(N-1,i+1)]-H[Math.min(N-1,i+3)])/2>0.03){pu[k]+=Math.max(0,me.o[2]);np[k]++}}
+      else{const k=tk.airSec;pt[k]+=me.landPt+0.4*me.o[3];na[k]++}
+    }
+    l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
+    if(s[13]>0)break;
+    if(Math.abs(s[8])<0.6&&!(s[12]>0)){if(++stall>150)break}else stall=0;
+  }
+  // the speed of a section: on the whole of it, or on its last 8 m (where it meets a lip or the next section)
+  const plan=(v,n,vE)=>{const P=JSON.parse(JSON.stringify(Q));
+    for(let k=0;k<K;k++){
+      if(vE&&nE[k])P.v[k]=+clamp(vE[k]/nE[k],2,18).toFixed(3);
+      else if(n[k])P.v[k]=+clamp(v[k]/n[k],2,18).toFixed(3);
+      if(na[k])P.pt[k]=+(pt[k]/na[k]).toFixed(4);
+      P.pl[k]=Math.min(10,Math.round(pl[k]));
+      const p=np[k]?pu[k]/np[k]:0;P.pu[k]=p<0.05?0:+p.toFixed(2);
+    }
+    return P};
+  return {prog,plans:[plan(aim,nv),plan(went,nv),plan(aim,nv,aimE),plan(went,nv,wentE)]};
+}
 onmessage=async e=>{const m=e.data;
   try{
     if(m.type==='init'){await init(m);
@@ -670,6 +709,7 @@ onmessage=async e=>{const m=e.data;
     else if(m.type==='replay'){use(0);postMessage({type:'replay',id:m.id,r:episode(m.plan,{rec:true})})}
     // brains: each task is [brain, line]; only what the learning needs comes back
     else if(m.type==='watch'){use(m.line);postMessage({type:'watch',id:m.id,...watchPlan(m.plan,m.until,m.brain)})}
+    else if(m.type==='brainplan'){use(0);postMessage({type:'brainplan',id:m.id,...brainPlan(m.w)})}
     else if(m.type==='brains'){const out=m.tasks.map(([b,i])=>{use(i);const r=episode(null,{brain:m.brains[b],until:m.until});return {fit:r.fit,prog:r.prog,end:r.end,jumps:r.jumps}});postMessage({type:'brains',id:m.id,out})}
   }catch(err){postMessage({type:'error',id:m.id,error:String(err&&err.stack||err)})}
 };`;
@@ -752,6 +792,8 @@ onmessage=async e=>{const m=e.data;
       return res;
     }
     replay(plan) { return this.call(this.ws[0], { type: 'replay', plan }).then(r => r.r); }
+    // The brain rides the line, and its riding comes back as plans (see brainPlan in the worker).
+    brainPlan(w) { return this.call(this.ws[0], { type: 'brainplan', w }).then(r => ({ prog: r.prog, plans: r.plans })); }
     // Each { line, plan } ridden by a worker holding the line, with a brain watching (see watchPlan in the worker);
     // with brain, that brain rides and the plan only says what it would do.
     watchPlans(items, until, brain) {
@@ -927,13 +969,21 @@ onmessage=async e=>{const m=e.data;
       mem.jumps = this.secs.filter(s => s.jump).length;
       mem.alike = alike.length;
       mem.lines = new Set(alike.map(b => b[0].j.id)).size;
+      mem.fresh = this.best; mem.from = 'fresh';
       if (!mem.fromTrack && alike.length) {
         // a new line starts from the nearest borrowed jump everywhere it has one, if that rides better than starting from nothing
         const seed = clonePlan(this.plan);
         this.borrow.forEach((b, k) => { if (b) applyJump(seed, this.secs[k], k, b[0].j); });
-        mem.fresh = this.best;
         mem.seed = (await this.pool.evalAll([seed]))[0];
-        if (mem.seed.fit > this.best.fit + 0.01) { this.plan = seed; this.best = mem.seed; }
+        if (mem.seed.fit > this.best.fit + 0.01) { this.plan = seed; this.best = mem.seed; mem.from = 'borrow'; }
+      }
+      if (!mem.fromTrack && this.brainW) {
+        // or from how the shared brain rides this line (this.brainW is set by the panel), written down as a plan
+        const got = await this.pool.brainPlan(this.brainW);
+        const runs = await this.pool.evalAll(got.plans);
+        const bi = runs.reduce((b, r, i) => (r.fit > runs[b].fit ? i : b), 0);
+        mem.brain = { prog: got.prog, run: runs[bi] };
+        if (runs[bi].fit > this.best.fit + 0.01) { this.plan = got.plans[bi]; this.best = runs[bi]; mem.from = 'brain'; }
       }
       return mem;
     }
@@ -1513,9 +1563,11 @@ onmessage=async e=>{const m=e.data;
           const t0 = performance.now();
           // jumps learned on other lines, in this browser and shared on GitHub
           trainer.library = await gatherJumps();
+          // a brain that has learned something also shows a new line how it would ride it
+          trainer.brainW = brain.gen ? brain.best.slice() : null;
           const mem = await trainer.prepare(route, workers);
           const kinds = Object.entries(route.kinds).map(([k, n]) => `${n} ${k}`).join(', ');
-          const took = mem.seed && trainer.best === mem.seed;
+          const took = mem.from !== 'fresh';
           log(`Đường mới: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
           log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
           if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu”.');
@@ -1523,8 +1575,14 @@ onmessage=async e=>{const m=e.data;
           else if (!mem.alike) log(`Kho kinh nghiệm có ${trainer.library.length} cú nhảy từ các đường khác, nhưng chưa cú nào giống cú nhảy của đường này.`);
           else {
             log(`<b>Mượn kinh nghiệm:</b> ${mem.alike}/${mem.jumps} cú nhảy của đường này giống cú nhảy AI đã học ở ${mem.lines} đường khác. Mỗi khi bị kẹt ở một cú nhảy, AI thử cách đã thành công ở những cú giống nó.`);
-            if (took) log(`Bắt đầu bằng cách chạy mượn được: đi được ngay <b>${mem.seed.prog} m</b> (học từ con số 0 thì chỉ ${mem.fresh.prog} m).`);
+            if (mem.from === 'borrow') log(`Bắt đầu bằng cách chạy mượn được: đi được ngay <b>${mem.seed.prog} m</b> (học từ con số 0 thì chỉ ${mem.fresh.prog} m).`);
+            else if (mem.seed && mem.seed.fit > mem.fresh.fit + 0.01) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m (học từ con số 0: ${mem.fresh.prog} m).`);
             else if (mem.seed) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m, chưa hơn học từ con số 0 (${mem.fresh.prog} m), nên AI mượn dần từng cú nhảy.`);
+          }
+          if (mem.brain) {
+            const b = mem.brain, at = r => `${r.prog} m, ${Math.round(r.fit)} điểm`;
+            if (mem.from === 'brain') log(`<b>Bắt đầu từ cách lái của bộ não chung:</b> bộ não đi được ${b.prog} m trên đường này. Chép cách lái đó thành bài học thì được ngay <b>${at(b.run)}</b> (học từ con số 0: ${at(mem.fresh)}${mem.seed ? `; mượn cú nhảy: ${at(mem.seed)}` : ''}).`);
+            else log(`Bộ não chung đi được ${b.prog} m trên đường này. Chép cách lái đó thành bài học thì được ${at(b.run)}, chưa hơn cách bắt đầu đang có (${at(trainer.best)}), nên không dùng.`);
           }
           if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, bấm “Học tiếp” để AI tập trick.');
           if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }

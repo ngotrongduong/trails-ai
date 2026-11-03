@@ -43,6 +43,7 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 - **Đường đang chọn được để riêng:** bộ não không bao giờ luyện trên nó. Con số trên đường đó cho biết bộ não lái giỏi cỡ nào trên một đường lạ.
 - **Bắt chước bài học:** trước khi tự luyện, bộ não xem các bài học đã có trên máy chạy đường của chúng và học làm giống vậy. Sau đó nó tự chạy, còn bài học chỉ cho nó nên làm gì ở những chỗ nó đến. Kết quả chỉ được giữ nếu giỏi hơn.
 - **Bộ não lái đường đang chọn:** bộ não lái xe thật của bạn trên đường đang chọn, kể cả đường nó chưa từng thấy.
+- **Bộ não giúp bài học ở đường mới:** khi bạn bấm **Bắt đầu học** trên một đường chưa học, bộ não (nếu đã luyện) chạy đường đó trong mô phỏng. Cách nó lái được chép thành kế hoạch, từng đoạn một: tốc độ, chỗ nhấc xe trước mép nhảy, độ pump, góc xe khi bay. Có 4 cách chép tốc độ: theo tốc độ bộ não nhắm hay tốc độ xe thật sự chạy, tính trên cả đoạn hay chỉ 8 m cuối đoạn. AI chạy thử cả 4, và bài học chỉ bắt đầu từ cách tốt nhất nếu nó hơn học từ con số 0 và hơn cách mượn cú nhảy.
 - **Chia sẻ:** **Lưu bộ não** / **Mở bộ não** ra file. **Chia sẻ GitHub** trong phần bộ não lưu file và mở trang tải lên thư mục [`brain/`](brain/). Khi bắt đầu luyện, AI tải bộ não cộng đồng `brain/brain.json`, chạy thử trên các đường của bạn, và chỉ dùng nếu nó giỏi hơn.
 
 Đo lần đầu trên 12 đường luyện và 1 đường để riêng (150 m), máy 16 luồng:
@@ -51,6 +52,12 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 - Trên đường để riêng, bộ não chưa giỏi hơn: bộ não mới đi được 35 m, bộ não đã luyện đi được 27–41 m. Với 12 đường, nó mới học thuộc các đường luyện chứ chưa học được cách lái chung. Cần nhiều đường hơn và luyện lâu hơn nhiều.
 - Bắt chước bài học giúp ít hơn mong đợi. Bộ não làm theo khá sát (tốc độ lệch khoảng 0,7 m/s, nhấc xe đúng 95/97 lần). Nhưng bài học được tìm bằng thử-sai cho đúng một đường đi, nên chỉ lệch một chút là xe ngóc đầu và ngã ở chỗ bài học đi qua được. Trong 3 lần thử, kết quả bắt chước được giữ một lần.
 - Bộ não lái xe thật trong game ngã ở mét 36, đúng như mô phỏng dự đoán.
+
+Đo cách bắt đầu bài học từ bộ não (bộ não 89 vòng) trên 10 đường gần nhau. Có thể bộ não đã luyện trên một số đường trong đó.
+
+- Bản chép tốt hơn học từ con số 0 ở 5 đường: 143 m so với 53 m, 65 m so với 56 m, 51 m so với 16 m, 53 m so với 19 m, 27 m so với 22 m. Ở 5 đường còn lại thì bằng nhau, phần lớn vì cách nào cũng về đích.
+- Bản chép có khi đi xa hơn chính bộ não (143 m so với 89 m): cách chép không giống hệt bộ não, và lần này sự khác biệt có lợi.
+- Không có cách chép nào luôn tốt nhất. Chép tốc độ ở 8 m cuối đoạn giúp nhiều nhất trên các đường có cú nhảy, vì đó là tốc độ lúc rời mép nhảy.
 
 ### Điểm AI tự chấm cho mỗi lượt thử
 
@@ -110,6 +117,6 @@ tools/gather-experience.js gom kinh nghiệm cú nhảy vào experience/
 
 ## English
 
-A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. Contributions welcome: lessons via the in-game "Chia sẻ GitHub" button, code via pull requests (run `node tools/build.js` first).
+A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen, and gives a new line's lesson its starting plan when that rides better; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. Contributions welcome: lessons via the in-game "Chia sẻ GitHub" button, code via pull requests (run `node tools/build.js` first).
 
 Giấy phép: MIT.
