@@ -469,7 +469,8 @@ const clonePlan = p => JSON.parse(JSON.stringify(p));
 function freshPlan(secs) {
 return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0) };
 }
-const planFits = (p, secs) => p && ['v', 'pt', 'mv', 'hr', 'pl', 'pu'].every(k => Array.isArray(p[k]) && p[k].length === secs.length);
+const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
+const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length);
 const num = v => typeof v === 'number' && Number.isFinite(v);
 function readLesson(raw, id) {
 let m;
@@ -886,27 +887,46 @@ if (!r || !r.trace) return;
 say(`Lượt chạy tốt nhất: ${r.prog} m, ${Math.round(r.fit)} điểm, kết thúc: ${r.end}.`);
 showRide(r);
 }
-let badge = null, starting = false;
-function stopDrive(why) {
+async function learn() {
+if (trainer.running || !trainer.pool) return;
+$('.go').textContent = 'Tạm dừng';
+try { await trainer.run(); } catch (err) { say('Lỗi: ' + (err && err.message || err)); console.error(err); }
+if (!trainer.running) $('.go').textContent = 'Học tiếp';
+}
+let badge = null, starting = false, looping = false;
+function stopDrive(why, byPlayer) {
+if (byPlayer) { looping = false; $('.drive').textContent = 'Để AI lái'; }
 if (!live.drive) return;
 const d = live.drive;
 live.drive = null;
 if (badge) { badge.remove(); badge = null; }
-$('.drive').textContent = 'Để AI lái';
-const m = Math.max(0, d.rider.idx - d.runIn);
-say(`AI lái thật: ${why} sau ${m} m${d.tricks ? `, ${d.tricks} trick` : ''}.`);
-log(`<b>AI lái thật:</b> ${why} sau ${m} m${d.tricks ? `, ${d.tricks} trick` : ''}.`);
+const m = Math.max(0, d.rider.idx - d.runIn), e = Math.max(0, d.expect - d.runIn);
+const extra = (d.tricks ? `, ${d.tricks} trick` : '') + (d.swaps ? `, dùng ${d.swaps} cách mới học được giữa chừng` : '');
+log(`<b>AI lái thật:</b> ${why} sau ${m} m${extra}.`);
+if (!byPlayer) {
+if (lineStale(trainer.route)) log('<b>Bản đồ trong mô phỏng không còn khớp với game</b> (đường đã được sửa). Bấm “Quên đường này, học lại từ đầu” để AI dò lại đường.');
+else if (Math.abs(m - e) > 15) log(`Lượt thật lệch so với mô phỏng (dự đoán ${e} m), dù bản đồ vẫn khớp.`);
+else log(`Đúng như mô phỏng dự đoán (${e} m).`);
+}
+if (looping) {
+say(`AI lái thật: ${why} sau ${m} m. Lái lại sau 3 giây với bài học mới nhất (bấm phím bất kỳ để dừng).`);
+setTimeout(() => { if (looping && !live.drive) drive(); }, 3000);
+} else say(`AI lái thật: ${why} sau ${m} m${extra}.`);
+}
+function driveButton() {
+if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
+looping = true;
+drive();
 }
 async function drive() {
 if (starting) return;
-if (live.drive) { stopDrive('bạn đã dừng AI'); return; }
-if (!live.ex || !live.g) { say('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.'); return; }
-if (!trainer.route || !trainer.geo) { say('Hãy chọn một đường và cho AI học trước đã.'); return; }
+const cant = msg => { say(msg); looping = false; $('.drive').textContent = 'Để AI lái'; };
+if (!live.ex || !live.g) return cant('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.');
+if (!trainer.route || !trainer.geo) return cant('Hãy chọn một đường và cho AI học trước đã.');
 if (JSON.stringify(trainer.setup) !== JSON.stringify(riderSetup())) {
-say('Bạn đã đổi xe hoặc trick trong game sau khi AI học. Bấm “Học tiếp” để AI học lại với cài đặt mới, rồi hãy để AI lái.');
-return;
+return cant('Bạn đã đổi xe hoặc trick trong game sau khi AI học. Bấm “Học tiếp” để AI học lại với cài đặt mới, rồi hãy để AI lái.');
 }
-if (trainer.running) { trainer.stop(); $('.go').textContent = 'Học tiếp'; }
+learn();
 if (liveState()[13] > 0) {
 starting = true;
 for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: 'r', code: 'KeyR', bubbles: true }));
@@ -915,22 +935,33 @@ starting = false;
 }
 const st = trainer.route.start, geo = trainer.geo;
 const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
-const rider = makeRider(R, geo.H, trainer.secs, trainer.plan);
+const plan = clonePlan(trainer.plan);
+const rider = makeRider(R, geo.H, trainer.secs, plan);
 const runIn = Math.max(0, R.length - trainer.route.length);
 live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
 live.ex.trails_game_reset(live.g);
-let t = 0, seq = null;
+let t = 0, seq = null, known = trainer.plan;
 const d = {
-rider, runIn, tricks: 0,
+rider, runIn, tricks: 0, swaps: 0, expect: trainer.best.prog,
+takeNewer() {
+const p = trainer.plan;
+if (p === known) return;
+known = p;
+const upto = Math.min(trainer.secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
+for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
+for (const k of PLAN_KEYS) plan[k] = p[k].slice();
+d.swaps++; d.expect = trainer.best.prog;
+},
 step() {
 const s = liveState();
 if (seq === null) seq = s[16];
 if (s[13] > 0) { setTimeout(() => stopDrive('ngã'), 0); return null; }
 if (s[16] !== seq) { seq = s[16]; if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++; }
+if (t % 30 === 0) d.takeNewer();
 const inp = rider.step(s, t++);
 if (rider.idx >= R.length - 3) { setTimeout(() => stopDrive('về đích'), 0); return null; }
 if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive('lạc khỏi đường'), 0); return null; }
-if (badge && t % 15 === 0) badge.firstChild.textContent = `AI đang lái · ${Math.max(0, rider.idx - runIn)} m`;
+if (badge && t % 15 === 0) badge.firstChild.textContent = `AI đang lái · ${Math.max(0, rider.idx - runIn)} m${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
 return inp;
 },
 };
@@ -940,21 +971,21 @@ if (live.drive !== d) { clearInterval(watchBail); return; }
 if (liveState()[13] > 0) { clearInterval(watchBail); stopDrive('ngã'); }
 }, 250);
 badge = document.createElement('div'); badge.id = 'tai-badge';
-badge.innerHTML = 'AI đang lái<small>Bấm phím bất kỳ để lấy lại tay lái</small>';
+badge.innerHTML = 'AI đang lái<small>Vẫn đang học ở nền · bấm phím bất kỳ để lấy lại tay lái</small>';
 document.body.appendChild(badge);
 $('.drive').textContent = 'Dừng AI lái';
-say('AI đang lái xe của bạn trên đường này (bạn cần đang ngồi trên xe, không đi bộ). Bấm phím bất kỳ để lấy lại tay lái.');
+say('AI đang lái xe của bạn và vẫn học tiếp ở nền (bạn cần đang ngồi trên xe, không đi bộ). Bấm phím bất kỳ để lấy lại tay lái.');
 }
-window.addEventListener('keydown', e => { if (live.drive && e.isTrusted) stopDrive('bạn đã lấy lại tay lái'); }, true);
+window.addEventListener('keydown', e => { if ((live.drive || looping) && e.isTrusted) stopDrive('bạn đã lấy lại tay lái', true); }, true);
 el.addEventListener('click', e => { if (e.target.tagName === 'BUTTON') e.target.blur(); });
 $('.x').onclick = () => { el.style.display = 'none'; };
 $('.refresh').onclick = () => findTracks();
 $('.go').onclick = () => start();
 $('.watch').onclick = () => watch();
-$('.drive').onclick = () => drive();
+$('.drive').onclick = () => driveButton();
 $('.forget').onclick = async () => {
 if (!trainer.route || !confirm('Xóa những gì AI đã học trên đường này?')) return;
-stopDrive('bạn đã dừng AI');
+stopDrive('bạn đã dừng AI', true);
 trainer.stop();
 for (let i = 0; i < 300 && trainer.running; i++) await new Promise(r => setTimeout(r, 100));
 const key = trainer.key();
@@ -1016,7 +1047,7 @@ await useLesson(m, 'cộng đồng trên GitHub', true);
 }, 10 * 60 * 1000);
 window.TrailsAI = {
 open() { el.style.display = ''; },
-cap, trainer, buildRoute, findTracks, engine, live, drive,
+cap, trainer, buildRoute, findTracks, engine, live, drive: driveButton,
 };
 setTimeout(findTracks, 1500);
 }

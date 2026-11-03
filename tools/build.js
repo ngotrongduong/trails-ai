@@ -87,7 +87,10 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <li>Cho AI học trên một đường trước. Khi ô <b>Lượt chạy tốt nhất</b> báo “về đích” là AI đã vượt hết đường trong mô phỏng.</li>
 <li>Bạn phải đang <b>ngồi trên xe</b> (đang Ride, không đi bộ, không mở menu).</li>
 <li>Bấm <b>Để AI lái</b>. Xe của bạn được đưa về điểm xuất phát và AI tự đạp, lái, nhảy qua từng cú nhảy. Phía trên màn hình hiện “AI đang lái · số mét đã đi”.</li>
-<li>Muốn lấy lại tay lái: bấm <b>phím bất kỳ</b> hoặc bấm <b>Dừng AI lái</b>. AI cũng tự dừng khi ngã, khi về đích hoặc khi lạc khỏi đường.</li>
+<li><b>Vừa lái vừa học:</b> trong lúc AI lái, phần nền vẫn tiếp tục học. Tìm ra cách tốt hơn cho những đoạn phía trước xe là AI dùng ngay trong lượt đang chạy (trên huy hiệu hiện “học thêm N lần”).</li>
+<li>Ngã hoặc về đích xong, AI tự lái lại từ đầu sau 3 giây với bài học mới nhất, cứ thế liên tục.</li>
+<li>Mỗi lượt lái thật, AI so chỗ ngã thật với dự đoán của mô phỏng và kiểm tra bản đồ trong mô phỏng với những gì game vừa tải dọc đường. Nếu đường đã bị sửa, AI báo để bạn cho nó dò lại đường.</li>
+<li>Muốn lấy lại tay lái: bấm <b>phím bất kỳ</b> hoặc bấm <b>Dừng AI lái</b>.</li>
 </ol>
 <p class="note">Ngoài game AI chạy đúng như lượt tốt nhất trong mô phỏng: nếu mô phỏng ngã ở mét 800 thì ngoài game cũng ngã ở đó. Người chơi khác đang online thấy xe bạn chạy như thường, và game có thể tính lượt chạy này vào thống kê của bạn. Đổi xe hoặc mở khóa thêm trick thì bấm <b>Học tiếp</b> để AI học lại với cài đặt mới. Tài khoản chưa mở khóa trick (game mở khi đủ 200 cú nhảy và 5 đường) thì AI chỉ chạy, không làm trick.</p>
 </div>
