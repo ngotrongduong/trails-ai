@@ -18,7 +18,8 @@ Chỉ thay file của một đường khi bài học mới **chạy xa hơn ho�
 ```text
 format    "trails-ai-lesson", version 1
 line      đường đua: start {id, x, z, heading}, X[], Z[] (từng mét, chính xác tới cm), KIND[], pieces[] (các chi tiết của đường), kinds, length
-plan      kế hoạch theo từng đoạn: v (tốc độ m/s), pt (góc xe khi bay), mv (trick), hr (độ cao bắt đầu trick), pl (nhấc xe trên mép nhảy), pu (pump)
+plan      kế hoạch theo từng đoạn: v (tốc độ m/s), pt (góc xe khi bay), mv (trick), hr (độ cao bắt đầu trick), pl (nhấc xe trên mép nhảy), pu (pump),
+          vs (không bắt buộc): mỗi đoạn null, hoặc danh sách tốc độ cho các phần bằng nhau của đoạn (khi có thì dùng thay v)
 bestRun   lượt chạy tốt nhất: fit (điểm), prog (mét), end, jumps, tricks
 setup     cài đặt khi học: tricks (trick đã mở khóa), bike, tunes
 gen       số vòng đã học

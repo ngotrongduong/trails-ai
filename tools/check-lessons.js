@@ -23,7 +23,8 @@ function problems(file, m) {
   if (!Array.isArray(L.KIND) || L.KIND.length !== n || !L.KIND.every(k => typeof k === 'string')) out.push('line.KIND must be text, one per point');
   if (!Array.isArray(L.pieces) || L.pieces.length > 20000 || !L.pieces.every(p => p && typeof p.kind === 'string' && num(p.x) && num(p.z) && num(p.heading) && (!p.params || Object.values(p.params).every(num)))) out.push('line.pieces must be pieces with kind, x, z, heading and number params');
   if (!P || !Array.isArray(P.v) || !PLAN_KEYS.every(k => Array.isArray(P[k]) && P[k].length === P.v.length && P[k].every(num))) out.push(`plan needs ${PLAN_KEYS.join(', ')} as number lists of the same length`);
-  if (m.bestRun && (!num(m.bestRun.fit) || !num(m.bestRun.prog))) out.push('bestRun needs fit and prog numbers');
+  if (P && P.vs !== undefined && (!Array.isArray(P.vs) || !Array.isArray(P.v) || P.vs.length !== P.v.length || !P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))))) out.push('plan.vs must hold, for every section, null or a list of up to 12 speeds');
+  if (m.bestRun &&(!num(m.bestRun.fit) || !num(m.bestRun.prog))) out.push('bestRun needs fit and prog numbers');
   const J = m.jumps;
   if (J !== undefined && (!J || !num(J.version) || !Array.isArray(J.list) || J.list.length > 2000
     || !J.list.every(j => j && Array.isArray(j.f) && j.f.length === 8 && j.f.every(num) && ['v', 'dpt', 'pl', 'pu'].every(k => num(j[k])))))

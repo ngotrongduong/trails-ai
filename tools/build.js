@@ -102,7 +102,8 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <div class="card">
 <h2>Bên trong: bài học, mượn kinh nghiệm và bộ não chung</h2>
 <ul>
-<li><b>Bài học</b> của một đường là kế hoạch cho từng đoạn: tốc độ, chỗ nhấc xe trước mép nhảy, pump, góc xe khi bay. Nó chỉ dùng được trên đúng đường đó.</li>
+<li><b>Bài học</b> của một đường là kế hoạch cho từng đoạn: tốc độ (có thể khác nhau ở từng phần khoảng 8 m của đoạn), chỗ nhấc xe trước mép nhảy, pump, góc xe khi bay. Nó chỉ dùng được trên đúng đường đó.</li>
+<li><b>Khi bị kẹt</b>, AI đổi tốc độ từng phần nhỏ của đoạn, và cứ mỗi vòng thứ hai lại thử hẳn những cách khác cho mấy đoạn trước chỗ ngã: có khi cách đang dùng chỉ vừa đủ qua chỗ phía trước, nên sửa nhỏ quanh chỗ ngã không bao giờ tới được. Lượt nào đi xa hơn là tốt hơn; trick chỉ tập sau khi đã về đích.</li>
 <li><b>Mượn kinh nghiệm:</b> mỗi cú nhảy AI vượt qua được ghi lại cùng hình dạng của nó (mép nhảy, khoảng hở, chỗ tiếp đất). Ở đường mới, AI tìm những cú giống nhất ở các đường đã học, trên máy bạn và của mọi người trên GitHub, và thử cách đã thành công ở đó.</li>
 <li><b>Bộ não chung</b> là một mạng nơ-ron nhỏ: nhìn xe và mặt đất 2–33 m phía trước rồi tự quyết tốc độ, lúc nhấc xe, lúc pump và góc xe khi bay, nên lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra, bộ não không luyện trên nó. Bộ não học chậm hơn bài học của một đường, cần luyện hàng giờ.</li>
 </ul>
@@ -135,6 +136,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <h2>AI tự chấm điểm thế nào</h2>
 <table>
 <tr><td>Mỗi mét đi được</td><td>+1</td></tr>
+<tr><td>Tốc độ 5 m trước chỗ xa nhất</td><td>+0,05 mỗi m/s (tối đa +1)</td></tr>
 <tr><td>Mỗi cú nhảy tiếp đất sạch</td><td>+15</td></tr>
 <tr><td>Về đích</td><td>+150</td></tr>
 <tr><td>Backflip · 360 · Tailwhip · Barspin</td><td>+300 · +200 · +150 · +120</td></tr>

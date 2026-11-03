@@ -12,11 +12,22 @@ Với từng đường, AI không dùng mạng nơ-ron. Nó học bằng **thử
 
 1. **Đọc đường đua.** AI đọc các chi tiết của đường (mép nhảy, mặt tiếp đất, cua nghiêng, mô pump…) từ chính dữ liệu game gửi về, rồi nối chúng thành một lộ trình chia theo từng mét.
 2. **Chia thành đoạn.** Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
-3. **Kế hoạch (plan).** Với mỗi đoạn, AI giữ vài con số: tốc độ cần giữ, góc xe khi bay, có nhấc xe ở mép nhảy không, có pump không, làm trick gì, ở độ cao nào. Việc lái (bẻ lái theo đường, đạp tới tốc độ, cân xe trên không) do một bộ điều khiển cố định làm.
+3. **Kế hoạch (plan).** Với mỗi đoạn, AI giữ vài con số: tốc độ cần giữ, góc xe khi bay, có nhấc xe ở mép nhảy không, có pump không, làm trick gì, ở độ cao nào. Một đoạn có thể được chia thành các phần khoảng 8 m, mỗi phần một tốc độ riêng, để xe chậm lại qua một mô đất rồi tăng tốc cho cú nhảy ngay sau. Việc lái (bẻ lái theo đường, đạp tới tốc độ, cân xe trên không) do một bộ điều khiển cố định làm.
 4. **Thử trong mô phỏng.** Mỗi luồng CPU chạy một bản **vật lý thật của game** (đúng file WebAssembly game dùng). Mỗi vòng AI tạo vài chục bản sao của kế hoạch, mỗi bản đổi một chút quanh chỗ hay ngã, chạy thử tất cả, và giữ bản tốt nhất.
-5. **Hai giai đoạn.** Đầu tiên học vượt hết đường. Chỉ khi đã về đích được, AI mới tập trick trên các cú nhảy để thêm điểm.
+5. **Hai giai đoạn.** Đầu tiên học vượt hết đường: lượt nào đi xa hơn là tốt hơn, điểm chỉ dùng để so những lượt đi xa bằng nhau. Chỉ khi đã về đích được, AI mới tập trick trên các cú nhảy để thêm điểm.
 
-Trước đây AI xen kẽ tập trick ngay khi còn đang kẹt. Nhưng bộ đếm "đang kẹt" chỉ chạy ở những vòng tập vượt đường, nên kẹt quá 30 vòng là AI tập trick mãi và không bao giờ thử lại cú nhảy đang kẹt nữa (có máy chạy hơn 100.000 vòng vẫn đứng yên). Đã sửa: trên đường bị kẹt ở 106 m, sau khi sửa AI lên 124 m trong khoảng một phút.
+Khi bị kẹt, AI dùng thêm ba cách:
+
+- **Tốc độ theo từng phần của đoạn.** Kẹt càng lâu, AI càng hay chia đoạn thành phần nhỏ và đổi tốc độ từng phần.
+- **Đến nhanh hơn là gần hơn.** Hai lượt ngã cùng một chỗ thì lượt lao tới chỗ đó nhanh hơn được tính hơn một chút (tối đa 1 m). Nhờ vậy ở một dốc nhảy chưa leo nổi, AI vẫn biết hướng nào là đúng.
+- **Tìm đường khác.** Kẹt hơn 100 vòng, cứ mỗi vòng thứ hai AI vẽ lại hẳn bốn đoạn trước chỗ ngã, theo đuổi cách tốt nhất trong 60 vòng, và đổi sang cách đó ngay khi nó đi xa hơn. Có khi cách đang dùng chỉ vừa đủ qua chỗ phía trước, nên sửa nhỏ quanh chỗ ngã không bao giờ tới được.
+
+Hai lỗi đã sửa:
+
+- Trước đây AI xen kẽ tập trick ngay khi còn đang kẹt. Bộ đếm "đang kẹt" chỉ chạy ở những vòng tập vượt đường, nên kẹt quá 30 vòng là AI tập trick mãi và không bao giờ thử lại cú nhảy đang kẹt nữa (có máy chạy hơn 100.000 vòng vẫn đứng yên). Sửa xong, đường bị kẹt ở 106 m lên được 124 m trong khoảng một phút.
+- AI chọn lượt tốt nhất theo tổng điểm, nên một lượt có trick ở cú nhảy đầu được coi là hơn những lượt đi xa hơn mà không có trick.
+
+Trên đường đó, AI còn kẹt ở 124 m qua hàng nghìn vòng. Lý do: cú nhảy ở mét 95 bay quá ngắn, xe rơi xuống khoảng trống rồi đâm vào mặt dốc đáp, nên không còn tốc độ cho dốc nhảy step-up ở mét 124. Với ba cách trên, AI tìm ra cách bay qua khoảng trống và **về đích cả đường (272 m) trong chưa đầy 1 phút**.
 
 Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng giữa học đường đang chọn và luyện bộ não chung, xem bên dưới) và **AI lái**. Mọi thứ khác nằm trong mục **Chi tiết, xem lại và chia sẻ** thu gọn ở cuối bảng.
 
@@ -68,6 +79,7 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 | | Điểm |
 |---|---|
 | Mỗi mét đi được | +1 |
+| Tốc độ 5 m trước chỗ xa nhất | +0,05 mỗi m/s (tối đa +1) |
 | Mỗi cú nhảy tiếp đất sạch | +15 |
 | Về đích | +150 |
 | Backflip / 360 / Tailwhip / Barspin | +300 / +200 / +150 / +120 |
@@ -91,7 +103,6 @@ Trick chỉ được tính khi tiếp đất xong vẫn đứng vững. Đây l�
 - **Góp bài học:** bấm **Chia sẻ GitHub** trong bảng AI, kéo file vào trang vừa mở, bấm **Propose changes**. Xem [`lessons/README.md`](lessons/README.md).
 - **Cải tiến AI:** sửa [`src/trails-ai.js`](src/trails-ai.js), chạy `node tools/build.js` để dựng lại `dist/` và `docs/`, rồi mở pull request. Một vài ý tưởng:
   - cách tìm kiếm thông minh hơn (CMA-ES, giữ nhiều kế hoạch song song thay vì một)
-  - chia đoạn mịn hơn quanh các cú nhảy khó
   - bộ điều khiển pump tốt hơn để giữ tốc độ qua các mô đất
   - học trên nhiều xe khác nhau
 - Mọi pull request đều được kiểm tra tự động: mã đọc được, `dist/` và `docs/` đã dựng lại, file bài học đúng định dạng.

@@ -360,6 +360,8 @@
     const N = R.length;
     const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, inp: [0, 0, 0, 0, 0, 0, 0] };
     const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
+    // the speed to hold: one for the section, or, when P.vs has a list for it, one for each equal part of the section
+    const vAt = (k, i) => { const q = P.vs && P.vs[k]; return q && q.length ? q[Math.min(q.length - 1, Math.max(0, Math.floor((i - S[k].a) * q.length / (S[k].b - S[k].a + 1))))] : P.v[k]; };
     me.step = (s, t) => {
       const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
       if (me.prevP === null) me.prevP = s[4];
@@ -378,7 +380,7 @@
         const sec = me.sec, idx = me.idx;
         if (!air) {
           // hold the planned speed; ease off the pedals on steep drops (full power there throws you over the bars)
-          const e = P.v[sec] - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+          const e = vAt(sec, idx) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
           if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
           if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
           if (P.pu && P.pu[sec] > 0 && (H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
@@ -395,7 +397,7 @@
         me.prevP = s[4];
         me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, Math.round(whip * 127)];
         // what the plan asks for here, in the brain's terms (for the brain to learn from lessons)
-        me.want = air ? [0, 0, 0, P.pt[me.airSec], 1] : [P.v[sec], btn & 1, pump, 0, 0];
+        me.want = air ? [0, 0, 0, P.pt[me.airSec], 1] : [vAt(sec, idx), btn & 1, pump, 0, 0];
       }
       return me.inp;
     };
@@ -598,13 +600,15 @@ function episode(P,opt){
   const N=R.length;let idx=0,prog=0,pts=0,seq=s[16],stall=0,t=0,crash=0,end='hết giờ';
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
   const rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
+  // the speed when the bike first got to each point
+  const vr=new Float32Array(N);
   // with rec: every other tick [distance along the line, height, pitch, in air, speed], plus trick and crash events
   const tr=rec?[]:null,ev=rec?[]:null;
   const tricks={};let pending=null,manualM=0,landT=-1e9,jumps=0,landAt=-1,lastJ=-1,progAt=0,progT=0;
   for(t=0;t<maxT;t++){
     const air=s[12]>0;
     const inp=rider.step(s,t);
-    idx=rider.idx;if(idx>prog)prog=idx;
+    idx=rider.idx;if(idx>prog){for(let i=prog+1;i<=idx;i++)vr[i]=Math.abs(s[8]);prog=idx}
     if(rider.off>7&&!air){end='lạc khỏi đường';pts-=20;break}
     if(idx>=N-3){end='về đích';pts+=150;break}
     if(idx>=until){end='đạt mốc';break}
@@ -632,7 +636,11 @@ function episode(P,opt){
   }
   if(manualM>=2)tricks.manual=Math.round(manualM);
   const sec=rider.sec,crashSec=crash?(s[12]>0||t-landT<60?rider.airSec:sec):sec;
-  const res={fit:prog+pts,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps};
+  // Of two rides that end at the same place, the one that came at it faster counts a little more (at most 1 m): it got
+  // closer to making it. Without this every try that fails at a steep ramp scores the same, and learning has nothing
+  // to go by there.
+  const pace=0.05*Math.min(20,vr[Math.max(0,prog-5)]);
+  const res={fit:prog+pts+pace,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps};
   if(rec)res.trace={tr,ev,H:Array.from(H,h=>+h.toFixed(2))};
   return res;
 }
@@ -646,6 +654,7 @@ function watchPlan(P,until,w){
   // the line here may be cut short: keep the plan's first sections, fresh values past its end
   const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
   for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
+  if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
   let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
   let prog=0,progT=0,fell=false;
   for(let t=0;t<18000;t++){
@@ -812,13 +821,33 @@ onmessage=async e=>{const m=e.data;
     return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0) };
   }
   const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
-  const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length);
+  const num = v => typeof v === 'number' && Number.isFinite(v);
+  // vs, a speed for every part of a section, is there only once learning has split a section
+  const partsOk = (P, n) => P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))));
+  const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
+  // Ride a beats ride b when it gets further, or as far with more points. Points only decide once rides get as far
+  // (in the end, all the way): before, a trick a ride did on an earlier jump made it count over rides that went further.
+  const beats = (a, b) => !b || a.prog > b.prog || (a.prog === b.prog && a.fit > b.fit + 0.01);
+  const clampV = v => Math.min(18, Math.max(2, v));
+  // Changes the speed of section q by about sd: its one speed, or one or all of its parts once it has them. With
+  // split, a section without parts is first cut into parts of about 8 m with its speed (so it can slow down for a bump
+  // and speed up again for the jump after it). v stays the speed at the end of the section, which jumps lend.
+  function moveSpeed(p, s, q, sd, split) {
+    if (split && !(p.vs && p.vs[q])) {
+      if (!p.vs) p.vs = p.v.map(() => null);
+      p.vs[q] = new Array(Math.max(2, Math.round((s.b - s.a + 1) / 8))).fill(p.v[q]);
+    }
+    const k = p.vs && p.vs[q];
+    if (!k) { p.v[q] = clampV(p.v[q] + gauss() * sd); return; }
+    if (Math.random() < 0.3) { const d = gauss() * sd; for (let i = 0; i < k.length; i++) k[i] = clampV(k[i] + d); }
+    else for (let i = 0; i < k.length; i++) if (Math.random() < 0.5) k[i] = clampV(k[i] + gauss() * sd);
+    p.v[q] = k[k.length - 1];
+  }
 
   // ---------------------------------------------------------------- shared lessons
   // A lesson is what the AI knows about one line: the line itself, the plan and the score it reached.
   // Lessons from other tabs, files and the community repo are taken only after they ride better in
   // this computer's own simulation, so a wrong or made-up lesson can never make the AI worse.
-  const num = v => typeof v === 'number' && Number.isFinite(v);
   function readLesson(raw, id) {
     let m;
     try { m = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
@@ -830,7 +859,7 @@ onmessage=async e=>{const m=e.data;
     if (!Array.isArray(L.KIND) || L.KIND.length !== n || !L.KIND.every(k => typeof k === 'string')) return null;
     if (!Array.isArray(L.pieces) || L.pieces.length > 20000) return null;
     if (!L.pieces.every(p => p && typeof p.kind === 'string' && num(p.x) && num(p.z) && num(p.heading) && (!p.params || Object.values(p.params).every(num)))) return null;
-    if (!Array.isArray(P.v) || !['v', 'pt', 'mv', 'hr', 'pl', 'pu'].every(k => Array.isArray(P[k]) && P[k].length === P.v.length && P[k].every(num))) return null;
+    if (!Array.isArray(P.v) || !PLAN_KEYS.every(k => Array.isArray(P[k]) && P[k].length === P.v.length && P[k].every(num)) || !partsOk(P, P.v.length)) return null;
     L.length = n;
     if (!L.kinds || typeof L.kinds !== 'object') L.kinds = {};
     return m;
@@ -900,6 +929,7 @@ onmessage=async e=>{const m=e.data;
   }
   function applyJump(p, s, k, j) {
     p.v[k] = j.v; p.pt[k] = s.pt + j.dpt; p.pl[k] = j.pl; p.pu[k] = j.pu;
+    if (p.vs) p.vs[k] = null;
   }
 
   class Trainer {
@@ -913,7 +943,7 @@ onmessage=async e=>{const m=e.data;
       this.gen = ok ? mine.gen : 0;
       this.hist = ok ? (mine.hist || []) : [];
       this.found = ok ? (mine.found || {}) : {};
-      this.stuck = 0; this.lastProg = -1;
+      this.stuck = 0; this.lastProg = -1; this.alt = null;
       this.best = null;
       return { fromTrack: !!ok };
     }
@@ -940,7 +970,7 @@ onmessage=async e=>{const m=e.data;
       let m = null;
       try { m = JSON.parse(raw || localStorage.getItem(this.key()) || 'null'); } catch { m = null; }
       if (!m || !this.best || !m.bestRun || !planFits(m.plan, this.secs) || JSON.stringify(m.setup) !== JSON.stringify(this.setup)) return false;
-      if (!(m.bestRun.fit > this.best.fit + 0.01)) return false;
+      if (!beats(m.bestRun, this.best)) return false;
       this.plan = m.plan; this.best = m.bestRun; this.gen = Math.max(this.gen, m.gen || 0);
       return true;
     }
@@ -948,7 +978,7 @@ onmessage=async e=>{const m=e.data;
     async offer(plan) {
       if (!this.pool || !planFits(plan, this.secs)) return { fits: false };
       const run = (await this.pool.evalAll([plan]))[0];
-      const took = run.fit > this.best.fit + 0.01;
+      const took = beats(run, this.best);
       if (took) { this.plan = clonePlan(plan); this.best = run; this.save(); }
       return { fits: true, took, run };
     }
@@ -975,15 +1005,15 @@ onmessage=async e=>{const m=e.data;
         const seed = clonePlan(this.plan);
         this.borrow.forEach((b, k) => { if (b) applyJump(seed, this.secs[k], k, b[0].j); });
         mem.seed = (await this.pool.evalAll([seed]))[0];
-        if (mem.seed.fit > this.best.fit + 0.01) { this.plan = seed; this.best = mem.seed; mem.from = 'borrow'; }
+        if (beats(mem.seed, this.best)) { this.plan = seed; this.best = mem.seed; mem.from = 'borrow'; }
       }
       if (!mem.fromTrack && this.brainW) {
         // or from how the shared brain rides this line (this.brainW is set by the panel), written down as a plan
         const got = await this.pool.brainPlan(this.brainW);
         const runs = await this.pool.evalAll(got.plans);
-        const bi = runs.reduce((b, r, i) => (r.fit > runs[b].fit ? i : b), 0);
+        const bi = runs.reduce((b, r, i) => (beats(r, runs[b]) ? i : b), 0);
         mem.brain = { prog: got.prog, run: runs[bi] };
-        if (runs[bi].fit > this.best.fit + 0.01) { this.plan = got.plans[bi]; this.best = runs[bi]; mem.from = 'brain'; }
+        if (beats(runs[bi], this.best)) { this.plan = got.plans[bi]; this.best = runs[bi]; mem.from = 'brain'; }
       }
       return mem;
     }
@@ -992,29 +1022,50 @@ onmessage=async e=>{const m=e.data;
     // Changed copies of the plan around section k: speed, landing angle, pull and pump.
     // Up to a sixth of them use what worked on a similar jump of another line, around where the AI falls
     // (more would leave too few of the AI's own tries: measured, a third slowed learning down on some lines).
-    rideCandidates(k, n, wide) {
+    rideCandidates(k, n, wide, base = this.plan) {
       const S = this.secs, out = [], opts = [];
       for (let q = Math.max(0, k - 1); q <= Math.min(S.length - 1, k + 1); q++) for (const o of (this.borrow && this.borrow[q]) || []) opts.push([q, o.j]);
       const nb = Math.min(opts.length, Math.floor(n / 6));
       this.borrowed = new Set();
       for (let i = 0; i < n; i++) {
-        const p = clonePlan(this.plan);
+        const p = clonePlan(base);
         if (i < nb) {
           // a different borrowed jump each round; as is, or nudged a little to fit this line
           const [q, j] = opts[(this.gen * nb + i) % opts.length];
           applyJump(p, S[q], q, j);
-          if (Math.random() < 0.5) { p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 0.7)); p.pt[q] += gauss() * 0.06; }
+          if (Math.random() < 0.5) { p.v[q] = clampV(p.v[q] + gauss() * 0.7); p.pt[q] += gauss() * 0.06; }
           this.borrowed.add(i);
           out.push(p);
           continue;
         }
         // long stuck, the cause may lie further back (the run-up to a jump can start several sections before it)
         const span = 1 + Math.floor(Math.random() * (this.stuck > 60 ? 5 : 3));
+        // sections are split into parts with their own speeds more often the longer the AI is stuck
+        const split = this.stuck > 20 ? 0.3 : 0.1;
         for (let q = Math.max(0, k - span); q <= Math.min(S.length - 1, k + 1); q++) {
-          if (Math.random() < 0.7) p.v[q] = Math.min(18, Math.max(2, p.v[q] + gauss() * 1.5 * wide));
+          if (Math.random() < 0.7) moveSpeed(p, S[q], q, 1.5 * wide, Math.random() < split);
           if (S[q].jump && Math.random() < 0.4) p.pt[q] += gauss() * 0.15;
           if (S[q].jump && Math.random() < 0.15) p.pl[q] = p.pl[q] ? 0 : 1 + Math.floor(Math.random() * 5);
           if (Math.random() < 0.1) p.pu[q] = p.pu[q] ? 0 : +(Math.random() * 0.6).toFixed(2);
+        }
+        out.push(p);
+      }
+      return out;
+    }
+    // Another way to ride up to section k: the three sections before it and k itself drawn anew (speeds, often by parts,
+    // landing angles, pulls and pumps), the rest of the plan kept.
+    wildCandidates(k, n) {
+      const S = this.secs, out = [], r = (a, b) => a + Math.random() * (b - a);
+      for (let i = 0; i < n; i++) {
+        const p = clonePlan(this.plan);
+        if (!p.vs) p.vs = p.v.map(() => null);
+        for (let q = Math.max(0, k - 3); q <= k; q++) {
+          p.vs[q] = null; p.mv[q] = 0;
+          p.v[q] = r(4, 18);
+          if (Math.random() < 0.6) moveSpeed(p, S[q], q, 4, true);
+          p.pt[q] = S[q].pt + r(-0.5, 0.4);
+          p.pl[q] = S[q].jump && Math.random() < 0.6 ? Math.floor(r(1, 6)) : 0;
+          p.pu[q] = Math.random() < 0.4 ? +r(0.1, 0.9).toFixed(2) : 0;
         }
         out.push(p);
       }
@@ -1028,7 +1079,11 @@ onmessage=async e=>{const m=e.data;
         if (i < n * 0.75 || !p.mv[j]) p.mv[j] = Math.floor(Math.random() * N_MOVES);
         p.hr[j] = +(0.3 + Math.random() * 2.5).toFixed(2);
         if (Math.random() < 0.5) p.pt[j] += gauss() * 0.12;
-        if (Math.random() < 0.3) p.v[j] = Math.min(18, Math.max(2, p.v[j] + gauss()));
+        if (Math.random() < 0.3) {
+          // the speed the jump is taken at: the section's, or that of its last part
+          const q = p.vs && p.vs[j];
+          if (q) { q[q.length - 1] = clampV(q[q.length - 1] + gauss()); p.v[j] = q[q.length - 1]; } else p.v[j] = clampV(p.v[j] + gauss());
+        }
         out.push(p);
       }
       return out;
@@ -1056,27 +1111,48 @@ onmessage=async e=>{const m=e.data;
           this.borrowed = new Set();
           until =finished ? undefined : Math.min(this.N, S[Math.min(S.length - 1, j + 2)].b + 20);
           mode = 'trick';
+        } else if (!finished && this.stuck > 100 && this.gen % 2) {
+          // Long stuck, the way the AI rides up to that place may lead nowhere: it may come at a jump in a way that only
+          // just gets it past what comes before (on one line it cased a gap, hit the face of the landing and lost all
+          // its speed for the next jump). So every other round goes to another way: sections before the place drawn
+          // anew, the best of them followed for 60 rounds, and taken as soon as it gets further than the AI's best.
+          const A = this.alt;
+          if (!A || A.n >= 60) { this.alt = null; cands = this.wildCandidates(Math.min(S.length - 1, best.crashSec), LAMBDA); }
+          else cands = this.rideCandidates(Math.min(S.length - 1, A.best.crashSec), LAMBDA, 2, A.plan);
+          this.borrowed = new Set();
+          until = Math.min(this.N, best.prog + 120);
+          mode = 'other';
         } else {
           const k = Math.min(S.length - 1, best.crashSec);
           cands = this.rideCandidates(k, LAMBDA, 1 + Math.min(2, this.stuck / 15));
           until = finished ? undefined : Math.min(this.N, best.prog + 120);
           mode = 'ride';
         }
-        cands.unshift(clonePlan(this.plan));
+        const other = mode === 'other';
+        if (!other) cands.unshift(clonePlan(this.plan));
+        else if (this.alt) cands.unshift(clonePlan(this.alt.plan));
         const res = await this.pool.evalAll(cands, until);
         if (!this.running && !res) break;
         let bi = 0;
-        res.forEach((r, i) => { if (r.fit > res[bi].fit + 0.01) bi = i; });
+        res.forEach((r, i) => { if (beats(r, res[bi])) bi = i; });
         let improved = false, borrowed = false;
-        if (bi > 0) {
+        if (other) {
+          if (!this.alt || beats(res[bi], this.alt.best)) this.alt = { plan: cands[bi], best: res[bi], n: this.alt ? this.alt.n : 0 };
+          this.alt.n++;
+          if (beats(this.alt.best, this.best)) {
+            const full = (await this.pool.evalAll([this.alt.plan]))[0];
+            if (beats(full, this.best)) { this.plan = this.alt.plan; this.best = full; improved = true; this.stuck = 0; this.alt = null; }
+          }
+        } else if (bi > 0) {
           const full = until === undefined ? res[bi] : (await this.pool.evalAll([cands[bi]]))[0];
           // compared with the current best, which a lesson from elsewhere may have raised during this round
-          if (full.fit > this.best.fit + 0.01) {
+          if (beats(full, this.best)) {
             this.plan = cands[bi]; this.best = full; improved = true;
             // cands[0] is the current plan, so try i of rideCandidates is cands[i + 1]
             if (this.borrowed.has(bi - 1)) { borrowed = true; this.borrowWins++; }
           }
         }
+        if (improved && mode === 'ride') this.alt = null;
         if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;
         this.lastProg = Math.max(this.lastProg, this.best.prog);
         const news = [];
@@ -1463,7 +1539,7 @@ onmessage=async e=>{const m=e.data;
     const ui = {
       record(gen, run, news, onlyNews, borrowed) {
         if (news.length) log(`<b>Vòng ${gen}:</b> lần đầu làm được ${news.map(n => `<span class="tag">${n}</span>`).join('')}`);
-        if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${Math.round(run.fit)} điểm (${run.prog} m, ${run.jumps} cú nhảy, ${run.end})${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
+        if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${run.prog} m (${Math.round(run.fit)} điểm, ${run.jumps} cú nhảy, ${run.end})${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
       },
       progress(p) {
         $('.k-gen').textContent = p.gen;
@@ -1609,7 +1685,7 @@ onmessage=async e=>{const m=e.data;
           else {
             log(`<b>Mượn kinh nghiệm:</b> ${mem.alike}/${mem.jumps} cú nhảy của đường này giống cú nhảy AI đã học ở ${mem.lines} đường khác. Mỗi khi bị kẹt ở một cú nhảy, AI thử cách đã thành công ở những cú giống nó.`);
             if (mem.from === 'borrow') log(`Bắt đầu bằng cách chạy mượn được: đi được ngay <b>${mem.seed.prog} m</b> (học từ con số 0 thì chỉ ${mem.fresh.prog} m).`);
-            else if (mem.seed && mem.seed.fit > mem.fresh.fit + 0.01) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m (học từ con số 0: ${mem.fresh.prog} m).`);
+            else if (mem.seed && beats(mem.seed, mem.fresh)) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m (học từ con số 0: ${mem.fresh.prog} m).`);
             else if (mem.seed) log(`Mượn nguyên cả đường thì đi được ${mem.seed.prog} m, chưa hơn học từ con số 0 (${mem.fresh.prog} m), nên AI mượn dần từng cú nhảy.`);
           }
           if (mem.brain) {
@@ -1743,7 +1819,7 @@ onmessage=async e=>{const m=e.data;
     // on. One learner at a time has every CPU thread. Each helps the other: lessons give the brain lines to learn on
     // and plans to imitate, and the brain gives new lines a start.
     const LINE_MIN = 2 * 60e3, LINE_STALL = 3 * 60e3, BRAIN_TIME = 5 * 60e3;
-    let learning = false, cancel = false, phase = null, phaseT0 = 0, gainT = 0, gainFit = -Infinity, brainT0 = 0, brainRestUntil = 0, loopId = 0;
+    let learning = false, cancel = false, phase = null, phaseT0 = 0, gainT = 0, gainRun = null, brainT0 = 0, brainRestUntil = 0, loopId = 0;
     function showNow() {
       $('.k-now').textContent = !learning ? 'nghỉ' : phase === 'brain' ? 'luyện bộ não chung' : 'học đường này';
       const b = $('.learn');
@@ -1752,7 +1828,7 @@ onmessage=async e=>{const m=e.data;
     }
     async function learnLoop(my) {
       while (learning && my === loopId) {
-        cancel = false; phase = 'line'; phaseT0 = gainT = Date.now(); gainFit = -Infinity; showNow();
+        cancel = false; phase = 'line'; phaseT0 = gainT = Date.now(); gainRun = null; showNow();
         if (!(await start())) { learning = false; break; }
         if (!learning || my !== loopId || cancel || Date.now() < brainRestUntil) continue;
         cancel = false; phase = 'brain'; brainT0 = 0; showNow();
@@ -1766,7 +1842,7 @@ onmessage=async e=>{const m=e.data;
       if (!learning) return;
       const now = Date.now();
       if (phase === 'line' && trainer.running) {
-        if (trainer.best && trainer.best.fit > gainFit + 0.01) { gainFit = trainer.best.fit; gainT = now; }
+        if (trainer.best && beats(trainer.best, gainRun)) { gainRun = trainer.best; gainT = now; }
         if (now - phaseT0 > LINE_MIN && now - gainT > LINE_STALL && now >= brainRestUntil) trainer.stop();
       } else if (phase === 'brain' && brain.running) {
         if (!brainT0) brainT0 = now;
