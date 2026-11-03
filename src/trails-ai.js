@@ -600,8 +600,8 @@ onmessage=async e=>{const m=e.data;
     lesson() {
       // the line is kept with the memory: rebuilt later from whatever the game has loaded, it could come out shorter
       const { start, X, Z, KIND, pieces, kinds, length } = this.route;
-      const cm = a => Array.from(a, v => Math.round(v * 100) / 100);   // the route to the centimetre keeps lesson files small
-      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: cm(X), Z: cm(Z), KIND, pieces, kinds, length }, setup: this.setup, savedAt: Date.now() };
+      // numbers are kept exact: the ride is so sensitive that a route rounded to the centimetre rides differently
+      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, savedAt: Date.now() };
     }
     save() {
       // another tab learning the same line may have stored a better plan: take it instead of writing over it

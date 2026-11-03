@@ -517,8 +517,7 @@ return { fromTrack: !!ok };
 }
 lesson() {
 const { start, X, Z, KIND, pieces, kinds, length } = this.route;
-const cm = a => Array.from(a, v => Math.round(v * 100) / 100);   // the route to the centimetre keeps lesson files small
-return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: cm(X), Z: cm(Z), KIND, pieces, kinds, length }, setup: this.setup, savedAt: Date.now() };
+return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, savedAt: Date.now() };
 }
 save() {
 if (this.takeStored()) return;
