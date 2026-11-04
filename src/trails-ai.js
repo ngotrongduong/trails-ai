@@ -715,9 +715,10 @@
         me.at = j + clamp(((bx - R.X[j]) * dx + (bz - R.Z[j]) * dz) / (dx * dx + dz * dz || 1), -0.5, 1.5); }
       if (air && !me.wasAir) {
         me.airSec = me.sec; me.rot = 0; me.let = false;
-        // off a lip just passed (3 m or less behind) the jump is that lip's, even when the section after it ends at a lip too
+        // off a lip just passed (3 m or less behind) the jump is that lip's, even when the section after it ends at a lip
+        // too. Plans learned before this (P.as not set) keep the old way: their angles were learned for those sections.
         const k0 = me.sec - 1;
-        if (k0 >= 0 && S[k0].jump && S[k0].b >= me.idx - 3 && !(S[me.sec].jump && S[me.sec].b <= me.idx + 2)) me.airSec = k0;
+        if (P.as && k0 >= 0 && S[k0].jump && S[k0].b >= me.idx - 3 && !(S[me.sec].jump && S[me.sec].b <= me.idx + 2)) me.airSec = k0;
         else for (let k = me.sec; k >= 0 && k >= me.sec - 1; k--) if (S[k].jump) { me.airSec = k; break; }
       }
       me.landed = !air && me.wasAir;
@@ -1131,6 +1132,7 @@ function watchPlan(P,until,w){
   const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
   for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
   if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
+  for(const k of ['as','pz','pk'])if(P[k]!==undefined)Q[k]=P[k];
   let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
   let prog=0,progT=0,fell=false;
   for(let t=0;t<18000;t++){
@@ -1154,7 +1156,7 @@ function watchPlan(P,until,w){
 function brainPlan(w){
   spawn();
   const N=R.length,K=S.length,me=makeBrainRider(R,H,w);
-  const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0)};
+  const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0),as:1};
   const tk=makeRider(R,H,S,Q),z=()=>new Float64Array(K);
   const aim=z(),went=z(),nv=z(),aimE=z(),wentE=z(),nE=z(),pu=z(),np=z(),pt=z(),na=z(),pl=z();
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
@@ -1295,7 +1297,16 @@ onmessage=async e=>{const m=e.data;
   const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
   const clonePlan = p => JSON.parse(JSON.stringify(p));
   function freshPlan(secs) {
-    return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0) };
+    return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0), as: 1 };
+  }
+  // A plan from before P.as (see makeRider) was learned with jumps put on the section the bike was in or the one
+  // before; some, on this branch, already the new way. It is ridden both ways and keeps the better one for good.
+  async function settleAir(pool, P) {
+    if (P.as !== undefined) return { plan: P, run: (await pool.evalAll([P]))[0] };
+    const two = [{ ...clonePlan(P), as: 0 }, { ...clonePlan(P), as: 1 }];
+    const runs = await pool.evalAll(two);
+    const i = beats(runs[1], runs[0]) ? 1 : 0;
+    return { plan: two[i], run: runs[i] };
   }
   const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
   const num = v => typeof v === 'number' && Number.isFinite(v);
@@ -1551,9 +1562,9 @@ onmessage=async e=>{const m=e.data;
     }
     // A lesson from elsewhere (a file, the community repo) is ridden here first and kept only if it does better.
     async offer(m) {
-      const plan = this.pool && this.planOf(m);
-      if (!plan) return { fits: false };
-      const run = (await this.pool.evalAll([plan]))[0];
+      const got = this.pool && this.planOf(m);
+      if (!got) return { fits: false };
+      const { plan, run } = await settleAir(this.pool, got);
       const took = beats(run, this.best);
       if (took) { this.plan = clonePlan(plan); this.best = run; this.save(); }
       return { fits: true, took, run };
@@ -1569,7 +1580,7 @@ onmessage=async e=>{const m=e.data;
       this.book = loadBook(this.setup.tricks); this.bookDirty = false;
       const mem = this.load();
       if (!mem.fromTrack && route.drill) drillSeed(this.plan, this.secs, route.drill);
-      this.best = (await this.pool.evalAll([this.plan]))[0];
+      ({ plan: this.plan, run: this.best } = await settleAir(this.pool, this.plan));
       // jumps of this line that look like jumps learned on other lines (this.library is set by the panel)
       this.borrow = matchJumps(this.secs, this.library || [], route.start.id);
       this.borrowed = new Set(); this.borrowWins = 0;
@@ -2954,7 +2965,7 @@ onmessage=async e=>{const m=e.data;
         else {
           let m = null;
           try { m = JSON.parse(localStorage.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
-          if (m && planFits(m.plan, ctx.secs) && JSON.stringify(m.setup) === setup) { P = m.plan; [ls] = await ctx.pool.evalAll([P]); }
+          if (m && planFits(m.plan, ctx.secs) && JSON.stringify(m.setup) === setup) ({ plan: P, run: ls } = await settleAir(ctx.pool, m.plan));
         }
         const better = (a, b) => a.prog > b.prog || (a.prog === b.prog && a.fit >= b.fit);
         // on a Training drill the lesson always rides: the brain knows nothing of what the drill asks for
