@@ -114,6 +114,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <ol>
 <li>Xe của bạn được đưa về điểm xuất phát và AI tự đạp, lái, nhảy qua từng cú nhảy. Phía trên màn hình hiện “AI đang lái · số mét đã đi”.</li>
 <li><b>Vừa lái vừa học:</b> nếu đang bật Học lái trên đường này, tìm ra cách tốt hơn cho những đoạn phía trước xe là AI dùng ngay trong lượt đang chạy (trên huy hiệu hiện “học thêm N lần”).</li>
+<li><b>Game chấm:</b> sau mỗi lần lái thật, nhật ký ghi game đã chấm bao nhiêu cú Buttery, Clean, Sketchy, Flat, Cased và bao nhiêu điểm (theo cách game tính trong train). Phần Chi tiết có mục <b>Xem lại từng cú nhảy</b> của lượt tốt nhất, kèm lời khuyên cho từng cú. Khi đã về đích, Học lái tập tiếp đất đẹp hơn để giữ chuỗi nhân, và tập trick theo sổ tay trick khi tài khoản đã mở khóa trick.</li>
 <li><b>Đi tiếp sang đường khác:</b> tới cuối đường, nếu có một đường khác bắt đầu trong vòng 35 m phía trước và đi cùng hướng, AI lái tiếp sang đường đó bằng bộ não chung (huy hiệu hiện “đường thứ N”). Không có đường nào gần như vậy thì AI dừng ở đó, nên nó không bao giờ lái ra chỗ không có đường. Đường đã đi trong lượt này thì không đi lại.</li>
 <li><b>Học luôn các đường đi tiếp:</b> Học lái nối các đường đi tiếp vào sau đường đã chọn (tối đa 6 đường) và học cả tuyến, nên AI lái đi tiếp sang chúng bằng bài học. Bài học cũ được giữ cho phần đường đã học.</li>
 <li>Ngã hoặc hết đường để đi, AI tự lái lại từ đầu sau 3 giây với bài học mới nhất, cứ thế liên tục.</li>

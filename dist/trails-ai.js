@@ -453,6 +453,28 @@ X, Z, KIND, length: X.length, pieces, kinds, land: PRACTICE_LAND, practice: true
 }
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const MOVES = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 }, { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
+function gamePoints(grade, flip, spin, whip, streak) {
+const rough = grade >= 4, run = rough ? 0 : streak + 1, m = Math.max(1, Math.min(5, run));
+const a = Math.abs(spin || 0), turn = a >= 300 ? 180 * Math.floor((a + 60) / 180) : 0;
+const tr = (Math.abs(flip || 0) >= 270 ? 1 : 0) | (turn >= 360 ? 2 : 0) | (Math.abs(whip || 0) >= 45 ? 4 : 0);
+let p = rough ? 50 : 100 + (grade === 1 ? 60 : grade === 2 ? 40 : 0);
+if (tr & 1) p += 300;
+if (tr & 2) p += 100 * turn / 180;
+if (tr & 4) p += 100;
+return { p: p * m, m, streak: run, tr, turn };
+}
+const GRADE_NAMES = ['', 'Buttery', 'Clean', 'Sketchy', 'Flat', 'Cased'];
+const gradeCount = c => c.map((n, g) => (g && n ? `${n} ${GRADE_NAMES[g]}` : '')).filter(Boolean).join(', ') || 'chưa có cú nhảy nào';
+const deg = r => Math.round(Math.abs(r) * 180 / Math.PI);
+function landingTip(e, fits) {
+if (e.g >= 4 && e.h < 0.5) return 'Bị nảy khỏi mô rồi rơi xấu: qua đoạn này nên ép xe giữ bánh sát đất (pump) thay vì bay. Rơi xấu làm mất chuỗi nhân.';
+if (e.g === 5) return 'Bay hụt, chạm mép hoặc mặt bằng trước dốc đáp: cần lấy đà nhanh hơn. Cased làm mất chuỗi nhân.';
+if (e.g === 4) return 'Rơi xuống chỗ bằng: bay quá xa (hoặc không có dốc đáp). Flat làm mất chuỗi nhân.';
+if (e.g === 3) return e.dp < -0.12 ? `Chúc đầu ${deg(e.dp)}° so với dốc đáp: giữ đầu xe ngẩng hơn.` : e.dp > 0.12 ? `Ngẩng đầu ${deg(e.dp)}° so với dốc đáp: hạ đầu xe theo dốc.` : 'Chạm đất hơi mạnh: cần khớp dốc đáp hơn.';
+if (!e.tr) { const ok = fits.filter(f => e.a >= f.min).map(f => f.name); if (ok.length) return `Bay đủ lâu cho ${ok.join(' hoặc ')} (theo sổ tay trick).`; }
+return '';
+}
+const trickWords = (tr, turn) =>[tr & 1 ? 'Backflip' : '', tr & 2 ? `Spin ${turn}` : '', tr & 4 ? 'Whip' : ''].filter(Boolean).join(' + ');
 function makeRider(R, H, S, P) {
 const N = R.length;
 const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, inp: [0, 0, 0, 0, 0, 0, 0] };
@@ -650,6 +672,7 @@ const MOVES=${JSON.stringify(MOVES)};
 const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
+${gamePoints.toString()}
 function sections(){
 const N=R.length,out=[];let a=0;
 const isT=i=>i<N&&R.KIND[i]==='takeoff';
@@ -676,6 +699,7 @@ const rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
 const vr=new Float32Array(N);
 const tr=rec?[]:null,ev=rec?[]:null;
 const tricks={};let pending=null,manualM=0,landT=-1e9,jumps=0,landAt=-1,lastJ=-1,progAt=0,progT=0;
+const jl=[];let game=0,streak=0,airP=0;
 for(t=0;t<maxT;t++){
 const air=s[12]>0;
 const inp=rider.step(s,t);
@@ -692,6 +716,7 @@ if(rec&&t%2===0){const j=Math.min(N-2,idx),dx=R.X[j+1]-R.X[j],dz=R.Z[j+1]-R.Z[j]
 const f=clamp(((s[0]-R.X[j])*dx+(s[2]-R.Z[j])*dz)/(dx*dx+dz*dz||1),-0.5,1.5);
 tr.push(+(j+f).toFixed(2),+s[1].toFixed(2),+s[4].toFixed(3),s[12]>0?1:0,+Math.abs(s[8]).toFixed(1))}
 if(s[13]>0){crash=s[13];end='ngã';pts-=25;pending=null;if(rec)ev.push({t,crash});break}
+if(s[12]>0)airP=s[4];
 if(s[16]!==seq){seq=s[16];
 const got={};const fl=Math.abs(s[44]||0),spn=Math.abs(s[43]||0),wh=Math.abs(s[41]||0),tb=s[56]||0;
 if(fl>=270)got.flip=Math.round(fl/360)||1;
@@ -699,6 +724,12 @@ if(spn>=300)got.spin=Math.max(1,Math.round(spn/360));
 if(wh>=45)got.whip=wh;
 if(tb&16)got.table=1;if(tb&32)got.tailwhip=Math.max(1,s[57]|0);if(tb&64)got.barspin=Math.max(1,s[58]|0);if(tb&128)got.tbog=1;if(tb&256)got.xup=1;
 if(Object.keys(got).length)pending={got,t};
+const gr=s[15]|0;
+if(gr>0){const k=rider.airSec,gp=gamePoints(gr,s[44],s[43],s[41],streak),i=Math.min(N-3,Math.max(2,idx));
+streak=gp.streak;game+=gp.p;
+const dp=airP-Math.atan2(H[i+2]-H[i-2],4);
+jl.push({k,i:idx,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0});
+if(rec)ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
 }
 if(pending&&t-pending.t>=30){const k=Object.keys(pending.got);let p=0;for(const n of k){p+=n==='whip'?pending.got[n]:TP[n]*pending.got[n];tricks[n]=(tricks[n]||0)+(n==='whip'?1:pending.got[n])}
 p*=1+0.5*(k.length-1);pts+=p;if(rec)ev.push({t:pending.t,got:pending.got,p:Math.round(p)});pending=null}
@@ -708,7 +739,7 @@ if(Math.abs(s[8])<0.6&&!(s[12]>0)){if(++stall>150){end='đứng lại';pts-=25;b
 if(manualM>=2)tricks.manual=Math.round(manualM);
 const sec=rider.sec,crashSec=crash?(s[12]>0||t-landT<60?rider.airSec:sec):sec;
 const pace=0.05*Math.min(20,vr[Math.max(0,prog-5)]);
-const res={fit:prog+pts+pace,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps};
+const res={fit:prog+pts+pace,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps,game,jl};
 if(rec)res.trace={tr,ev,H:Array.from(H,h=>+h.toFixed(2))};
 return res;
 }
@@ -868,7 +899,40 @@ const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
 const num = v => typeof v === 'number' && Number.isFinite(v);
 const partsOk = (P, n) => P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))));
 const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
-const beats = (a, b) => !b || a.prog > b.prog || (a.prog === b.prog && a.fit > b.fit + 0.01);
+const done = r => r.end === 'về đích' && typeof r.game === 'number';
+const beats = (a, b) => !b || a.prog > b.prog || (a.prog === b.prog && (done(a) && done(b) && a.game !== b.game ? a.game > b.game : a.fit > b.fit + 0.01));
+const BOOK = 'trailsai.trickbook', BOOK_ROWS = 4000;
+function loadBook(mask) {
+try { const b = JSON.parse(localStorage.getItem(BOOK) || 'null'); return b && b.version === 1 && Array.isArray(b[mask]) ? b[mask] : []; } catch { return []; }
+}
+function saveBook(mask, rows) {
+try {
+let b = JSON.parse(localStorage.getItem(BOOK) || 'null');
+if (!b || b.version !== 1) b = { version: 1 };
+b[mask] = rows.slice(-BOOK_ROWS);
+localStorage.setItem(BOOK, JSON.stringify(b));
+} catch { /* storage full or blocked */ }
+}
+const trickValue = tr => (tr & 1 ? 300 : 0) + (tr & 2 ? 200 : 0) + (tr & 4 ? 100 : 0);
+function bookMove(rows, air) {
+const w = [0];
+for (let m = 1; m < N_MOVES; m++) {
+let n = 0, ok = 0, val = 0;
+for (const r of rows) if (r[1] === m && Math.abs(r[0] - air) <= 0.2) { n++; if (r[2] && r[3]) { ok++; val += trickValue(r[3]); } }
+w.push(((ok + 1) / (n + 2)) * (ok ? val / ok : 150));
+}
+let x = Math.random() * w.reduce((a, v) => a + v * v, 0);
+for (let m = 1; m < N_MOVES; m++) { x -= w[m] * w[m]; if (x <= 0) return m; }
+return N_MOVES - 1;
+}
+function bookSummary(rows) {
+return [[1, 'Backflip'], [2, 'Spin'], [4, 'Whip']].map(([b, name]) => {
+const got = rows.filter(r => r[2] && r[3] & b).map(r => r[0]).sort((x, y) => x - y);
+if (!got.length) return { name, n: 0 };
+const min = got[Math.floor(got.length * 0.1)], tries = rows.filter(r => r[0] >= min).length;
+return { name, n: got.length, min, tries };
+});
+}
 const clampV = v => Math.min(18, Math.max(2, v));
 function moveSpeed(p, s, q, sd, split) {
 if (split && !(p.vs && p.vs[q])) {
@@ -983,7 +1047,7 @@ this.plan = ok ? clonePlan(plan) : freshPlan(this.secs);
 this.gen = ok ? mine.gen : 0;
 this.hist = ok ? (mine.hist || []) : [];
 this.found = ok ? (mine.found || {}) : {};
-this.stuck = 0; this.lastProg = -1; this.alt = null;
+this.stuck = 0; this.lastProg = -1; this.alt = null; this.fix = null;
 this.best = null;
 return { fromTrack: !!ok, kept: ok ? this.kept : 0 };
 }
@@ -1027,6 +1091,7 @@ this.setup = riderSetup();
 this.pool = new Pool(workers);
 const meta = await this.pool.init(route, this.setup);
 this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
+this.book = loadBook(this.setup.tricks); this.bookDirty = false;
 const mem = this.load();
 this.best = (await this.pool.evalAll([this.plan]))[0];
 this.borrow = matchJumps(this.secs, this.library || [], route.start.id);
@@ -1110,11 +1175,43 @@ out.push(p);
 }
 return out;
 }
-trickCandidates(j, n) {
-const out = [];
+airOf(j) { return Math.max(0, ...((this.best && this.best.jl) || []).filter(e => e.k === j).map(e => e.a)); }
+pointsTarget(passed) {
+const jl = this.best.jl || [], tricksOn = !!this.setup.tricks;
+const worst = new Map();
+for (const e of jl) worst.set(e.k, Math.max(worst.get(e.k) || 0, e.g));
+const weak = [...worst].filter(([, g]) => g >= 3);
+const pickW = list => {
+let x = Math.random() * list.reduce((a, [, w]) => a + w, 0);
+for (const [k, w] of list) { x -= w; if (x <= 0) return k; }
+return list[list.length - 1][0];
+};
+if (weak.length && (!tricksOn || Math.random() < 0.6)) return { j: pickW(weak.map(([k, g]) => [k, g >= 4 ? 4 : 2])), land: true };
+if (!tricksOn) {
+const clean = [...worst].filter(([, g]) => g === 2);
+return clean.length ? { j: clean[Math.floor(Math.random() * clean.length)][0], land: true } : null;
+}
+const bare = passed.filter(j => !jl.some(e => e.k === j && e.tr) && (worst.get(j) || 9) <= 2);
+const from = bare.length && Math.random() < 0.7 ? bare : passed;
+return { j: from[Math.floor(Math.random() * from.length)], land: false };
+}
+landCandidates(k, n) {
+const S = this.secs, out = [];
 for (let i = 0; i < n; i++) {
 const p = clonePlan(this.plan);
-if (i < n * 0.75 || !p.mv[j]) p.mv[j] = Math.floor(Math.random() * N_MOVES);
+if (Math.random() < 0.8) p.pt[k] += gauss() * 0.12;
+if (Math.random() < 0.5) moveSpeed(p, S[k], k, 0.8, false);
+if (k > 0 && Math.random() < 0.25) moveSpeed(p, S[k - 1], k - 1, 0.8, false);
+if (S[k].jump && Math.random() < 0.15) p.pl[k] = p.pl[k] ? 0 : 1 + Math.floor(Math.random() * 5);
+out.push(p);
+}
+return out;
+}
+trickCandidates(j, n) {
+const out = [], air = this.airOf(j);
+for (let i = 0; i < n; i++) {
+const p = clonePlan(this.plan);
+if (i < n * 0.75 || !p.mv[j]) p.mv[j] = air && Math.random() < 0.75 ? bookMove(this.book, air) : Math.floor(Math.random() * N_MOVES);
 p.hr[j] = +(0.3 + Math.random() * 2.5).toFixed(2);
 if (Math.random() < 0.5) p.pt[j] += gauss() * 0.12;
 if (Math.random() < 0.3) {
@@ -1134,16 +1231,21 @@ const t0 = performance.now();
 const best = this.best;
 const finished = best.end === 'về đích';
 const passedJumps = S.map((s, i) => (s.jump && s.b < best.prog - 8 ? i : -1)).filter(i => i >= 0);
-const tricksTurn = passedJumps.length && finished;
+if (this.fix && (!finished || this.fix.n >= 40)) this.fix = null;
+const fixing = !!this.fix && this.gen % 2 === 1;
+const target = finished && passedJumps.length && !fixing ? this.pointsTarget(passedJumps) : null;
 let cands, until, mode;
-if (tricksTurn) {
-const fresh = passedJumps.filter(j => !this.plan.mv[j]);
-const from = fresh.length && Math.random() < 0.7 ? fresh : passedJumps;
-const j = from[Math.floor(Math.random() * from.length)];
-cands = this.trickCandidates(j, LAMBDA);
+if (fixing) {
+const F = this.fix;
+cands = this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
 this.borrowed = new Set();
-until =finished ? undefined : Math.min(this.N, S[Math.min(S.length - 1, j + 2)].b + 20);
-mode = 'trick';
+until = undefined;
+mode = 'fix';
+} else if (target) {
+cands = target.land ? this.landCandidates(target.j, LAMBDA) : this.trickCandidates(target.j, LAMBDA);
+this.borrowed = new Set();
+until = undefined;
+mode = target.land ? 'land' : 'trick';
 } else if (!finished && this.stuck > 100 && this.gen % 2) {
 const A = this.alt;
 if (!A || A.n >= 60) { this.alt = null; cands = this.wildCandidates(Math.min(S.length - 1, best.crashSec), LAMBDA); }
@@ -1158,14 +1260,22 @@ until = finished ? undefined : Math.min(this.N, best.prog + 120);
 mode = 'ride';
 }
 const other = mode === 'other';
-if (!other) cands.unshift(clonePlan(this.plan));
+if (mode === 'fix') cands.unshift(clonePlan(this.fix.plan));
+else if (!other) cands.unshift(clonePlan(this.plan));
 else if (this.alt) cands.unshift(clonePlan(this.alt.plan));
 const res = await this.pool.evalAll(cands, until);
 if (!this.running && !res) break;
+if (mode === 'trick') this.learnBook(target.j, cands, res);
+const prev = this.best;
 let bi = 0;
 res.forEach((r, i) => { if (beats(r, res[bi])) bi = i; });
 let improved = false, borrowed = false;
-if (other) {
+if (mode === 'fix') {
+const F = this.fix;
+F.n++;
+if (beats(res[bi], F.best)) { F.plan = cands[bi]; F.best = res[bi]; }
+if (beats(F.best, this.best)) { this.plan = F.plan; this.best = F.best; improved = true; this.fix = null; }
+} else if (other) {
 if (!this.alt || beats(res[bi], this.alt.best)) this.alt = { plan: cands[bi], best: res[bi], n: this.alt ? this.alt.n : 0 };
 this.alt.n++;
 if (beats(this.alt.best, this.best)) {
@@ -1178,21 +1288,43 @@ if (beats(full, this.best)) {
 this.plan = cands[bi]; this.best = full; improved = true;
 if (this.borrowed.has(bi - 1)) { borrowed = true; this.borrowWins++; }
 }
+} else if (mode === 'land') {
+const k = target.j, g0 = Math.min(...(best.jl || []).filter(e => e.k === k).map(e => e.g), 9);
+let pick = -1;
+res.forEach((r, i) => {
+const e = i && r.jl.find(q => q.k === k);
+if (e && e.g < g0 && e.g <= 3 && r.end !== 'về đích' && r.prog > e.i + 15 && (pick < 0 || r.prog > res[pick].prog)) pick = i;
+});
+if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0 };
 }
 if (improved && mode === 'ride') this.alt = null;
 if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;
 this.lastProg = Math.max(this.lastProg, this.best.prog);
 const news = [];
 for (const k of Object.keys(this.best.tricks)) if (!this.found[k]) { this.found[k] = this.gen + 1; news.push(TRICK_NAMES[k] || k); }
-if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved, borrowed);
+if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved, borrowed, prev);
 this.gen++;
+if (this.bookDirty && this.gen % 10 === 0) { saveBook(this.setup.tricks, this.book); this.bookDirty = false; }
 const mean = res.reduce((a, r) => a + r.fit, 0) / res.length;
 this.hist.push([this.gen, Math.round(this.best.fit), Math.round(mean), this.best.prog]);
 this.ui.progress({ gen: this.gen, best: this.best, mean, ms: performance.now() - t0, mode, tries: res.length });
 if (improved || this.gen % 5 === 0) this.save();
 }
 this.save();
+if (this.bookDirty) { saveBook(this.setup.tricks, this.book); this.bookDirty = false; }
 this.running = false;
+}
+learnBook(j, cands, res) {
+const ref = this.airOf(j);
+for (let i = 1; i < cands.length; i++) {
+const mv = cands[i].mv[j] | 0, r = res[i];
+if (!mv || !r) continue;
+const e = r.jl.find(q => q.k === j), fell = !e || (r.crash && r.crashSec === j);
+if (!e && !ref) continue;
+this.book.push([e ? e.a : ref, mv, fell ? 0 : 1, e ? e.tr : 0, e ? e.g : 0]);
+}
+if (this.book.length > BOOK_ROWS) this.book.splice(0, this.book.length - BOOK_ROWS);
+this.bookDirty = true;
 }
 async bestRide() { return this.pool ? this.pool.replay(this.plan) : null; }
 }
@@ -1390,6 +1522,7 @@ background:rgba(18,22,28,.94);color:#e8edf2;font:13px/1.4 system-ui,sans-serif;b
 #tai .kv b{color:#fff;font-weight:600;text-align:right}
 #tai canvas{width:100%;height:90px;background:#141920;border-radius:8px;margin:6px 0}
 #tai .log{max-height:130px;overflow:auto;font-size:12px;color:#c9d4df;border-top:1px solid #2a323c;padding-top:6px}
+#tai .jr{font-size:12px;margin:3px 0;line-height:1.35}#tai .jr small{color:#9fb0c2}#tai .g1,#tai .g2{color:#9be3b0}#tai .g3{color:#ffd166}#tai .g4,#tai .g5{color:#ff8a7a}
 #tai .log div{margin:2px 0}#tai .tag{display:inline-block;background:#1f3d2a;color:#9be3b0;border-radius:6px;padding:0 6px;margin:1px 3px 1px 0;font-size:12px}
 #tai-view{position:fixed;inset:0;z-index:2147483001;background:rgba(6,9,13,.72);display:flex;align-items:center;justify-content:center;font:14px/1.4 system-ui,sans-serif;color:#e8edf2}
 #tai-view .card{width:min(980px,96vw);background:#141920;border-radius:16px;padding:12px;box-shadow:0 16px 50px rgba(0,0,0,.5)}
@@ -1405,7 +1538,7 @@ function showRide(run) {
 const { tr, ev, H } = run.trace, F = 5, n = tr.length / F;
 if (n < 2) return;
 const box = document.createElement('div'); box.id = 'tai-view';
-box.innerHTML = `<div class="card"><div class="bar"><b>Lượt chạy tốt nhất của AI · ${run.prog} m · ${Math.round(run.fit)} điểm</b>
+box.innerHTML = `<div class="card"><div class="bar"><b>Lượt chạy tốt nhất của AI · ${run.prog} m · ${typeof run.game === 'number' ? run.game + ' điểm game' : Math.round(run.fit) + ' điểm'}</b>
 <button class="sp">Tốc độ ×1</button><button class="again">Xem lại</button><button class="close">Đóng</button></div>
 <canvas width="960" height="420"></canvas></div>`;
 document.body.appendChild(box);
@@ -1457,23 +1590,25 @@ const tick = Math.round(T);
 const crashEv = ev.find(e => e.crash && e.t <= tick);
 const tumble = crashEv ? Math.min(2.5, (tick - crashEv.t) / 25) : 0;
 bike(X(d), Y(y) - 6, -pitch + tumble, !!crashEv);
+const lands = ev.some(e => e.land);
 let pts = 0;
 for (const e of ev) if (e.t <= tick) {
-if (e.got) pts += e.p;
-if (!shown.includes(e)) shown.push(e);
+if (lands ? e.land : e.got) pts += e.p;
+if (!shown.includes(e) && !(lands && e.got)) shown.push(e);
 }
 const recent = shown.filter(e => tick - e.t < 150).slice(-2);
 x.textAlign = 'center';
 recent.forEach((e, k) => {
 const age = (tick - e.t) / 150;
 x.globalAlpha = 1 - age * age; x.font = 'bold 30px system-ui';
-x.fillStyle = e.crash ? '#ff8a7a' : '#ffd166';
-x.fillText(e.crash ? `Ngã: ${CRASH_NAMES[e.crash] || 'mất lái'}` : `${trickText(e.got)}  +${e.p}`, W / 2, 70 + k * 38 - age * 20);
+x.fillStyle = e.crash || e.land >= 4 ? '#ff8a7a' : '#ffd166';
+const words = e.land ? [GRADE_NAMES[e.land], trickWords(e.tr, e.sp)].filter(Boolean).join(' + ') + `  +${e.p}${e.m > 1 ? ' ×' + e.m : ''}` : `${trickText(e.got)}  +${e.p}`;
+x.fillText(e.crash ? `Ngã: ${CRASH_NAMES[e.crash] || 'mất lái'}` : words, W / 2, 70 + k * 38 - age * 20);
 });
 x.globalAlpha = 1; x.textAlign = 'left';
 x.fillStyle = 'rgba(10,14,20,.55)'; x.fillRect(12, Hh - 46, 420, 34);
 x.fillStyle = '#e8edf2'; x.font = '16px system-ui';
-x.fillText(`${Math.round(d)} m   ·   trick ${pts} điểm   ·   ${Math.round(sp * 3.6)} km/h${air ? '   ·   đang bay' : ''}`, 22, Hh - 23);
+x.fillText(`${Math.round(d)} m   ·   ${lands ? '' : 'trick '}${pts} điểm   ·${Math.round(sp * 3.6)} km/h${air ? '   ·   đang bay' : ''}`, 22, Hh - 23);
 if (T >= (n - 1) * 2 + 60) {
 x.fillStyle = 'rgba(10,14,20,.7)'; x.fillRect(W / 2 - 220, Hh / 2 - 40, 440, 64);
 x.fillStyle = '#fff'; x.font = 'bold 20px system-ui'; x.textAlign = 'center';
@@ -1509,6 +1644,9 @@ el.innerHTML = `
 <span>Mượn kinh nghiệm</span><b class="k-borrow">–</b>
 </div>
 <div class="k-tricks"></div>
+<div class="sec">Xem lại từng cú nhảy<small>Lượt tốt nhất, chấm như game chấm: kiểu tiếp đất, trick, điểm và chuỗi nhân.</small></div>
+<div class="k-jumps"><div class="jr">Chưa có lượt nào.</div></div>
+<div class="k-book"></div>
 <canvas width="600" height="180"></canvas>
 <div class="row"><button class="b g watch" disabled>Xem lại lượt chạy tốt nhất</button></div>
 <div class="row s"><button class="b g export" disabled>Lưu ra file</button><button class="b g import">Mở file</button><button class="b g share" disabled>Chia sẻ GitHub</button></div>
@@ -1537,13 +1675,27 @@ const say = t => { $('.st').textContent = t; };
 const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; $('.log').prepend(d); };
 const fmtTricks = tr => Object.entries(tr || {}).map(([k, n]) => `<span class="tag">${TRICK_NAMES[k] || k}${k === 'whip' ? '' : k === 'manual' ? ' ' + n + ' m' : n > 1 ? ' ×' + n : ''}</span>`).join('') || '<span style="color:#7d8a97">chưa có trick nào</span>';
 const ui = {
-record(gen, run, news, onlyNews, borrowed) {
+record(gen, run, news, onlyNews, borrowed, prev) {
 if (news.length) log(`<b>Vòng ${gen}:</b> lần đầu làm được ${news.map(n => `<span class="tag">${n}</span>`).join('')}`);
-if (!onlyNews) log(`Vòng ${gen}: kỷ lục mới ${run.prog} m (${Math.round(run.fit)} điểm, ${run.jumps} cú nhảy, ${run.end})${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
+if (onlyNews) return;
+const n = run.jl ? run.jl.length : run.jumps, pts = typeof run.game === 'number' ? `${run.game} điểm game` : `${Math.round(run.fit)} điểm`;
+const what = [];
+if (prev && prev.jl && run.jl && prev.end === 'về đích' && run.end === 'về đích') {
+const used = new Set();
+run.jl.forEach((b, i) => {
+const a = prev.jl.find(q => !used.has(q) && Math.abs(q.i - b.i) < 12);
+if (!a) return;
+used.add(a);
+if (a.g !== b.g) what.push(`cú ${i + 1}: ${GRADE_NAMES[a.g]} → ${GRADE_NAMES[b.g]}`);
+if (b.tr && b.tr !== a.tr) what.push(`cú ${i + 1}: ${trickWords(b.tr, b.sp)}`);
+});
+}
+const up = what.length ? ` · ${what.slice(0, 4).join(', ')}` : '';
+log(`Vòng ${gen}: kỷ lục mới ${run.prog} m (${pts}${prev && typeof prev.game === 'number' && run.end === 'về đích' && prev.end === 'về đích' ? `, trước ${prev.game}` : ''}, ${n} cú nhảy, ${run.end})${up}${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
 },
 progress(p) {
 $('.k-gen').textContent = p.gen;
-$('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : 'vượt hết đường';
+$('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : p.mode === 'land' ? 'tiếp đất đẹp hơn, giữ chuỗi nhân' : p.mode === 'fix' ? 'chạy tiếp sau cú tiếp đất đẹp hơn' : 'vượt hết đường';
 showBest(p.best);
 $('.k-speed').textContent = `${(p.ms / 1000).toFixed(1)} s / vòng (${p.tries} lần thử, ${workers} luồng)`;
 showBorrow();
@@ -1565,9 +1717,29 @@ $('.b-train').textContent = `${pct(brain.score.share)} quãng đường (lúc m�
 const cap = brain.testIdx >= 0 ? Math.min(brain.lines[brain.testIdx].len, BRAIN_CAP) : 0;
 $('.b-test').textContent = brain.test ? `${brain.test.runs[0].prog} / ${cap} m (lúc mới: ${brain.testBase.runs[0].prog} m)` : '–';
 }
+function jumpReview(b) {
+const jl = b && b.jl;
+if (!jl) return '<div class="jr">Chưa có lượt nào được chấm.</div>';
+if (!jl.length) return '<div class="jr">Lượt này chưa có cú nhảy nào được game tính.</div>';
+const runIn = trainer.route ? trainer.N - trainer.route.length : 0, c =[0, 0, 0, 0, 0, 0], fits = bookSummary(trainer.book || []).filter(x => x.n);
+let top = 1;
+for (const e of jl) { c[e.g]++; top = Math.max(top, e.m); }
+return `<div class="jr"><b>${b.game} điểm</b> theo cách game tính · ${gradeCount(c)} · chuỗi cao nhất ×${top}</div>` + jl.map((e, n) => {
+const tip = landingTip(e, fits);
+return `<div class="jr"><b>${n + 1}.</b> ${Math.max(0, e.i - runIn)} m · bay ${e.a.toFixed(2)} s, cao ${e.h.toFixed(1)} m, xa ${e.d.toFixed(1)} m · <span class="g${e.g}">${GRADE_NAMES[e.g]}</span>${e.tr ? ' · ' + trickWords(e.tr, e.sp) : ''} · <b>+${e.p}</b>${e.m > 1 ? ` (×${e.m})` : ''}${tip ? `<br><small>${tip}</small>` : ''}</div>`;
+}).join('');
+}
+function bookText() {
+if (!trainer.setup) return '';
+if (!trainer.setup.tricks) return '<div class="jr"><b>Sổ tay trick:</b> tài khoản chưa mở khóa trick, nên AI chỉ tập tiếp đất đẹp và giữ chuỗi.</div>';
+const B = trainer.book || [];
+return `<div class="jr"><b>Sổ tay trick</b> (${B.length} lần thử): ${bookSummary(B).map(x => (x.n ? `${x.name} làm được từ ${x.min.toFixed(2)} s bay (${x.n}/${x.tries} lần)` : `${x.name} chưa làm được`)).join(' · ')}</div>`;
+}
 function showBest(b) {
 if (!b) return;
-$('.k-best').textContent = Math.round(b.fit);
+$('.k-best').textContent = typeof b.game === 'number' ? `${b.game} (cách game tính)` : Math.round(b.fit);
+$('.k-jumps').innerHTML = jumpReview(b);
+$('.k-book').innerHTML = bookText();
 $('.k-prog').textContent = `${b.prog} / ${trainer.N} m`;
 $('.k-end').textContent = `${b.end}, ${b.jumps} cú nhảy`;
 $('.k-tricks').innerHTML = fmtTricks(b.tricks);
@@ -1955,6 +2127,7 @@ if (d.cleanup) d.cleanup();
 const m = Math.max(0, d.base + d.rider.idx), e = Math.max(0, d.expect - d.runIn);
 const extra = (d.legs ? `, đi tiếp sang ${d.legs} đường khác` : '') + (d.tricks ? `, ${d.tricks} trick` : '') + (d.swaps ? `, dùng ${d.swaps} cách mới học được giữa chừng` : '');
 log(`<b>${d.who} lái thật:</b> ${why} sau ${m} m${extra}.`);
+if (d.grades) log(`Game chấm: ${gradeCount(d.grades)}, <b>${d.game} điểm</b> (cách game tính trong train), chuỗi cao nhất ×${d.top}.`);
 if (!byPlayer && !d.legs) {
 if (lineStale(d.route)) log('<b>Bản đồ trong mô phỏng không còn khớp với game</b> (đường đã được sửa). Bấm “Quên đường này, học lại từ đầu” để AI dò lại đường.');
 else if (Math.abs(m - e) > 15) log(`Lượt thật lệch so với mô phỏng (dự đoán ${e} m), dù bản đồ vẫn khớp.`);
@@ -2070,7 +2243,16 @@ d.step = () => {
 const s = liveState();
 if (seq === null) seq = s[16];
 if (s[13] > 0) { setTimeout(() => stopDrive('ngã'), 0); return null; }
-if (s[16] !== seq) { seq = s[16]; if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++; }
+if (s[16] !== seq) {
+seq = s[16];
+if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++;
+const gr = s[15] | 0;
+if (gr > 0) {
+const gp = gamePoints(gr, s[44], s[43], s[41], d.streak || 0);
+d.streak = gp.streak; d.game = (d.game || 0) + gp.p; d.top = Math.max(d.top || 1, gp.m);
+(d.grades = d.grades || [0, 0, 0, 0, 0, 0])[gr]++;
+}
+}
 if (d.takeNewer && t % 30 === 0) d.takeNewer();
 const inp = rider.step(s, t++);
 if (rider.idx >= R.length - 3) {

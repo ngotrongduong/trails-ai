@@ -14,7 +14,7 @@ Với từng đường, AI không dùng mạng nơ-ron. Nó học bằng **thử
 2. **Chia thành đoạn.** Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
 3. **Kế hoạch (plan).** Với mỗi đoạn, AI giữ vài con số: tốc độ cần giữ, góc xe khi bay, có nhấc xe ở mép nhảy không, có pump không, làm trick gì, ở độ cao nào. Một đoạn có thể được chia thành các phần khoảng 8 m, mỗi phần một tốc độ riêng, để xe chậm lại qua một mô đất rồi tăng tốc cho cú nhảy ngay sau. Việc lái (bẻ lái theo đường, đạp tới tốc độ, cân xe trên không) do một bộ điều khiển cố định làm.
 4. **Thử trong mô phỏng.** Mỗi luồng CPU chạy một bản **vật lý thật của game** (đúng file WebAssembly game dùng). Mỗi vòng AI tạo vài chục bản sao của kế hoạch, mỗi bản đổi một chút quanh chỗ hay ngã, chạy thử tất cả, và giữ bản tốt nhất.
-5. **Hai giai đoạn.** Đầu tiên học vượt hết đường: lượt nào đi xa hơn là tốt hơn, điểm chỉ dùng để so những lượt đi xa bằng nhau. Chỉ khi đã về đích được, AI mới tập trick trên các cú nhảy để thêm điểm.
+5. **Hai giai đoạn.** Đầu tiên học vượt hết đường: lượt nào đi xa hơn là tốt hơn. Chỉ khi đã về đích được, AI mới tập lấy điểm: xem lại từng cú nhảy rồi tập tiếp đất đẹp hơn hoặc tập trick, chấm đúng như game chấm (xem [Chấm từng cú nhảy như game](#chấm-từng-cú-nhảy-như-game)).
 
 Khi bị kẹt, AI dùng thêm ba cách:
 
@@ -124,7 +124,32 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 | Ngã / kẹt / đứng lại | −25 |
 | Lạc khỏi đường | −20 |
 
-Trick chỉ được tính khi tiếp đất xong vẫn đứng vững. Đây là thang điểm để AI tự học, không phải điểm chính thức của game.
+Trick chỉ được tính khi tiếp đất xong vẫn đứng vững. Thang điểm này chỉ dùng để so những lượt chưa về đích (và cho bộ não chung). Lượt về đích thì so bằng điểm của game, phần dưới đây.
+
+### Chấm từng cú nhảy như game
+
+Game chấm mỗi cú tiếp đất bằng một chữ: **Buttery**, **Clean**, **Sketchy**, **Flat** (rơi xuống chỗ bằng) hay **Cased** (bay hụt). Điểm thì game chỉ tính trong chế độ train. AI đọc cách tính đó từ mã của game và tính y hệt cho từng cú nhảy trong mô phỏng:
+
+| | Điểm |
+|---|---|
+| Mỗi cú nhảy | 100 (Flat hay Cased: 50) |
+| Tiếp đất Buttery / Clean | +60 / +40 |
+| Backflip | +300 |
+| Xoay 360 / 540 / 720 | +200 / +300 / +400 |
+| Whip | +100 |
+| Chuỗi nhân | ×1 đến ×5: tăng 1 sau mỗi cú không Flat, không Cased; Flat hay Cased đưa về ×1 |
+
+Vì chuỗi nhân, một cú tiếp đất xấu ở đầu đường làm mất điểm của mọi cú sau nó. Khi đã về đích, AI làm như sau:
+
+- **Xem lại lượt tốt nhất:** mỗi cú nhảy có thời gian bay, độ cao, độ xa, chữ game chấm, trick, điểm và hệ số nhân, kèm lời khuyên. Ví dụ "chúc đầu 32° so với dốc đáp: giữ đầu xe ngẩng hơn", "bay hụt: cần lấy đà nhanh hơn", hoặc "bay đủ lâu cho Backflip". Tất cả có trong mục **Xem lại từng cú nhảy** (phần Chi tiết). Góc lệch lúc chạm đất phân biệt rõ các chữ: Clean lệch khoảng 3°, Sketchy khoảng 32°.
+- **Tập tiếp đất đẹp hơn:** AI chọn một cú không Clean (cú Flat hay Cased được chọn nhiều hơn) rồi thử đổi góc xe khi bay, tốc độ lúc rời mép nhảy, đà ở đoạn trước, và có nhấc xe hay không. Nếu một lần thử tiếp đất đẹp hơn nhưng ngã ở đoạn sau, AI giữ lần đó và tập tiếp phần sau (tối đa 40 vòng) cho tới khi về đích.
+- **Tập trick có chủ đích:** khi tài khoản đã mở khóa trick, mỗi lần thử trick được ghi vào **sổ tay trick**: bay bao lâu, động tác nào, có tiếp đất được không, game tính trick gì. Trên một cú nhảy, AI ưu tiên động tác đã thành công trên những cú có thời gian bay gần bằng (chênh dưới 0,2 s). Sổ tay cũng cho biết mỗi trick cần bay ít nhất bao lâu. Sổ tay dùng chung cho mọi đường trong trình duyệt.
+- **Lái thật cũng được chấm:** sau mỗi lần AI lái thật, nhật ký ghi game đã chấm bao nhiêu Buttery, Clean, Sketchy… và bao nhiêu điểm.
+
+Đo được:
+- Trên đường Trảng Sương 29 (cuarkplp1p, 305 m), bài học cũ về đích với 990 điểm: 11/12 cú Sketchy hoặc Cased, chuỗi không quá ×2. Sau khoảng 40 vòng tập tiếp đất, AI được 1510 điểm.
+- Lần AI lái thật trong game được chấm đúng như mô phỏng: 1130 điểm ở một lần, 1510 điểm ở lần sau.
+- Với trick mở khóa, AI làm được backflip, nhưng trick rất khó tiếp đất: trong 284 lần thử chỉ 2 lần whip thành công. Sổ tay sẽ giúp dần khi có nhiều lần thử trên nhiều đường.
 
 ## Học nhanh hơn: cùng nhau
 
