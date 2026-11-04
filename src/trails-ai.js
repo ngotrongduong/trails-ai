@@ -306,8 +306,16 @@
     return { X, Z, KIND };
   }
 
-  // The line from start along the pieces the game has loaded (or along pieces src, on ground land).
-  async function buildRoute(start, src, land) {
+  // The line from start along the pieces the game has loaded (or along pieces src, on ground land). back: the line
+  // ridden the wrong way round, from start back along the pieces that lead to it (each piece's way reversed; a landing
+  // is then ridden up as a takeoff, and a takeoff down as a landing).
+  // a piece of the game's as laid out on its own ground, kept (the trail finder lays out thousands while the bike rides)
+  const layouts = new WeakMap();
+  function layOf(e, p) {
+    if (!layouts.has(p)) { let lay = null; try { lay = e.layout(p); } catch { lay = null; } layouts.set(p, lay); }
+    return layouts.get(p);
+  }
+  async function buildRoute(start, src, land, back) {
     const e = await engine();
     const all = src || [...cap.chunks.values()].flat();
     const near = all.filter(p => e.kidx[p.kind] !== undefined && Math.hypot(p.x - start.x, p.z - start.z) < 2500);
@@ -315,7 +323,7 @@
     for (const p of near) {
       if (!PHYS_KINDS.includes(p.kind)) continue;
       let lay;
-      try { lay = e.layout(p, land); } catch { continue; }
+      try { lay = src || land !== undefined ? e.layout(p, land) : layOf(e, p); } catch { continue; }
       if (!lay || !lay.path || lay.path.length < 2) continue;
       // layouts come back in world coordinates: path rows are [s, x, z]
       const pts = lay.path.map(q => [q[1], q[2]]);
@@ -331,7 +339,7 @@
         const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
         const t = Math.max(0, Math.min(1, ((start.x - ax) * dx + (start.z - az) * dz) / L2));
         const d = Math.hypot(start.x - (ax + dx * t), start.z - (az + dz * t));
-        const hd = Math.abs(wrapA(Math.atan2(dz, dx) - start.heading));
+        const hd = Math.abs(wrapA(Math.atan2(dz, dx) + (back ? Math.PI : 0) - start.heading));
         if (d + hd * 2 < best) { best = d + hd * 2; cur = s; }
       }
     }
@@ -341,12 +349,13 @@
     let gapAfter = [];
     while (cur && chain.length < 600) {
       chain.push(cur); used.add(cur);
-      const [ex, ez, eh] = cur.end;
-      const jump = cur.p.kind === 'takeoff';
       let nxt = null, score = Infinity;
       for (const s of segs) {
         if (used.has(s)) continue;
-        const [lx, lz, lh] = s.lead;
+        // (back: the piece s whose end leads onto this one, as forward this one would go on to s)
+        const a = back ? s : cur, b = back ? cur : s;
+        const [ex, ez, eh] = a.end, jump = a.p.kind === 'takeoff';
+        const [lx, lz, lh] = b.lead;
         const dx = lx - ex, dz = lz - ez;
         const f = dx * Math.cos(eh) + dz * Math.sin(eh);
         const lat = -dx * Math.sin(eh) + dz * Math.cos(eh);
@@ -359,7 +368,7 @@
         const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
         if (sc < score) { score = sc; nxt = s; }
       }
-      gapAfter.push(nxt && jump ? 1 : 0);
+      gapAfter.push(nxt && (back ? nxt : cur).p.kind === 'takeoff' ? 1 : 0);
       cur = nxt;
     }
     // resample into 1 m steps, starting from the point nearest the start
@@ -373,9 +382,18 @@
       hx = x; hz = z; raw.push([x, z, kd]);
     };
     let n0 = 0;
+    // (the wrong way round: each piece from its end back along its points, flown onto over the gap after the one
+    // before when there is one; a point's kind is that of the way from the point before)
+    const flip = { takeoff: 'landing', landing: 'takeoff' };
     chain.forEach((s, ci) => {
-      for (const q of s.pts) add(q[0], q[1], s.p.kind);
-      add(s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind, s.end[2]);
+      if (back) {
+        const kd = flip[s.p.kind] || s.p.kind;
+        add(s.end[0], s.end[1], ci && gapAfter[ci - 1] ? 'air' : kd);
+        for (let i = s.pts.length - 1; i >= 0; i--) add(s.pts[i][0], s.pts[i][1], kd);
+      } else {
+        for (const q of s.pts) add(q[0], q[1], s.p.kind);
+        add(s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind, s.end[2]);
+      }
       if (!ci) n0 = raw.length;
     });
     // the line starts on the first piece (a line that goes round comes back past the start)
@@ -406,44 +424,144 @@
     };
   }
 
-  // The line that goes on from the end of line R: one starting at most ONWARD_GAP metres in front of its end, going
-  // roughly the same way (the ground between is ridden straight). With none that near there is none, so the bike
-  // never heads off where there is no track. seen(x, z) tells the ground already ridden: a line mostly over it is not
-  // taken. The line found starts where R ends (a simulation lays the ground between as its run-in).
-  const ONWARD_GAP = 60;
-  async function nextLine(R, seen) {
-    const N = R.length, ex = R.X[N - 1], ez = R.Z[N - 1], k = Math.max(0, N - 6);
-    const eh = Math.atan2(ez - R.Z[k], ex - R.X[k]);
+  // The lines the bike could go on to from line R, best first (at most max). Any line with a piece within ONWARD_GAP
+  // metres of the end counts (or of a point of R it can turn off at, see onwardChoices), whichever way it goes:
+  // straight on, across the way the bike goes, off to a side or back round a turn, joined at its start or in its
+  // middle (only the way its pieces are ridden, and not over ground already ridden: seen(x, z)). Each gets a way onto
+  // it: a curve from where it leaves R, the way the bike is going, to a point of the line, the way the line goes
+  // there, no turn on it tighter than ONWARD_R (joinCurve). A line found starts with the run up to that curve on R,
+  // then the curve (route.join: its length); which of them the bike can really ride, at its speed, round that turn,
+  // up that slope, the simulation finds out (see ride).
+  const ONWARD_GAP = 60, ONWARD_R = 2.5;
+  // A curve from (ex, ez) going eh to (x, z) going h, a point every metre: of a few (Hermite curves, their ends'
+  // pull as long as 0.5 to 1.5 times the distance) the one with the widest tightest turn. rmin: that turn's radius;
+  // turn: how much it turns in all.
+  function joinCurve(ex, ez, eh, x, z, h) {
+    const d = Math.hypot(x - ex, z - ez);
+    let best = null;
+    for (const k of [0.5, 0.8, 1.1, 1.5]) {
+      const L = Math.max(3, d * k), P = [[ex, ez]];
+      let px = ex, pz = ez, run = 0;
+      for (let i = 1; i <= 400; i++) {
+        const t = i / 400, t2 = t * t, t3 = t2 * t, a = 2 * t3 - 3 * t2 + 1, b = t3 - 2 * t2 + t, c = -2 * t3 + 3 * t2, e = t3 - t2;
+        const qx = a * ex + b * L * Math.cos(eh) + c * x + e * L * Math.cos(h), qz = a * ez + b * L * Math.sin(eh) + c * z + e * L * Math.sin(h);
+        run += Math.hypot(qx - px, qz - pz); px = qx; pz = qz;
+        if (run >= 1) { P.push([qx, qz]); run -= 1; }
+      }
+      if (Math.hypot(x - P[P.length - 1][0], z - P[P.length - 1][1]) > 0.3) P.push([x, z]);
+      let rmin = Infinity, turn = 0;
+      for (let i = 2; i < P.length; i++) {
+        const da = Math.abs(wrapA(Math.atan2(P[i][1] - P[i - 1][1], P[i][0] - P[i - 1][0]) - Math.atan2(P[i - 1][1] - P[i - 2][1], P[i - 1][0] - P[i - 2][0])));
+        turn += da; if (da > 1e-6) rmin = Math.min(rmin, Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1]) / da);
+      }
+      if (!best || rmin > best.rmin * 1.15 || (rmin > best.rmin * 0.87 && P.length < best.P.length)) best = { P, rmin, turn };
+    }
+    return best;
+  }
+  // the pieces the physics needs around points X, Z (as buildRoute keeps them along a line)
+  function piecesNear(X, Z) {
+    const out = [];
+    for (const p of [...cap.chunks.values()].flat()) {
+      const r = p.kind === 'shape' || p.kind === 'ground' ? 70 : 35;
+      for (let i = 0; i < X.length; i += 3) if (Math.hypot(p.x - X[i], p.z - Z[i]) < r) { out.push(p); break; }
+    }
+    return out;
+  }
+  // Where the bike can turn off line R: its end, and with o (o.prof: how the plan rides R, see profileOf) every 5 m
+  // from point o.from on where the plan has the bike on the ground and off the ramps, to a line that crosses or
+  // passes near R (within ONWARD_CROSS). A way on that turns off at point e starts ONWARD_RUN metres before it, at
+  // the first point back from there on the ground (route.at; route.lead: from there to e), and at the speed the plan
+  // has there: the search then also learns how fast to come at the curve and what is after it.
+  const ONWARD_CROSS = 30, ONWARD_RUN = 25;
+  async function onwardChoices(R, seen, max, o) {
+    const N = R.length, prof = o && o.prof, from = o ? Math.max(0, o.from | 0) : N - 1;
+    const headAt = i => { const a = Math.max(0, i === N - 1 ? N - 6 : i - 3), b = Math.min(N - 1, Math.max(a + 1, i === N - 1 ? i : i + 3)); return Math.atan2(R.Z[b] - R.Z[a], R.X[b] - R.X[a]); };
+    const onGround = i => i >= 2 && i < N - 2 && !['takeoff', 'landing', 'air'].includes(R.KIND && R.KIND[i]) && [-2, -1, 0, 1, 2].every(k => !prof.air[i + k]);
+    // (not the end of a line the plan falls on before it)
+    const exits = prof && prof.prog < N - 5 ? [] : [{ i: N - 1, x: R.X[N - 1], z: R.Z[N - 1], h: headAt(N - 1), gap: ONWARD_GAP }];
+    if (prof) for (let i = from; i < Math.min(N - 8, prof.prog - 5); i += 5) if (onGround(i)) exits.push({ i, x: R.X[i], z: R.Z[i], h: headAt(i), gap: ONWARD_CROSS });
     const e = await engine(), cands = [];
     for (const p of [...cap.chunks.values()].flat()) {
-      if (!PHYS_KINDS.includes(p.kind) || e.kidx[p.kind] === undefined || Math.hypot(p.x - ex, p.z - ez) > ONWARD_GAP + 30) continue;
-      let lay;
-      try { lay = e.layout(p); } catch { continue; }
+      if (!PHYS_KINDS.includes(p.kind) || e.kidx[p.kind] === undefined || !exits.some(x => Math.hypot(p.x - x.x, p.z - x.z) <= x.gap + 30)) continue;
+      const lay = layOf(e, p);
       if (!lay || !lay.path || lay.path.length < 2) continue;
-      // the first point of the piece ahead of the bike that goes the right way (a piece may start under the line's end)
-      let c = null;
-      for (let i = 1; i < lay.path.length; i++) {
-        const x = lay.path[i][1], z = lay.path[i][2], h = Math.atan2(z - lay.path[i - 1][2], x - lay.path[i - 1][1]);
-        const dx = x - ex, dz = z - ez, f = dx * Math.cos(eh) + dz * Math.sin(eh), lat = -dx * Math.sin(eh) + dz * Math.cos(eh), dh = Math.abs(wrapA(h - eh));
-        if (f < 1 || f > ONWARD_GAP || Math.abs(lat) > 3 + 0.4 * f || dh > 0.8) continue;
-        const sc = f + 2 * Math.abs(lat) + 8 * dh;
-        if (!c || sc < c.sc) c = { x, z, h, sc };
+      // of each piece, the point the bike gets onto most easily (every 2 m along it), ridden its own way and the wrong
+      // way round (back), and where it turns off R for it: near, and not much to turn to get there and onto it; one
+      // from the end of R and one from before it, so a way on from the end is not lost to one across the line
+      for (const back of [false, true]) {
+        const c = [null, null];
+        for (let i = 1; i < lay.path.length; i++) {
+          const ax = lay.path[i - 1][1], az = lay.path[i - 1][2], bx = lay.path[i][1], bz = lay.path[i][2];
+          const h = Math.atan2(bz - az, bx - ax) + (back ? Math.PI : 0), n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 2));
+          for (let q = 0; q <= n; q++) {
+            const x = ax + (bx - ax) * q / n, z = az + (bz - az) * q / n;
+            if (seen(x, z)) continue;
+            for (const xt of exits) {
+              const d = Math.hypot(x - xt.x, z - xt.z);
+              if (d < 3 || d > xt.gap) continue;
+              const b = Math.atan2(z - xt.z, x - xt.x), guess = d + 6 * (Math.abs(wrapA(b - xt.h)) + Math.abs(wrapA(h - b))) + (back ? 5 : 0), w = xt.i === N - 1 ? 0 : 1;
+              if (!c[w] || guess < c[w].guess) c[w] = { x, z, h, guess, back, xt };
+            }
+          }
+        }
+        for (const q of c) if (q) cands.push(q);
       }
-      if (c) cands.push(c);
     }
-    cands.sort((a, b) => a.sc - b.sc);
-    let best = null;
-    for (const c of cands.slice(0, 6)) {
-      const r = await buildRoute({ id: 'onward', x: c.x, z: c.z, heading: c.h });
+    cands.sort((a, b) => a.guess - b.guess);
+    const out = [];
+    for (const c of cands.slice(0, 60)) {
+      const j = joinCurve(c.xt.x, c.xt.z, c.xt.h, c.x, c.z, c.h);
+      if (j.rmin >= ONWARD_R) c.j = j;
+    }
+    const ok = cands.filter(c => c.j).sort((a, b) => (a.j.P.length + 5 * a.j.turn) - (b.j.P.length + 5 * b.j.turn));
+    for (const c of ok.slice(0, 20)) {
+      const r = await buildRoute({ id: 'onward', x: c.x, z: c.z, heading: c.h }, undefined, undefined, c.back);
       if (!r || r.length < 25) continue;
       let old = 0, n = 0;
       for (let i = 0; i < r.length; i += 4, n++) if (seen(r.X[i], r.Z[i])) old++;
       if (old > n * 0.3) continue;
-      if (!best || r.length > best.length) best = r;
+      // the same line as one already kept (got onto elsewhere): the better way onto it is kept
+      const cells = new Set();
+      for (let i = 0; i < r.length; i += 2) cells.add(Math.round(r.X[i] / 3) + ',' + Math.round(r.Z[i] / 3));
+      const P = c.j.P.slice(0, -1), xi = c.xt.i;
+      // the run up to the curve, on R
+      let at = xi;
+      if (prof && xi - from >= 8) {
+        for (let i = Math.max(from, xi - ONWARD_RUN); i <= xi - 8; i++) if (onGround(i)) { at = i; break; }
+        if (at === xi) for (let i = Math.max(from, xi - ONWARD_RUN) - 1; i >= from && i >= xi - 2 * ONWARD_RUN; i--) if (onGround(i)) { at = i; break; }
+      }
+      r.join = P.length; r.cells = cells; r.back = c.back; r.turn = Math.round(c.j.turn * 180 / Math.PI);
+      r.at = at; r.exit = xi; r.lead = xi - at; r.cross = xi < N - 1;
+      // (a line of jumps ridden the wrong way round comes at the back of each take-off: tried after the others)
+      r.score = r.length - 0.5 * r.join - 8 * c.j.turn - (c.back && r.kinds.takeoff ? 150 : 0);
+      const twin = out.find(o => { let s = 0; for (const q of cells) if (o.cells.has(q)) s++; return s > cells.size * 0.5; });
+      if (twin) { if (twin.score >= r.score) continue; out.splice(out.indexOf(twin), 1); }
+      const RX = Array.from(R.X).slice(at, xi), RZ = Array.from(R.Z).slice(at, xi), JX = P.map(q => q[0]), JZ = P.map(q => q[1]);
+      r.X = RX.concat(JX, Array.from(r.X)); r.Z = RZ.concat(JZ, Array.from(r.Z));
+      r.KIND = (R.KIND ? Array.from(R.KIND).slice(at, xi) : RX.map(() => 'flat')).concat(P.map(() => 'flat'), Array.from(r.KIND)); r.length = r.X.length;
+      const have = new Set(r.pieces);
+      for (const p of piecesNear(RX.concat(JX), RZ.concat(JZ))) if (!have.has(p)) { have.add(p); r.pieces.push(p); }
+      r.start = { id: 'onward', x: R.X[at], z: R.Z[at], heading: headAt(at) };
+      if (prof && prof.v[at] >= 0) r.start.v = prof.v[at];
+      out.push(r);
     }
-    if (best) best.start = { id: 'onward', x: ex, z: ez, heading: eh };
-    return best;
+    return out.sort((a, b) => b.score - a.score).slice(0, max);
   }
+  // How a plan rides a line of N points, from a ride of it with its trace (a pool's replay): the speed the bike first
+  // gets to each point at (-1: before the first), whether it is in the air there, and how far it gets (prog).
+  function profileOf(run, N) {
+    if (!run || !run.trace) return null;
+    const tr = run.trace.tr, v = new Float32Array(N).fill(-1), air = new Uint8Array(N);
+    for (let i = 0; i < tr.length; i += 5) {
+      const j = Math.max(0, Math.min(N - 1, Math.floor(tr[i])));
+      if (v[j] < 0) v[j] = tr[i + 4];
+      if (tr[i + 3]) air[j] = 1;
+    }
+    for (let j = 1; j < N; j++) if (v[j] < 0) v[j] = v[j - 1];
+    return { v, air, prog: run.prog };
+  }
+  // The line a tour goes on to (extendRoute): the best of them.
+  async function nextLine(R, seen) { return (await onwardChoices(R, seen, 1))[0] || null; }
   // The ground a ride has covered, in 3 m cells: mark(line) adds a line, seen(x, z) asks about a point.
   function ground() {
     const cells = new Set();
@@ -470,10 +588,9 @@
     while (legs < TOUR_LEGS && X.length < TOUR_MAX) {
       const r = await nextLine({ X, Z, length: X.length }, g.seen);
       if (!r) break;
-      // the ground between, a point every metre
-      const ex = X[X.length - 1], ez = Z[Z.length - 1], d = Math.hypot(r.X[0] - ex, r.Z[0] - ez);
-      for (let i = 1; i < d; i++) { X.push(ex + (r.X[0] - ex) * i / d); Z.push(ez + (r.Z[0] - ez) * i / d); KIND.push('flat'); }
-      X = X.concat(Array.from(r.X)); Z = Z.concat(Array.from(r.Z)); KIND = KIND.concat(Array.from(r.KIND));
+      // (the line found starts with its way onto it, from this end on)
+      const ex = X[X.length - 1], ez = Z[Z.length - 1], from = Math.hypot(r.X[0] - ex, r.Z[0] - ez) < 0.5 ? 1 : 0;
+      X = X.concat(Array.from(r.X).slice(from)); Z = Z.concat(Array.from(r.Z).slice(from)); KIND = KIND.concat(Array.from(r.KIND).slice(from));
       for (const p of r.pieces) { const key = p.kind + p.x + ',' + p.z; if (!have.has(key)) { have.add(key); pieces.push(p); } }
       for (const [k, n] of Object.entries(r.kinds || {})) kinds[k] = (kinds[k] || 0) + n;
       g.mark(r); legs++;
@@ -1068,12 +1185,16 @@ function landsOf(){
 }
 // The controls past the end of the line, as the AI rides on in the game when it sees no line ahead (see ride):
 // straight on the way the line ended at about 6 m/s, in the air the plan's own angle for the landing (inp, what the
-// rider asked for), and once ridden out (halt) the brakes to a stop.
+// rider asked for), and once on the ground half a second (halt) the brakes to a stop.
 function tailInp(s,inp,halt){
   const n=R.length,k=Math.max(0,n-6),h=Math.atan2(R.Z[n-1]-R.Z[k],R.X[n-1]-R.X[k]),v=s[8],air=s[12]>0;
   const st=Math.round((air?0:clamp(2*wrapA(h-s[3]),-1,1))*127),ln=air?inp[3]:0;
-  return noPedals(halt?[0,air?0:v>1.5?70:127,st,ln,0,0,0]:[v<6?127:0,v>9?40:0,st,ln,0,0,0]);
+  return noPedals(halt?[0,tailBrake(s),st,ln,0,0,0]:[v<6?127:0,v>9?40:0,st,ln,0,0,0]);
 }
+// The brakes, coming to a stop past the end: only going forwards, and hard only where the bike is level. Braking
+// while it rolls back tips it over backwards (real rides flipped so: held on the way up a ramp, and braking gently
+// rolling back at 4 m/s), so rolling back it is off the brakes, and it settles where it is level going to and fro.
+function tailBrake(s){const v=s[8],p=s[4];if(s[12]>0||v<=0)return 0;if(Math.abs(p)>=0.15)return p>0?70:40;return v>1.5?70:127}
 function Ep(P,opt){
   opt=opt||{};spawn();
   const s=state(),N=R.length,c0=coach();
@@ -1082,7 +1203,7 @@ function Ep(P,opt){
   // height, pitch, in air, speed] (tr) plus trick and crash events (ev)
   const E={P,N,until:opt.until||1e9,t:0,idx:0,prog:0,pts:0,seq:s[16],stall:0,crash:0,end:'hết giờ',done:null,
     maxT:Math.min(120000,Math.round(N/2.5*60)+600),vr:new Float32Array(N),tricks:{},pending:null,manualM:0,landT:-1e9,jumps:0,landAt:-1,lastJ:-1,
-    progAt:0,progT:0,jl:[],game:0,streak:0,airP:0,tail:-1,calm:0,halt:0,manRun:0,manBest:0,push:null,goodPumps:0,pumpGain:0,seenPump:c0?c0[0]:0,
+    progAt:0,progT:0,jl:[],game:0,streak:0,airP:0,tail:-1,calm:0,halt:0,held:-1,vTail:0,manRun:0,manBest:0,push:null,goodPumps:0,pumpGain:0,seenPump:c0?c0[0]:0,
     tr:opt.rec?[]:null,ev:opt.rec?[]:null};
   E.rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
   return E;
@@ -1107,19 +1228,23 @@ function go(E,stop){
         E.push=c?newPush(u):null}}
     const idx=E.idx=rider.idx;if(idx>E.prog){for(let i=E.prog+1;i<=idx;i++)E.vr[i]=Math.abs(s[8]);E.prog=idx}
     // Past the end the bike rides on as the AI does in the game when it sees no line to go on to (tailInp): the ride
-    // is through once the bike has come down, ridden it out and braked to a stop, so a plan does not end on a jump it
-    // would crash out of. A Training drill ends at its finish, as the game ends it.
-    if(idx>=N-3&&E.tail<0){if(R.drill){E.end='về đích';E.pts+=150;return fin(E,s)}E.tail=t}
+    // is through once the bike has come down, been on the ground half a second (calm: since when) and braked to a
+    // stop, so a plan does not end on a jump it would crash out of. A Training drill ends at its finish, as the game
+    // ends it.
+    E.calm=air?0:E.calm+1;
+    if(idx>=N-3&&E.tail<0){if(R.drill){E.end='về đích';E.pts+=150;return fin(E,s)}E.tail=t;E.vTail=+Math.abs(s[8]).toFixed(2)}
+    // Stopped (level, see tailBrake), the brakes are held a second more, as the AI keeps them on in the game: only a
+    // bike that stays up there has finished.
     if(E.tail>=0){
-      E.calm=air?0:E.calm+1;
-      if(!E.halt&&((E.calm>=30&&t-E.tail>=45)||(!air&&s[8]<-0.3)))E.halt=1;
-      if((E.halt&&!air&&Math.abs(s[8])<0.5)||t-E.tail>=420){E.end='về đích';E.pts+=150;return fin(E,s)}
-      inp=tailInp(s,inp,E.halt);
+      if(!E.halt&&(E.calm>=30||(!air&&s[8]<-0.3)))E.halt=1;
+      if(E.held<0&&E.halt&&!air&&Math.abs(s[8])<0.5&&Math.abs(s[4])<0.15)E.held=t;
+      if((E.held>=0&&t-E.held>=60)||t-E.tail>=420){E.end='về đích';E.pts+=150;return fin(E,s)}
+      inp=E.held>=0?noPedals([0,127,0,0,0,0,0]):tailInp(s,inp,E.halt);
     }else if(rider.off>7&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
     if(idx>=E.until){E.end='đạt mốc';return fin(E,s)}
     if(rider.landed){E.landT=t;if(s[14]>0.3)E.landAt=t}
     if(E.landAt>=0&&t-E.landAt>=45){if(idx>E.lastJ+3){E.pts+=15;E.jumps++;E.lastJ=idx}E.landAt=-1}
-    if(E.prog>E.progAt){E.progAt=E.prog;E.progT=t}else if(t-E.progT>480){E.end='kẹt';E.pts-=25;return fin(E,s)}
+    if(E.prog>E.progAt){E.progAt=E.prog;E.progT=t}else if(E.tail<0&&t-E.progT>480){E.end='kẹt';E.pts-=25;return fin(E,s)}
     l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);
     s=state();
     if(rec&&t%2===0){const j=Math.min(N-2,idx),dx=R.X[j+1]-R.X[j],dz=R.Z[j+1]-R.Z[j];
@@ -1151,7 +1276,7 @@ function go(E,stop){
     if(pd&&t-pd.t>=30){const k=Object.keys(pd.got);let p=0;for(const n of k){p+=n==='whip'?pd.got[n]:TP[n]*pd.got[n];E.tricks[n]=(E.tricks[n]||0)+(n==='whip'?1:pd.got[n])}
       p*=1+0.5*(k.length-1);E.pts+=p;if(rec)E.ev.push({t:pd.t,got:pd.got,p:Math.round(p)});E.pending=null}
     if(s[46]>0&&!(s[12]>0)){const m=Math.abs(s[8])/60;E.manualM+=m;E.pts+=m*10;if(++E.manRun>E.manBest)E.manBest=E.manRun}else E.manRun=0;
-    if(Math.abs(s[8])<0.6&&!(s[12]>0)){if(++E.stall>150){E.end='đứng lại';E.pts-=25;return fin(E,s)}}else E.stall=0;
+    if(E.tail<0&&Math.abs(s[8])<0.6&&!(s[12]>0)){if(++E.stall>150){E.end='đứng lại';E.pts-=25;return fin(E,s)}}else E.stall=0;
   }
   return fin(E,state());
 }
@@ -1165,8 +1290,9 @@ function summary(E,s,final){
   // closer to making it. Without this every try that fails at a steep ramp scores the same, and learning has nothing
   // to go by there.
   const pace=0.05*Math.min(20,E.vr[Math.max(0,prog-5)]);
-  // vEnd: the speed at the end; vAvg: the mean speed along the line (m/s)
-  const vEnd=+Math.abs(s[8]).toFixed(2),vAvg=+(prog/Math.max(1,t)*60).toFixed(2);
+  // vEnd: the speed at the end of the line (where a line ridden on to starts, before the bike brakes past it); vAvg:
+  // the mean speed along the line (m/s)
+  const vEnd=E.tail>=0?E.vTail:+Math.abs(s[8]).toFixed(2),vAvg=+(prog/Math.max(1,t)*60).toFixed(2);
   const res={fit:prog+E.pts+pace,prog,pts:Math.round(E.pts),crash:E.crash,end:final?E.end:'đang đi',tricks,ticks:t,sec,crashSec,jumps:E.jumps,game:E.game,streak:E.streak,jl:E.jl.slice(),vEnd,vAvg,goodPumps:E.goodPumps,pumpGain:+E.pumpGain.toFixed(2)};
   if(R.drill)res.goal=drillGoal(R.drill,final?E.end:'về đích',Math.abs(s[8]),E.jl,E.manBest,E.goodPumps,R.lands&&R.drill.kind==='clean'?R.lands.length:0);
   return res;
@@ -3068,6 +3194,8 @@ onmessage=async e=>{const m=e.data;
       const rider = makeRider(R, geo.H, secs, plan);
       // (vEnd: the speed the plan comes to the end of the line at, where the next line is planned from)
       const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, vEnd, tricks: 0, swaps: 0 };
+      // (how the plan rides the line: where the ways on can turn off it, and how fast the bike is there)
+      d.profP = (now ? trainer.pool : ctx.pool).replay(plan).then(r => profileOf(r, R.length)).catch(() => null);
       if (now) d.takeNewer = swapper(trainer, plan, rider, secs, () => { d.swaps++; d.expect = trainer.best.prog; });
       ride(d, R);
     }
@@ -3153,25 +3281,40 @@ onmessage=async e=>{const m=e.data;
       if (!styles) await getUp(!!o.drill);
       go();
     }
-    // Past the end of the line (and of its tour, see extendRoute) the AI rides on into the next line ahead, and the one
-    // after, for as long as it sees one: every 2 s it looks for the line after the last one it knows (nextLine; the game
-    // loads the ground ahead as the bike goes), up to two lines ahead. As soon as a line is found its plan is searched
-    // for in the background (a Trainer of its own, LEG_WORKERS threads), from where the bike will come onto it and at
-    // the speed the plan before says the bike will have there; the search goes on while the bike rides it, and a better
-    // plan is taken on the way (swapper). The shared brain rides a line whose plan is not ready yet. Past the end with no
-    // line found the bike rides on straight, still looking, and brakes to a stop once ONWARD_GAP further on.
-    const ONWARD_LEGS = 200, LEG_WORKERS = Math.max(2, Math.floor(workers / 2));
+    // Past the end of the line (and of its tour, see extendRoute) the AI rides on, for as long as it sees a way on.
+    // While the bike rides a line, every 2 s it looks for the ways on (onwardChoices: any line near its end, or crossing
+    // or passing it further than ONWARD_LEAD metres ahead of the bike, whichever way it goes, with a curve onto it; the
+    // game loads the ground ahead as the bike goes), and keeps up to ONWARD_OPTS of them. Each is tried in the
+    // background at once (a search of its own, on a share of the threads: LEG_WORKERS while the line is being learned
+    // too), from where its run up to the curve
+    // starts (route.at) and at the speed the plan has the bike there. When the bike gets there, it goes that way if the
+    // simulation rides further on it than the plan does on this line (leg.worth, stays): a way that turns off before
+    // the end needs ONWARD_KEEP metres more, one at the end only to be ridden well onto. The search goes on while the
+    // bike rides it, and a better plan is taken on the way (swapper). With no way taken at the end, the bike comes down
+    // and brakes to a stop, as the simulation rides every line's end.
+    const ONWARD_LEGS = 200, ONWARD_OPTS = 3, ONWARD_LEAD = 30, ONWARD_KEEP = 15, LEG_WORKERS = Math.max(2, Math.floor(workers / 2));
     const quiet = new Proxy({}, { get: () => () => {} });
-    function newLeg(route, d) {
+    function newLeg(route, d, n) {
       const T = new Trainer(quiet), leg = { route, T };
       T.temp = true; T.library = trainer.library || []; T.brainW = brain.gen ? brain.best.slice() : null;
-      T.prepare(route, LEG_WORKERS).then(() => {
+      T.prepare(route, n || LEG_WORKERS).then(() => {
         if (d.over) { T.pool.close(); return; }
         // (a line the saved states do not work on keeps the plan it starts with)
         T.run().catch(err => console.error(err));
       }).catch(err => { if (!d.over) console.error(err); leg.failed = true; });
       return leg;
     }
+    // How good a way on is, as far as its search has got (null: not ready to ride, or not worth riding): how far from
+    // where it starts the bike gets on it, 50 m more if to its end, then the game's points. A way the bike falls on
+    // within 20 m of getting onto it is no way on.
+    function worth(leg) {
+      const T = leg.T, b = T.best, lr = leg.route;
+      if (leg.failed || !T.geo || !b) return null;
+      const runIn = T.N - lr.length, on = b.prog - runIn - (lr.lead || 0) - lr.join;
+      if (b.end !== 'về đích' && on < 20) return null;
+      return b.prog - runIn + (b.end === 'về đích' ? 50 : 0) + b.game / 100;
+    }
+    const stopLeg = l => { l.T.stop(); if (l.T.pool) l.T.pool.close(); };
     // Hands the bike to rider d.rider on line R: back to the start, then its controls replace yours on every step.
     function ride(d, R) {
       const st = d.route.start;
@@ -3185,45 +3328,64 @@ onmessage=async e=>{const m=e.data;
         live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
         live.ex.trails_game_reset(live.g);
       }
-      let t = 0, seq = null, rider = d.rider, cur = null, coast = null, finding = null;
+      // (calm: steps on the ground since the bike last came down)
+      let t = 0, seq = null, rider = d.rider, cur = null, coast = null, finding = null, calm = 0;
       // the ground ridden or to be ridden in this run, so a line ahead that goes back over it is not taken
-      const { mark, seen } = ground(), w = brain.best.slice(), ahead = [];
-      // the line after the last one known: after the one ridden now from the speed its plan ends at, after one found
-      // once its search has a plan (and so a speed at its end). Gives back whether there is a line to go on to.
+      // ahead: the ways on from the end of the line ridden now, each being tried (see worth)
+      const { mark, seen } = ground();
+      let ahead = [];
+      const tried = new Set();
+      const live1 = () => ahead.filter(l => !l.failed);
+      // More ways on from the line ridden now, up to ONWARD_OPTS (each from the speed the plan has the bike at where it
+      // starts, or with no plan known the speed it ends at)
       const look = () => {
-        if (finding) return finding;
-        if (d.over || d.route.practice || d.route.drill) return Promise.resolve(ahead.length > 0);
-        const last = ahead[ahead.length - 1];
-        if (ahead.length >= 2 || d.legs + ahead.length >= ONWARD_LEGS || (last && !(last.T.best && last.T.best.end === 'về đích'))) return Promise.resolve(ahead.length > 0);
-        const from = last ? last.route : R, v = last ? last.T.best.vEnd : (cur ? cur.T.best && cur.T.best.vEnd : d.vEnd);
-        return (finding = (async () => {
+        if (finding || d.over || d.route.practice || d.route.drill || d.legs >= ONWARD_LEGS || live1().length >= ONWARD_OPTS) return;
+        const from = R, v = cur ? cur.T.best && cur.T.best.vEnd : d.vEnd, at = rider.idx + ONWARD_LEAD;
+        finding = (async () => {
           try {
-            const r = await nextLine(from, seen);
-            if (r && !d.over) { r.start.v = Math.max(0, v || 0); mark(r); ahead.push(newLeg(r, d)); }
+            const prof = await d.profP;
+            const got = await onwardChoices(from, seen, ONWARD_OPTS, { from: at, prof });
+            for (const r of got) {
+              if (d.over || from !== R || live1().length >= ONWARD_OPTS) break;
+              // (one being tried already: the same line, got onto elsewhere)
+              if (ahead.some(l => { let s = 0; for (const q of r.cells) if (l.route.cells.has(q)) s++; return s > r.cells.size * 0.5; })) continue;
+              if (r.start.v === undefined) r.start.v = Math.max(0, v || 0);
+              // (all the threads but one when the line is not being learned meanwhile)
+              ahead.push(newLeg(r, d, Math.max(2, Math.floor((learning ? LEG_WORKERS : workers - 1) / ONWARD_OPTS))));
+            }
           } catch (err) { console.error(err); } finally { finding = null; }
-          return ahead.length > 0;
-        })());
+        })();
       };
       const finder = setInterval(look, 2000);
+      // the ways on being tried, as the simulation has them so far
+      d.ways = () => ahead.map(l => ({ m: l.route.length, at: l.route.at, exit: l.route.exit, join: l.route.join, back: !!l.route.back, turn: l.route.turn, v: l.route.start.v, ready: !!l.T.geo, best: l.T.best && [l.T.best.prog, l.T.best.end, l.T.best.game], worth: worth(l), failed: !!l.failed }));
+      // how far the plan rides this line from point i on
+      const stays = i => Math.max(0, Math.min(R.length, cur ? (cur.T.best ? cur.T.best.prog - (cur.T.N - cur.route.length) : 0) : d.expect) - i);
       d.cleanup = () => {
         d.over = true; clearInterval(finder);
-        for (const l of ahead.concat(cur ? [cur] : [])) { l.T.stop(); if (l.T.pool) l.T.pool.close(); }
+        for (const l of ahead.concat(cur ? [cur] : [])) stopLeg(l);
       };
       mark(R); look();
-      // onto line leg from the point of it nearest the bike: its plan rides when the search has one, else the brain
+      // onto line leg (its plan, learned so far) from the point of it nearest the bike
       const handOver = (leg, s) => {
         const T = leg.T, g = T.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length, PZ: g.PZ };
-        let r2;
-        if (T.best) { const plan = clonePlan(T.plan); r2 = makeRider(R2, g.H, T.secs, plan); d.takeNewer = swapper(T, plan, r2, T.secs, () => d.swaps++); d.who = 'AI'; }
-        else { r2 = makeBrainRider(R2, g.H, w); d.takeNewer = null; d.who = 'Bộ não'; }
+        const plan = clonePlan(T.plan), r2 = makeRider(R2, g.H, T.secs, plan);
+        d.takeNewer = swapper(T, plan, r2, T.secs, () => d.swaps++); d.who = 'AI';
+        d.profP = T.pool.replay(plan).then(r => profileOf(r, R2.length)).catch(() => null);
         let bi = 0, bd = Infinity;
         for (let i = 0; i < Math.min(R2.length, 80); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
         r2.idx = bi;
-        // the line left behind: its search is over
-        if (cur) { cur.T.stop(); cur.T.pool.close(); }
-        cur = leg;
+        const b = T.best, lr = leg.route, runIn = T.N - lr.length, onNew = lr.length - (lr.lead || 0) - lr.join;
+        const left = stays(lr.at);
+        log(`Đi tiếp sang đường thứ ${d.legs + 2} (chọn 1 trong ${ahead.length} hướng AI đã thử)${lr.cross ? `, rẽ ngang khi đường đang đi còn ${R.length - lr.exit} m` : ''}: ${lr.join} m đường cong nối, quay ${lr.turn}°${lr.back ? ', chạy ngược chiều đường' : ''}, vào cua ở ${(lr.start.v * 3.6).toFixed(0)} km/h; trong mô phỏng ${b.end === 'về đích' ? 'đi hết' : `đi được ${Math.max(0, b.prog - runIn - (lr.lead || 0) - lr.join)} m của`} đường mới dài ${onNew} m${lr.cross ? ` (đi thẳng tiếp chỉ được ${left} m)` : ''}.`);
+        // the line left behind and the ways not taken: their searches are over
+        if (cur) stopLeg(cur);
+        for (const l of ahead) if (l !== leg) stopLeg(l);
+        ahead = []; tried.clear();
+        cur = leg; mark(leg.route);
         d.base += (coast ? coast.at : rider.idx) - bi; d.legs++; coast = null;
         R = R2; rider = d.rider = r2;
+        look();
       };
       d.step = () => {
         try {
@@ -3242,32 +3404,51 @@ onmessage=async e=>{const m=e.data;
             }
           }
           if (d.takeNewer && t % 30 === 0) d.takeNewer();
-          // at the end of the line: on to the next one as soon as it is ready to ride (its ground known)
-          if (coast || rider.idx >= R.length - 3) {
-            const leg = ahead[0];
-            if (leg && leg.T.geo) { ahead.shift(); handOver(leg, s); look(); }
-            else if (leg && leg.failed) ahead.shift();
+          calm = s[12] > 0 ? 0 : calm + 1;
+          // where a way on starts (on the ground, as it was planned from): take the best one there if the simulation
+          // rides further on it than the plan on this line; the ways whose start the bike has passed are over (at the
+          // end: in the first moment of riding past it)
+          if (!(s[12] > 0) && (!coast || t - coast.t0 < 10)) {
+            let best = null, bw = -Infinity;
+            for (const l of ahead) {
+              const lr = l.route, at = Math.min(lr.at, R.length - 3);
+              if (rider.idx < at) continue;
+              const v = worth(l);
+              if (v !== null && v > stays(lr.at) + (lr.cross ? ONWARD_KEEP : 0) && v > bw) { bw = v; best = l; }
+            }
+            if (best) handOver(best, s);
           }
+          ahead = ahead.filter(l => {
+            const at = Math.min(l.route.at, R.length - 3);
+            if (coast ? t - coast.t0 < 10 : rider.idx <= at + 3) return true;
+            // (the lines the bike could have gone on to from the end, each once however often it was tried)
+            if (!l.route.cross) { const lr = l.route, i = (lr.lead || 0) + lr.join; tried.add(Math.round(lr.X[i] / 6) + ',' + Math.round(lr.Z[i] / 6)); }
+            stopLeg(l); return false;
+          });
           let inp;
           if (!coast && rider.idx >= R.length - 3) {
-            // no line ready yet: ride on the way the line ended while one is being got ready; with none ahead, come down
-            // from the last jump, ride it out and brake to a stop, as a rider does who sees no way on
+            // no way on taken: come down from the last jump and brake to a stop, as a rider does who sees no way on
             const n = R.length, k = Math.max(0, n - 6);
-            const c = coast = { x: s[0], z: s[2], h: Math.atan2(R.Z[n - 1] - R.Z[k], R.X[n - 1] - R.X[k]), at: rider.idx, t0: t, calm: 0, none: false, halt: false };
-            look().then(any => { if (!any) c.none = true; });
+            coast = { h: Math.atan2(R.Z[n - 1] - R.Z[k], R.X[n - 1] - R.X[k]), at: rider.idx, t0: t, halt: false };
           }
           if (coast) {
             // (the same controls as the simulation's past the end, tailInp)
-            const v = s[8], air = s[12] > 0, far = Math.hypot(s[0] - coast.x, s[2] - coast.z);
-            coast.calm = air ? 0 : coast.calm + 1;
-            // no line ahead once ridden out, too far on, or rolling back down a slope it cannot get up
-            if (!coast.halt && ((coast.none && coast.calm >= 30 && t - coast.t0 >= 45) || far > ONWARD_GAP || (!air && v < -0.3))) coast.halt = true;
-            if (coast.halt && !air && Math.abs(v) < 0.5) {
-              if (!coast.parked) { coast.parked = true; setTimeout(() => stopDrive('không còn thấy đường nào phía trước', false, true, true), 0); }
+            const v = s[8], air = s[12] > 0;
+            // on the ground half a second, or rolling back down a slope it cannot get up
+            if (!coast.halt && (calm >= 30 || (!air && v < -0.3))) coast.halt = true;
+            // (stopped where it is level: see tailBrake)
+            if ((coast.halt && !air && Math.abs(v) < 0.5 && Math.abs(s[4]) < 0.15) || coast.parked) {
+              if (!coast.parked) {
+                coast.parked = true;
+                const why = tried.size ? `${tried.size} hướng đi tiếp AI tìm thấy đều không qua được trong mô phỏng` : 'không còn thấy đường nào phía trước';
+                setTimeout(() => stopDrive(why, false, true, true), 0);
+              }
               return [0, 127, 0, 0, 0, 0, 0];
             }
             const st = air ? 0 : clamp(2 * wrapA(coast.h - s[3]), -1, 1), own = rider.step(s, t++), ln = air ? own[3] : 0;
-            inp = coast.halt ? [0, air ? 0 : v > 1.5 ? 70 : 127, Math.round(st * 127), ln, 0, 0, 0] : [v < 6 ? 127 : 0, v > 9 ? 40 : 0, Math.round(st * 127), ln, 0, 0, 0];
+            // (the brakes as the simulation's, tailBrake)
+            const p = s[4], brake = air || v <= 0 ? 0 : Math.abs(p) >= 0.15 ? (p > 0 ? 70 : 40) : v > 1.5 ? 70 : 127;
+            inp = coast.halt ? [0, brake, Math.round(st * 127), ln, 0, 0, 0] : [v < 6 ? 127 : 0, v > 9 ? 40 : 0, Math.round(st * 127), ln, 0, 0, 0];
           } else {
             inp = rider.step(s, t++).slice();
             if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive('lạc khỏi đường'), 0); return null; }
@@ -3276,7 +3457,7 @@ onmessage=async e=>{const m=e.data;
           if (drill && !drill.pedals) inp[0] = 0;
           if (badge && t % 15 === 0) {
             const m = Math.max(0, d.base + (coast ? coast.at : rider.idx));
-            badge.firstChild.textContent = coast ? (coast.halt ? `Không còn thấy đường phía trước, đang dừng lại · ${m} m` : `${d.who} đang tìm đường tiếp · ${m} m`) : `${d.who} đang lái · ${m} m${d.legs ? ` · đường thứ ${d.legs + 1}` : ''}${ahead.length ? ` · đã thấy ${ahead.length} đường phía trước` : ''}${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
+            badge.firstChild.textContent = coast ? `Không còn hướng đi tiếp, đang dừng lại · ${m} m` :`${d.who} đang lái · ${m} m${d.legs ? ` · đường thứ ${d.legs + 1}` : ''}${ahead.length ? ` · đang thử ${ahead.length} hướng đi tiếp` : ''}${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
           }
           return inp;
         } catch (err) {
@@ -3414,7 +3595,7 @@ onmessage=async e=>{const m=e.data;
       open() { el.style.display = ''; },
       // the extension found a newer AI on GitHub and kept it for the next page load
       newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
-      cap, trainer, brain, drill, buildRoute, practiceLine, findTracks, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
+      cap, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
     };
     if (window.__taiNewer) window.TrailsAI.newer();
     setTimeout(findTracks, 1500);

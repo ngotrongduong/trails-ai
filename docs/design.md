@@ -103,29 +103,44 @@ like the rest.
 The rider follows the plan as before (steering, speed, the angle in the air, pumps,
 tricks). New:
 
-- **Trail finder.** From the end of the last line known, every piece the game has loaded
-  around it is laid out; the ridable paths ahead (within 60 m, going roughly the same way,
-  not mostly over ground already ridden or planned in this run) are scored and the longest
-  of the best six is built into the next line. It can join a line in its middle, not only
-  at a start. It looks again every 2 s while riding (the game loads the ground ahead as
-  the bike goes), up to two lines ahead.
-- **Planning ahead while riding.** As soon as a line is found, its plan is searched for
-  in the background (a search of its own on half the threads), from where the bike will
-  come onto it and at the speed the plan before says the bike will have there (the
-  simulation starts the bike there with that speed). The search goes on while the bike
-  rides the line, and a better plan is taken on the way when it rides the part already
-  passed the same way. The line after it is looked for once its plan gets to its end.
-- **Hand-over.** At the joint the rider switches to the new line and plan without
-  stopping; the shared brain rides a line whose plan is not ready yet. Past the end with
-  a line found but not ready the bike rides on straight at about 6 m/s.
-- **No trail ahead.** With none found, the bike comes down from the last jump, rides it
-  out (0.5 s on the ground, 0.75 s past the end) and brakes to a stop, at once if it
-  starts rolling back down a slope; then it keeps the brakes on until the player takes
-  the bike back. The simulation rides every line's end the same way, and a ride counts
-  as finished only once the bike has stopped: before, it stopped counting at the line's
-  end, and a lesson that "finished" crashed right after it in the game (it pedalled on
-  up the back of a landing, rolled back and fell). The ride goes on until a fall, or
-  until there is no trail ahead.
+- **Trail finder.** Every 2 s while riding (the game loads the ground ahead as the bike
+  goes), every piece the game has loaded is laid out, and each one's easiest point to get
+  onto (every 2 m along it) is found, ridden its own way or the wrong way round. The bike
+  can turn off the line it rides at its end (to a line within 60 m) or, more than 30 m
+  ahead of the bike, at any point every 5 m where the plan has it on the ground off the
+  ramps (to a line within 30 m: one that crosses or passes near it). The way onto a line
+  is a curve from there, the way the bike goes, to that point, the way the line goes, with
+  no turn tighter than 2.5 m (Hermite curves, the widest of a few). Lines mostly over ground
+  already ridden in this run are left out, and so are jump lines ridden the wrong way
+  round, unless nothing else is found (the bike would come at the back of each take-off).
+  This replaced a finder that joined lines only at their end and only roughly straight on:
+  in the game, a line that ended facing a ramp of another line, joined in its middle, was
+  "no trail ahead".
+- **Trying the ways on.** Up to three ways on are searched for in the background at once
+  (a search of their own each, sharing half the threads). Each starts 25 m before its
+  curve, at a point where the plan has the bike on the ground, at the speed the plan has
+  there (the simulation starts the bike there with that speed). Its search then also
+  learns how fast to come at the curve, and whether the slope or the jump after it needs
+  more speed. Speed, turns and slopes are judged by the game's own physics, not guessed.
+  Starting at the end of the line, with no run-up, every way on from one line fell within
+  23 m: the bike came into a dip and a step 4 m on at the speed the plan ended at.
+- **Choosing at the turn-off.** When the bike gets to where a way on starts, it goes that
+  way if the simulation rides it further than the plan rides on along this line: 15 m
+  further for a turn-off before the end, and for any, at least 20 m past its curve. Of
+  several, the one ridden furthest (to its end counts 50 m more). The search goes on
+  while the bike rides it, a better plan is taken on the way when it rides the part
+  already passed the same way, and the ways on from it are looked for.
+- **No way on.** With none taken, the bike comes down from the last jump and, after half
+  a second on the ground, brakes to a stop; then it keeps the brakes on until the player
+  takes the bike back, and says whether it saw no line, or saw some that all fell in the
+  simulation. It brakes only going forwards, and hard only where it is level: braking
+  while it rolls back tips it over backwards. Two real rides flipped so, one held on the
+  brakes on the way up a ramp, one braking gently rolling back at 4 m/s. The simulation
+  rides every line's end the same way, and a ride counts as finished only once the bike
+  has stopped where it is level and stayed up a second on the brakes. Before, it stopped
+  counting at the line's end, and a lesson that "finished" crashed right after it in the
+  game (it pedalled on up the back of a landing, rolled back and fell). The ride goes on
+  until a fall, or until there is no way on.
 - **Later: correcting on the way.** If the real ride comes into a section much slower or
   faster than the plan expected, the rest of the line could be planned again from there
   (from a saved state made from the real bike's). Not done yet: the game and the
