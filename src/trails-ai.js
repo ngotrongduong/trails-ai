@@ -354,6 +354,81 @@
     };
   }
 
+  // The line that goes on from the end of line R: one starting at most ONWARD_GAP metres in front of its end, going
+  // roughly the same way (the ground between is ridden straight). With none that near there is none, so the bike
+  // never heads off where there is no track. seen(x, z) tells the ground already ridden: a line mostly over it is not
+  // taken. The line found starts where R ends (a simulation lays the ground between as its run-in).
+  const ONWARD_GAP = 35;
+  async function nextLine(R, seen) {
+    const N = R.length, ex = R.X[N - 1], ez = R.Z[N - 1], k = Math.max(0, N - 6);
+    const eh = Math.atan2(ez - R.Z[k], ex - R.X[k]);
+    const e = await engine(), cands = [];
+    for (const p of [...cap.chunks.values()].flat()) {
+      if (!PHYS_KINDS.includes(p.kind) || e.kidx[p.kind] === undefined || Math.hypot(p.x - ex, p.z - ez) > ONWARD_GAP + 30) continue;
+      let lay;
+      try { lay = e.layout(p); } catch { continue; }
+      if (!lay || !lay.path || lay.path.length < 2) continue;
+      // the first point of the piece ahead of the bike that goes the right way (a piece may start under the line's end)
+      let c = null;
+      for (let i = 1; i < lay.path.length; i++) {
+        const x = lay.path[i][1], z = lay.path[i][2], h = Math.atan2(z - lay.path[i - 1][2], x - lay.path[i - 1][1]);
+        const dx = x - ex, dz = z - ez, f = dx * Math.cos(eh) + dz * Math.sin(eh), lat = -dx * Math.sin(eh) + dz * Math.cos(eh), dh = Math.abs(wrapA(h - eh));
+        if (f < 1 || f > ONWARD_GAP || Math.abs(lat) > 3 + 0.4 * f || dh > 0.8) continue;
+        const sc = f + 2 * Math.abs(lat) + 8 * dh;
+        if (!c || sc < c.sc) c = { x, z, h, sc };
+      }
+      if (c) cands.push(c);
+    }
+    cands.sort((a, b) => a.sc - b.sc);
+    let best = null;
+    for (const c of cands.slice(0, 4)) {
+      const r = await buildRoute({ id: 'onward', x: c.x, z: c.z, heading: c.h });
+      if (!r || r.length < 25) continue;
+      let old = 0, n = 0;
+      for (let i = 0; i < r.length; i += 4, n++) if (seen(r.X[i], r.Z[i])) old++;
+      if (old > n * 0.3) continue;
+      if (!best || r.length > best.length) best = r;
+    }
+    if (best) best.start = { id: 'onward', x: ex, z: ez, heading: eh };
+    return best;
+  }
+  // The ground a ride has covered, in 3 m cells: mark(line) adds a line, seen(x, z) asks about a point.
+  function ground() {
+    const cells = new Set();
+    return {
+      mark: L => { for (let i = 0; i < L.length; i += 2) cells.add(Math.round(L.X[i] / 3) + ',' + Math.round(L.Z[i] / 3)); },
+      seen: (x, z) => {
+        const a = Math.round(x / 3), b = Math.round(z / 3);
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (cells.has((a + i) + ',' + (b + j))) return true;
+        return false;
+      },
+    };
+  }
+  // A tour: the line from a start, then the lines that go on from its end (nextLine), one after another, joined by
+  // the ground between, up to TOUR_LEGS more lines and TOUR_MAX metres. The AI learns and rides the tour as one line,
+  // so a lesson also gets the lines after it right, coming at each one at the speed the line before it gives.
+  // route.tour is the number of lines joined on (0: none goes on from this one).
+  const TOUR_LEGS = 6, TOUR_MAX = 1500;
+  async function extendRoute(route) {
+    if (route.practice || route.tour !== undefined) return route;
+    const g = ground();
+    let X = Array.from(route.X), Z = Array.from(route.Z), KIND = Array.from(route.KIND), legs = 0;
+    const pieces = route.pieces.slice(), kinds = { ...route.kinds }, have = new Set(pieces.map(p => p.kind + p.x + ',' + p.z));
+    g.mark(route);
+    while (legs < TOUR_LEGS && X.length < TOUR_MAX) {
+      const r = await nextLine({ X, Z, length: X.length }, g.seen);
+      if (!r) break;
+      // the ground between, a point every metre
+      const ex = X[X.length - 1], ez = Z[Z.length - 1], d = Math.hypot(r.X[0] - ex, r.Z[0] - ez);
+      for (let i = 1; i < d; i++) { X.push(ex + (r.X[0] - ex) * i / d); Z.push(ez + (r.Z[0] - ez) * i / d); KIND.push('flat'); }
+      X = X.concat(Array.from(r.X)); Z = Z.concat(Array.from(r.Z)); KIND = KIND.concat(Array.from(r.KIND));
+      for (const p of r.pieces) { const key = p.kind + p.x + ',' + p.z; if (!have.has(key)) { have.add(key); pieces.push(p); } }
+      for (const [k, n] of Object.entries(r.kinds || {})) kinds[k] = (kinds[k] || 0) + n;
+      g.mark(r); legs++;
+    }
+    return { ...route, X, Z, KIND, length: X.length, pieces, kinds, tour: legs };
+  }
+
   // ---------------------------------------------------------------- practice lines
   // Lines like the game's Training drills, made up anew from a seed: a start hill, then tables, doubles, step-ups and
   // step-downs of many sizes, three in a row, rollers and berms. They lie where the game puts its own drills, on its
@@ -1045,23 +1120,46 @@ onmessage=async e=>{const m=e.data;
   class Trainer {
     constructor(ui) { this.ui = ui; this.running = false; this.pool = null; }
     key() { return STORE + (this.route ? this.route.start.id : 'none'); }
+    // The plan of lesson m for this line: as it is, or, learned on the line alone while this is its tour (the line and
+    // the lines after it), kept for the sections wholly on the line, fresh for the rest. Else null.
+    planOf(m) {
+      if (!m || !m.plan) return null;
+      if (planFits(m.plan, this.secs)) return m.plan;
+      const L = m.line, P = m.plan, n = P.v && P.v.length;
+      if (!this.route.tour || !L || L.tour !== undefined || !L.X || L.X.length >= this.route.length || !planFits(P, new Array(n))) return null;
+      // the line's points must be the tour's first points
+      for (let i = 0; i < L.X.length; i += 10) if (Math.abs(L.X[i] - this.route.X[i]) > 0.01 || Math.abs(L.Z[i] - this.route.Z[i]) > 0.01) return null;
+      const runIn = this.N - this.route.length, end = runIn + L.X.length - 1, out = freshPlan(this.secs);
+      let k = 0;
+      for (; k < Math.min(n - 1, this.secs.length); k++) {
+        if (this.secs[k].b >= end) break;
+        for (const key of PLAN_KEYS) out[key][k] = P[key][k];
+        if (P.vs && P.vs[k]) { if (!out.vs) out.vs = out.v.map(() => null); out.vs[k] = P.vs[k].slice(); }
+      }
+      // the first section not kept
+      this.kept = k;
+      return out;
+    }
     load() {
       let mine = null;
       try { mine = JSON.parse(localStorage.getItem(this.key()) || 'null'); } catch { mine = null; }
-      const ok = mine && planFits(mine.plan, this.secs);
-      this.plan = ok ? mine.plan : freshPlan(this.secs);
+      this.kept = 0;
+      const plan = this.planOf(mine), ok = !!plan;
+      this.plan = ok ? clonePlan(plan) : freshPlan(this.secs);
       this.gen = ok ? mine.gen : 0;
       this.hist = ok ? (mine.hist || []) : [];
       this.found = ok ? (mine.found || {}) : {};
       this.stuck = 0; this.lastProg = -1; this.alt = null;
       this.best = null;
-      return { fromTrack: !!ok };
+      return { fromTrack: !!ok, kept: ok ? this.kept : 0 };
     }
     lesson() {
       // the line is kept with the memory: rebuilt later from whatever the game has loaded, it could come out shorter
-      const { start, X, Z, KIND, pieces, kinds, length, land, practice } = this.route;
+      const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour } = this.route;
       // numbers are kept exact: the ride is so sensitive that a route rounded to the centimetre rides differently
       const line = { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length };
+      // the number of lines joined on after the line (see extendRoute)
+      if (tour !== undefined) line.tour = tour;
       // a practice line is laid on its own ground
       if (practice) Object.assign(line, { land, practice });
       return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
@@ -1087,9 +1185,10 @@ onmessage=async e=>{const m=e.data;
       this.plan = m.plan; this.best = m.bestRun; this.gen = Math.max(this.gen, m.gen || 0);
       return true;
     }
-    // A plan from elsewhere (a file, the community repo) is ridden here first and kept only if it does better.
-    async offer(plan) {
-      if (!this.pool || !planFits(plan, this.secs)) return { fits: false };
+    // A lesson from elsewhere (a file, the community repo) is ridden here first and kept only if it does better.
+    async offer(m) {
+      const plan = this.pool && this.planOf(m);
+      if (!plan) return { fits: false };
       const run = (await this.pool.evalAll([plan]))[0];
       const took = beats(run, this.best);
       if (took) { this.plan = clonePlan(plan); this.best = run; this.save(); }
@@ -1127,6 +1226,21 @@ onmessage=async e=>{const m=e.data;
         const bi = runs.reduce((b, r, i) => (beats(r, runs[b]) ? i : b), 0);
         mem.brain = { prog: got.prog, run: runs[bi] };
         if (beats(runs[bi], this.best)) { this.plan = got.plans[bi]; this.best = runs[bi]; mem.from = 'brain'; }
+      }
+      if (mem.kept && this.brainW) {
+        // a lesson learned on the line alone, now a tour: the lines joined on start from how the brain rides them
+        const got = await this.pool.brainPlan(this.brainW);
+        const mixes = got.plans.map(b => {
+          const p = clonePlan(this.plan);
+          for (let k = mem.kept; k < this.secs.length; k++) {
+            for (const key of PLAN_KEYS) p[key][k] = b[key][k];
+            if (p.vs) p.vs[k] = b.vs && b.vs[k] ? b.vs[k].slice() : null;
+          }
+          return p;
+        });
+        const runs = await this.pool.evalAll(mixes);
+        const bi = runs.reduce((b, r, i) => (beats(r, runs[b]) ? i : b), 0);
+        if (beats(runs[bi], this.best)) { this.plan = mixes[bi]; this.best = runs[bi]; }
       }
       return mem;
     }
@@ -1771,7 +1885,7 @@ onmessage=async e=>{const m=e.data;
     // Rides a lesson from elsewhere in this computer's simulation; it replaces the AI's plan only if it does better.
     const sharedSeen = new Map();
     async function useLesson(m, from, quiet) {
-      const r = await trainer.offer(m.plan);
+      const r = await trainer.offer(m);
       if (!r.fits) { if (!quiet) log(`Bài học từ ${from} được học trên một bản đồ khác của đường này nên AI không dùng được.`); return; }
       if (r.took) { log(`<b>Dùng bài học từ ${from}:</b> chạy được ${r.run.prog} m, ${Math.round(r.run.fit)} điểm, giỏi hơn AI đang có.`); showBest(trainer.best); draw(); }
       else if (!quiet) log(`Bài học từ ${from}: ${r.run.prog} m, ${Math.round(r.run.fit)} điểm. AI của bạn đang giỏi hơn nên giữ nguyên.`);
@@ -1796,8 +1910,13 @@ onmessage=async e=>{const m=e.data;
           let route = routeCache.get(o.s.id) || savedLine(o.s.id);
           if (route && lineStale(route)) { log('Đường này đã được sửa trong game từ lần học trước, AI dò lại đường.'); route = null; }
           if (!route && shared && !lineStale(shared.line)) { route = shared.line; log('Lấy bản đồ đường này từ bài học cộng đồng trên GitHub.'); }
-          if (!route) { route = await buildRoute(o.s); routeCache.set(o.s.id, route); }
+          if (!route) route = await buildRoute(o.s);
           if (!route) { say('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.'); return false; }
+          // learned as a tour, with the lines that go on from its end
+          const len0 = route.tour === undefined ? route.length : 0;
+          route = await extendRoute(route);
+          routeCache.set(o.s.id, route);
+          if (len0 && route.tour) log(`Nối thêm <b>${route.tour} đường đi tiếp</b> sau đường này (${len0} m thành ${route.length} m): AI học cả tuyến, để lúc lái thật nó đi tiếp bằng bài học.`);
           say(`Đường dài ${route.length} m, ${route.pieces.length} chi tiết. Đang nạp vật lý vào ${workers} luồng (có thể mất vài chục giây)…`);
           const t0 = performance.now();
           // jumps learned on other lines, in this browser and shared on GitHub
@@ -1812,7 +1931,7 @@ onmessage=async e=>{const m=e.data;
           else {
           introduced.add(o.s.id);
           log(`Đường mới: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
-          log(mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` : `${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
+          log(mem.kept ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này (${mem.kept} đoạn đầu), học tiếp các đường nối thêm.` : mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` :`${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
           if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu” (trong mục Chi tiết).');
           if (!trainer.library.length) log('Chưa có kinh nghiệm cú nhảy từ đường nào khác. Học xong đường này thì những đường sau sẽ mượn được.');
           else if (!mem.alike) log(`Kho kinh nghiệm có ${trainer.library.length} cú nhảy từ các đường khác, nhưng chưa cú nào giống cú nhảy của đường này.`);
@@ -1860,10 +1979,14 @@ onmessage=async e=>{const m=e.data;
 
     // ---- the shared brain
     // The line from a start: this browser's memory if still right, else the pieces the game has loaded.
-    async function lineFor(s) {
+    // With tour, the line with the lines that go on from it (what the AI learns and rides from a start in the list);
+    // the brain's lines need only the first metres of each.
+    async function lineFor(s, tour) {
       let route = routeCache.get(s.id) || savedLine(s.id);
       if (route && lineStale(route)) route = null;
-      if (!route) { route = await buildRoute(s); if (route) routeCache.set(s.id, route); }
+      if (!route) route = await buildRoute(s);
+      if (route && tour) route = await extendRoute(route);
+      if (route) routeCache.set(s.id, route);
       return route;
     }
     // Lines for the brain, up to BRAIN_LINES: every line learned in this browser, then the lines from the starts nearest
@@ -2176,7 +2299,9 @@ onmessage=async e=>{const m=e.data;
     let rideCtx = null;
     async function lineCtx(o) {
       if (rideCtx && rideCtx.id === o.s.id && JSON.stringify(rideCtx.setup) === JSON.stringify(riderSetup())) return rideCtx;
-      const route = trainer.route && trainer.route.start.id === o.s.id ? trainer.route : await lineFor(o.s);
+      // a lesson learned on the line alone (before tours) drives that line as learned, and the brain rides on after it
+      const L = savedLine(o.s.id), alone = L && L.tour === undefined && !L.practice && !lineStale(L) ? L : null;
+      const route = trainer.route && trainer.route.start.id === o.s.id ? trainer.route : alone || await lineFor(o.s, true);
       if (!route) return null;
       if (rideCtx) rideCtx.pool.close();
       const pool = new Pool(1), setup = riderSetup();
@@ -2221,44 +2346,12 @@ onmessage=async e=>{const m=e.data;
       await getUp();
       go();
     }
-    // At the end of the line the AI rides on into the next line ahead instead of stopping, when one starts at most
-    // ONWARD_GAP metres in front of the bike, going roughly the same way; the ground between is ridden as a straight
-    // run-in. With no line that near, the ride ends there as before: the bike never heads off where there is no track.
-    // Lines already ridden in this run are not taken again. The shared brain rides them (lessons are for one line).
-    const ONWARD_GAP = 35, ONWARD_LEGS = 30;
+    // Past the end of the line (and of its tour, see extendRoute) the AI rides on into the next line ahead instead of
+    // stopping, as long as there is one (nextLine). The shared brain rides those: they have no lesson yet.
+    const ONWARD_LEGS = 30;
     async function onwardLeg(R, seen) {
-      const N = R.length, ex = R.X[N - 1], ez = R.Z[N - 1], k = Math.max(0, N - 6);
-      const eh = Math.atan2(ez - R.Z[k], ex - R.X[k]);
-      const e = await engine(), cands = [];
-      for (const p of [...cap.chunks.values()].flat()) {
-        if (!PHYS_KINDS.includes(p.kind) || e.kidx[p.kind] === undefined || Math.hypot(p.x - ex, p.z - ez) > ONWARD_GAP + 30) continue;
-        let lay;
-        try { lay = e.layout(p); } catch { continue; }
-        if (!lay || !lay.path || lay.path.length < 2) continue;
-        // the first point of the piece ahead of the bike that goes the right way (a piece may start under the line's end)
-        let c = null;
-        for (let i = 1; i < lay.path.length; i++) {
-          const x = lay.path[i][1], z = lay.path[i][2], h = Math.atan2(z - lay.path[i - 1][2], x - lay.path[i - 1][1]);
-          const dx = x - ex, dz = z - ez, f = dx * Math.cos(eh) + dz * Math.sin(eh), lat = -dx * Math.sin(eh) + dz * Math.cos(eh), dh = Math.abs(wrapA(h - eh));
-          if (f < 1 || f > ONWARD_GAP || Math.abs(lat) > 3 + 0.4 * f || dh > 0.8) continue;
-          const sc = f + 2 * Math.abs(lat) + 8 * dh;
-          if (!c || sc < c.sc) c = { x, z, h, sc };
-        }
-        if (c) cands.push(c);
-      }
-      cands.sort((a, b) => a.sc - b.sc);
-      let best = null;
-      for (const c of cands.slice(0, 4)) {
-        const r = await buildRoute({ id: 'onward', x: c.x, z: c.z, heading: c.h });
-        if (!r || r.length < 25) continue;
-        let old = 0, n = 0;
-        for (let i = 0; i < r.length; i += 4, n++) if (seen(r.X[i], r.Z[i])) old++;
-        if (old > n * 0.3) continue;
-        if (!best || r.length > best.length) best = r;
-      }
+      const best = await nextLine(R, seen);
       if (!best) return null;
-      // start where the last line ended: the simulation lays the ground in between as the run-in
-      best.start = { id: 'onward', x: ex, z: ez, heading: eh };
       const pool = new Pool(1), meta = await pool.init(best, riderSetup());
       return { route: best, pool, geo: meta.geo };
     }
@@ -2272,14 +2365,8 @@ onmessage=async e=>{const m=e.data;
       live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
       live.ex.trails_game_reset(live.g);
       let t = 0, seq = null, rider = d.rider, next = null;
-      // the ground ridden in this run, in 3 m cells, so a line ahead that goes back over it is not taken
-      const cells = new Set(), pools = [], w = brain.best.slice();
-      const mark = L => { for (let i = 0; i < L.length; i += 2) cells.add(Math.round(L.X[i] / 3) + ',' + Math.round(L.Z[i] / 3)); };
-      const seen = (x, z) => {
-        const a = Math.round(x / 3), b = Math.round(z / 3);
-        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (cells.has((a + i) + ',' + (b + j))) return true;
-        return false;
-      };
+      // the ground ridden in this run, so a line ahead that goes back over it is not taken
+      const { mark, seen } = ground(), pools = [], w = brain.best.slice();
       // find the line after the one ridden now while riding it
       const lookAhead = () => {
         const h = next = { leg: null };
