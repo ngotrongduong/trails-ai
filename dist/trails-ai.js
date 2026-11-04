@@ -370,6 +370,8 @@ X, Z, KIND, length: X.length, pieces, kinds, land: PRACTICE_LAND, practice: true
 };
 }
 const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const JUMP_SCALE = [0.12, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.06];
+const jumpDist = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + ((v - b[i]) / JUMP_SCALE[i]) ** 2, 0));
 const MOVES = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 }, { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
 function makeRider(R, H, S, P) {
 const N = R.length;
@@ -416,8 +418,9 @@ return me;
 }
 const BRAIN = { inp: 22, hid: 16, out: 4 };
 BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
-const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.4;
-function makeBrainRider(R, H, w) {
+const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
+const JUMP_NEAR = 3, JUMP_RUN = 25;
+function makeBrainRider(R, H, w, jumps) {
 const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
 let nextTake = R.nextTake, nextLand = R.nextLand;
 if (!nextTake) {
@@ -425,19 +428,24 @@ nextTake = new Int32Array(N).fill(-1); nextLand = new Int32Array(N).fill(-1);
 let a = -1, b = -1;
 for (let i = N - 1; i >= 0; i--) { if (R.KIND[i] === 'takeoff') a = i; if (R.KIND[i] === 'landing') b = i; nextTake[i] = a; nextLand[i] = b; }
 }
-const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, inp: [0, 0, 0, 0, 0, 0, 0] };
+const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, jump: null, inp: [0, 0, 0, 0, 0, 0, 0] };
 const x = new Float64Array(NI), h = new Float64Array(NH), o = new Float64Array(NO), W2 = NI * NH, B2 = W2 + NH * NO;
 const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
 const landSlope = i => { const nl = nextLand[i]; const j = nl >= 0 && nl - i < 45 ? nl : Math.min(N - 5, i + 12); return clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2); };
-const touchSlope = (by, sp) => {
-const hv = Math.sqrt(Math.max(1, sp * sp - me.vy * me.vy));
-let j = Math.min(N - 1, me.idx + Math.round(hv * 3));
-for (let k = 1; k <= 90; k++) {
-const tt = k / 30, q = Math.min(N - 1, Math.round(me.idx + hv * tt));
-if (by + me.vy * tt - 4.5 * tt * tt - 0.42 <= H[q]) { j = q; break; }
+const at = k => H[clamp(k, 0, N - 1)], lipAhead = new Int32Array(N).fill(-1), known = new Map();
+for (let i = N - 1, next = -1; i >= 0; i--) {
+const lip = R.KIND[i] === 'takeoff' && (i + 1 >= N || R.KIND[i + 1] !== 'takeoff');
+if (lip) next = i;
+lipAhead[i] = next;
+if (!lip || !jumps || !jumps.length) continue;
+let lo = H[i];
+for (let k = Math.max(0, i - 15); k < i; k++) lo = Math.min(lo, H[k]);
+const f = [Math.atan2(at(i) - at(i - 3), 3), H[i] - lo].concat([3, 6, 9, 12, 16].map(d => at(i + d) - H[i]), [(at(i - 5) - at(i - 25)) / 20]).map(v => +v.toFixed(3));
+let best = null, bd = JUMP_NEAR;
+for (const j of jumps) { const d = jumpDist(f, j.f); if (d < bd) { bd = d; best = j; } }
+if (best) known.set(i, { v: best.v, pl: best.pl, pt: landSlope(i) + best.dpt });
 }
-return clamp(Math.atan2(H[Math.min(N - 1, j + 2)] - H[Math.max(0, j - 2)], 4), -0.9, 0.3);
-};
+me.known = known.size;
 me.step = (s, t) => {
 const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
 if (me.prevP === null) { me.prevP = s[4]; me.prevY = by; }
@@ -446,7 +454,7 @@ let bi = me.idx, bd = Infinity;
 for (let i = Math.max(0, me.idx - 4); i < Math.min(N, me.idx + 45); i++) { const d = (R.X[i] - bx) ** 2 + (R.Z[i] - bz) ** 2; if (d < bd) { bd = d; bi = i; } }
 me.idx = bi;
 me.off = Math.sqrt(bd);
-if (air) me.landPt = touchSlope(by, Math.abs(sp));
+if (air && !me.wasAir) { me.landPt = landSlope(me.idx); const L = lipAhead[Math.max(0, me.idx - 4)]; me.jump = L >= 0 && L <= me.idx + 2 ? known.get(L) || null : null; }
 me.landed = !air && me.wasAir;
 me.wasAir = air;
 if (t % 2 === 0) {
@@ -464,11 +472,12 @@ me.seen = false;
 for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
 for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
 if (!air) {
-const e = brainSpeed(o[0]) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+const L = lipAhead[idx], kj = L >= 0 && L - idx <= JUMP_RUN ? known.get(L) : null;
+const e = (kj ? kj.v : brainSpeed(o[0])) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
 if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
-if (o[1] > 0.5) btn |= 1;
+if (kj ? kj.pl > 0 && R.KIND[idx] === 'takeoff' && idx >= L - kj.pl : o[1] > 0.5) btn |= 1;
 if (o[2] > 0) pump = o[2];
-} else lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
+} else lean = clamp(2.2 * (s[4] - (me.jump ? me.jump.pt : me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
 me.prevP = s[4];
 me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, 0];
 }
@@ -537,10 +546,12 @@ const workerSrc = `
 'use strict';
 let l,SL,K,kidx,FF,fmt;
 let g,R,H,S=null;const lines=[];
+let JUMPS=[];
 function use(i){({g,R,H,S}=lines[i]);}
 const wrapA=a=>Math.atan2(Math.sin(a),Math.cos(a));
 function state(){const p=l.trails_game_state(g);return new Float64Array(l.memory.buffer,p,SL);}
 async function init(m){
+JUMPS=m.jumps||[];
 const {instance}=await WebAssembly.instantiate(m.wasm,{});
 l=instance.exports;
 m.land.forEach((b,i)=>{const n=l.trails_alloc(b.byteLength);new Uint8Array(l.memory.buffer,n,b.byteLength).set(new Uint8Array(b));if(!l.trails_land_data(i,n,b.byteLength))throw new Error('land '+i)});
@@ -575,6 +586,7 @@ const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
 const MOVES=${JSON.stringify(MOVES)};
 const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
+const JUMP_SCALE=${JSON.stringify(JUMP_SCALE)},jumpDist=${jumpDist.toString()},JUMP_NEAR=${JUMP_NEAR},JUMP_RUN=${JUMP_RUN};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
 function sections(){
@@ -599,7 +611,7 @@ l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_res
 let s=state();
 const N=R.length;let idx=0,prog=0,pts=0,seq=s[16],stall=0,t=0,crash=0,end='hết giờ';
 const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
-const rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
+const rider=opt.brain?makeBrainRider(R,H,opt.brain,JUMPS):makeRider(R,H,S,P);
 const vr=new Float32Array(N);
 const tr=rec?[]:null,ev=rec?[]:null;
 const tricks={};let pending=null,manualM=0,landT=-1e9,jumps=0,landAt=-1,lastJ=-1,progAt=0,progT=0;
@@ -644,7 +656,7 @@ l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_res
 const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
 for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
 if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
-let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
+let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w,JUMPS):null,rows=[];
 let prog=0,progT=0,fell=false;
 for(let t=0;t<18000;t++){
 let inp=rider.step(s,t);eye.step(s,t);
@@ -661,7 +673,7 @@ return {rows,prog};
 }
 function brainPlan(w){
 l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
-const N=R.length,K=S.length,me=makeBrainRider(R,H,w);
+const N=R.length,K=S.length,me=makeBrainRider(R,H,w,JUMPS);
 const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0)};
 const tk=makeRider(R,H,S,Q),z=()=>new Float64Array(K);
 const aim=z(),went=z(),nv=z(),aimE=z(),wentE=z(),nE=z(),pu=z(),np=z(),pt=z(),na=z(),pl=z();
@@ -710,6 +722,7 @@ constructor(n) {
 const url = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
 this.ws = Array.from({ length: n }, () => new Worker(url));
 this.seq = 0;
+this.jumps = [];
 }
 call(w, msg, transfer) {
 return new Promise((resolve, reject) => {
@@ -732,7 +745,7 @@ return { wasm, land };
 async init(route, setup) {
 const { wasm, land } = await this.assets();
 this.held = this.ws.map(() => [0]);
-const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup })));
+const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup, jumps: this.jumps })));
 return r[0].metas[0];
 }
 async initSpread(routes, setup) {
@@ -744,7 +757,7 @@ for (let k = L; k < W; k++) { let bi = 0; routes.forEach((r, l) => { if (r.lengt
 this.held = [];
 count.forEach((c, l) => { for (let k = 0; k < c; k++) this.held.push([l]); });
 } else this.held = this.ws.map((_, i) => routes.map((_, l) => l).filter(l => l % W === i));
-const r = await Promise.all(this.ws.map((w, i) => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: this.held[i].map(l => routes[l]), setup, geo: false })));
+const r = await Promise.all(this.ws.map((w, i) => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: this.held[i].map(l => routes[l]), setup, geo: false, jumps: this.jumps })));
 return routes.map((_, l) => { const i = this.held.findIndex(h => h.includes(l)); return r[i].metas[this.held[i].indexOf(l)]; });
 }
 async evalBrains(brains, tasks, until) {
@@ -867,8 +880,6 @@ async function gatherJumps() {
 const mine = localJumps(), have = new Set(mine.map(j => j.id));
 return mine.concat((await communityJumps()).filter(j => !have.has(j.id)));
 }
-const JUMP_SCALE = [0.12, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.06];
-const jumpDist = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + ((v - b[i]) / JUMP_SCALE[i]) ** 2, 0));
 function matchJumps(secs, lib, ownId) {
 const out = secs.map(() => null);
 secs.forEach((s, k) => {
@@ -933,6 +944,7 @@ if (this.pool) this.pool.close();
 this.route = route;
 this.setup = riderSetup();
 this.pool = new Pool(workers);
+this.pool.jumps = (this.library || []).filter(j => j.id !== route.start.id);
 const meta = await this.pool.init(route, this.setup);
 this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
 const mem = this.load();
@@ -1130,11 +1142,12 @@ return { format: BRAIN_FORMAT, version: BRAIN_VERSION, arch: BRAIN, w: this.best
 }
 save() { try { localStorage.setItem(BRAIN_KEY, JSON.stringify(this.record())); } catch { /* storage full: keep learning anyway */ } }
 stop() { this.running = false; }
-async prepare(train, test, workers) {
+async prepare(train, test, workers, jumps) {
 this.stop();
 if (this.pool) this.pool.close();
 this.setup = riderSetup();
 this.pool = new Pool(workers);
+this.pool.jumps = jumps || (await gatherJumps()).filter(j => !test || j.id !== test.start.id);
 const routes = (test ? train.concat([test]) : train).map(r => truncLine(r, BRAIN_CAP + 60));
 const metas = await this.pool.initSpread(routes, this.setup);
 this.lines = routes.map((r, i) => ({ id: r.start.id, len: metas[i].length }));
@@ -1859,7 +1872,7 @@ const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
 const plan = clonePlan(now ? trainer.plan : P);
 const rider = makeRider(R, geo.H, secs, plan);
 let known = trainer.plan;
-const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, tricks: 0, swaps: 0 };
+const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, tricks: 0, swaps: 0, jumps: ctx.jumps };
 if (now) d.takeNewer = () => {
 const p = trainer.plan;
 if (p === known || !trainer.running) return;
@@ -1878,8 +1891,9 @@ const route = trainer.route && trainer.route.start.id === o.s.id ? trainer.route
 if (!route) return null;
 if (rideCtx) rideCtx.pool.close();
 const pool = new Pool(1), setup = riderSetup();
+pool.jumps = await gatherJumps();
 const meta = await pool.init(route, setup);
-rideCtx = { id: o.s.id, route, pool, geo: meta.geo, secs: meta.secs, setup };
+rideCtx = { id: o.s.id, route, pool, geo: meta.geo, secs: meta.secs, setup, jumps: pool.jumps };
 return rideCtx;
 }
 async function aiDrive() {
@@ -1909,7 +1923,7 @@ log(ls ? `AI lái bằng <b>${lesson ? 'bài học của đường này' : 'bộ
 : `Đường này chưa có bài học, nên <b>bộ não chung</b> lái (trong mô phỏng đi được ${bs.prog} m). Bấm “Học lái” để AI học đường này.`);
 go = lesson ? () => driveLesson(ctx, P, ls.prog) : () => {
 const geo = ctx.geo, R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
-ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w), expect: bs.prog, tricks: 0, swaps: 0 }, R);
+ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w, ctx.jumps), expect: bs.prog, tricks: 0, swaps: 0, jumps: ctx.jumps }, R);
 };
 } catch (err) {
 cant('Lỗi: ' + (err && err.message || err)); console.error(err);
@@ -1984,7 +1998,7 @@ const inp = rider.step(s, t++);
 if (rider.idx >= R.length - 3) {
 const leg = next && next.leg;
 if (!leg) { setTimeout(() => stopDrive('về đích'), 0); return null; }
-const g = leg.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length }, r2 = makeBrainRider(R2, g.H, w);
+const g = leg.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length }, r2 = makeBrainRider(R2, g.H, w, d.jumps);
 let bi = 0, bd = Infinity;
 for (let i = 0; i < Math.min(R2.length, 60); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
 r2.idx = bi;

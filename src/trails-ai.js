@@ -452,6 +452,10 @@
 
   // ---------------------------------------------------------------- the rider
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  // how different two jumps are (each number divided by a difference that matters); under 4 they count as alike.
+  // Jumps of different lines are mostly 2.5 to 5 apart; a loose match costs little, since every borrowed plan is ridden first.
+  const JUMP_SCALE = [0.12, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.06];
+  const jumpDist = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + ((v - b[i]) / JUMP_SCALE[i]) ** 2, 0));
   // Moves the AI may try in the air: buttons to hold, plus an optional lean, steer or whip.
   const MOVES = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 }, { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
 
@@ -513,13 +517,16 @@
   // (tanh), then 4 outputs (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
   const BRAIN = { inp: 22, hid: 16, out: 4 };
   BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
-  // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.4 rad off the slope where the
-  // bike will touch down. (The first brains could only ask for 3 to 13 m/s, and a fifth of the jumps learned on lines
-  // need more. Air was 0.8 rad off the landing's own slope, which was often not where the bike came down: brains
-  // learned to throw the bike nose down at every jump. Aimed at the touchdown, 0.4 rides best, already for brains
-  // learned with 0.8: 58 % to 61 % of 62 lines for the same weights.)
-  const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.4;
-  function makeBrainRider(R, H, w) {
+  // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.8 rad off the landing slope.
+  // (The first brains could only ask for 3 to 13 m/s and 0.4 rad, and a fifth of the jumps learned on lines need more.)
+  const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
+  // Jumps learned on lines (jumps: { f, v, dpt, pl }, see gatherJumps) that the brain rides like the lesson did: a jump
+  // of the line closer than JUMP_NEAR to one of them gets its speed for the last JUMP_RUN metres to the lip, its pull
+  // before the lip and its angle in the air. Where the brains fell and the lessons got over, the bike had come at the
+  // lip at the wrong speed, or held the wrong angle in the air: what a lesson found for one jump is right for a jump of
+  // the same shape, while a brain learns one way for all jumps.
+  const JUMP_NEAR = 3, JUMP_RUN = 25;
+  function makeBrainRider(R, H, w, jumps) {
     const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
     let nextTake = R.nextTake, nextLand = R.nextLand;
     if (!nextTake) {
@@ -527,23 +534,26 @@
       let a = -1, b = -1;
       for (let i = N - 1; i >= 0; i--) { if (R.KIND[i] === 'takeoff') a = i; if (R.KIND[i] === 'landing') b = i; nextTake[i] = a; nextLand[i] = b; }
     }
-    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, inp: [0, 0, 0, 0, 0, 0, 0] };
+    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, jump: null, inp: [0, 0, 0, 0, 0, 0, 0] };
     const x = new Float64Array(NI), h = new Float64Array(NH), o = new Float64Array(NO), W2 = NI * NH, B2 = W2 + NH * NO;
     const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
     // the slope to land on for a jump whose lip is at i
     const landSlope = i => { const nl = nextLand[i]; const j = nl >= 0 && nl - i < 45 ? nl : Math.min(N - 5, i + 12); return clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2); };
-    // In the air: where the bike will come down, from its fall at its speed now (the game's gravity is 9 m/s² and the
-    // bike rides 0.42 m above the ground), and the slope there. Short of the landing or past it, that is the slope it
-    // lands on, and the one to match: aiming at the landing's own slope threw the bike nose down onto flat ground.
-    const touchSlope = (by, sp) => {
-      const hv = Math.sqrt(Math.max(1, sp * sp - me.vy * me.vy));
-      let j = Math.min(N - 1, me.idx + Math.round(hv * 3));
-      for (let k = 1; k <= 90; k++) {
-        const tt = k / 30, q = Math.min(N - 1, Math.round(me.idx + hv * tt));
-        if (by + me.vy * tt - 4.5 * tt * tt - 0.42 <= H[q]) { j = q; break; }
-      }
-      return clamp(Math.atan2(H[Math.min(N - 1, j + 2)] - H[Math.max(0, j - 2)], 4), -0.9, 0.3);
-    };
+    // the next lip from every point, and the learned jump each lip is ridden like (its shape f as the lessons store it)
+    const at = k => H[clamp(k, 0, N - 1)], lipAhead = new Int32Array(N).fill(-1), known = new Map();
+    for (let i = N - 1, next = -1; i >= 0; i--) {
+      const lip = R.KIND[i] === 'takeoff' && (i + 1 >= N || R.KIND[i + 1] !== 'takeoff');
+      if (lip) next = i;
+      lipAhead[i] = next;
+      if (!lip || !jumps || !jumps.length) continue;
+      let lo = H[i];
+      for (let k = Math.max(0, i - 15); k < i; k++) lo = Math.min(lo, H[k]);
+      const f = [Math.atan2(at(i) - at(i - 3), 3), H[i] - lo].concat([3, 6, 9, 12, 16].map(d => at(i + d) - H[i]), [(at(i - 5) - at(i - 25)) / 20]).map(v => +v.toFixed(3));
+      let best = null, bd = JUMP_NEAR;
+      for (const j of jumps) { const d = jumpDist(f, j.f); if (d < bd) { bd = d; best = j; } }
+      if (best) known.set(i, { v: best.v, pl: best.pl, pt: landSlope(i) + best.dpt });
+    }
+    me.known = known.size;
     me.step = (s, t) => {
       const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
       if (me.prevP === null) { me.prevP = s[4]; me.prevY = by; }
@@ -552,7 +562,8 @@
       for (let i = Math.max(0, me.idx - 4); i < Math.min(N, me.idx + 45); i++) { const d = (R.X[i] - bx) ** 2 + (R.Z[i] - bz) ** 2; if (d < bd) { bd = d; bi = i; } }
       me.idx = bi;
       me.off = Math.sqrt(bd);
-      if (air) me.landPt = touchSlope(by, Math.abs(sp));
+      // off a known jump's lip, the bike holds the angle its lesson held
+      if (air && !me.wasAir) { me.landPt = landSlope(me.idx); const L = lipAhead[Math.max(0, me.idx - 4)]; me.jump = L >= 0 && L <= me.idx + 2 ? known.get(L) || null : null; }
       me.landed = !air && me.wasAir;
       me.wasAir = air;
       if (t % 2 === 0) {
@@ -572,11 +583,12 @@
         for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
         for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
         if (!air) {
-          const e = brainSpeed(o[0]) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+          const L = lipAhead[idx], kj = L >= 0 && L - idx <= JUMP_RUN ? known.get(L) : null;
+          const e = (kj ? kj.v : brainSpeed(o[0])) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
           if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
-          if (o[1] > 0.5) btn |= 1;
+          if (kj ? kj.pl > 0 && R.KIND[idx] === 'takeoff' && idx >= L - kj.pl : o[1] > 0.5) btn |= 1;
           if (o[2] > 0) pump = o[2];
-        } else lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
+        } else lean = clamp(2.2 * (s[4] - (me.jump ? me.jump.pt : me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
         me.prevP = s[4];
         me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, 0];
       }
@@ -652,10 +664,13 @@
 let l,SL,K,kidx,FF,fmt;
 // a worker can hold several lines, each in its own game; g, R, H and S are those of the line being ridden
 let g,R,H,S=null;const lines=[];
+// the learned jumps brains ride like their lessons (makeBrainRider)
+let JUMPS=[];
 function use(i){({g,R,H,S}=lines[i]);}
 const wrapA=a=>Math.atan2(Math.sin(a),Math.cos(a));
 function state(){const p=l.trails_game_state(g);return new Float64Array(l.memory.buffer,p,SL);}
 async function init(m){
+  JUMPS=m.jumps||[];
   const {instance}=await WebAssembly.instantiate(m.wasm,{});
   l=instance.exports;
   m.land.forEach((b,i)=>{const n=l.trails_alloc(b.byteLength);new Uint8Array(l.memory.buffer,n,b.byteLength).set(new Uint8Array(b));if(!l.trails_land_data(i,n,b.byteLength))throw new Error('land '+i)});
@@ -693,6 +708,7 @@ const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
 const MOVES=${JSON.stringify(MOVES)};
 const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
+const JUMP_SCALE=${JSON.stringify(JUMP_SCALE)},jumpDist=${jumpDist.toString()},JUMP_NEAR=${JUMP_NEAR},JUMP_RUN=${JUMP_RUN};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
 // Cut the line into sections: one ends at every takeoff lip, the others every 40 m.
@@ -721,7 +737,7 @@ function episode(P,opt){
   let s=state();
   const N=R.length;let idx=0,prog=0,pts=0,seq=s[16],stall=0,t=0,crash=0,end='hết giờ';
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
-  const rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
+  const rider=opt.brain?makeBrainRider(R,H,opt.brain,JUMPS):makeRider(R,H,S,P);
   // the speed when the bike first got to each point
   const vr=new Float32Array(N);
   // with rec: every other tick [distance along the line, height, pitch, in air, speed], plus trick and crash events
@@ -777,7 +793,7 @@ function watchPlan(P,until,w){
   const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
   for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
   if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
-  let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
+  let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w,JUMPS):null,rows=[];
   let prog=0,progT=0,fell=false;
   for(let t=0;t<18000;t++){
     let inp=rider.step(s,t);eye.step(s,t);
@@ -798,7 +814,7 @@ function watchPlan(P,until,w){
 // ridden, on the whole section or on its end): which one rides closest to the brain differs from line to line.
 function brainPlan(w){
   l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
-  const N=R.length,K=S.length,me=makeBrainRider(R,H,w);
+  const N=R.length,K=S.length,me=makeBrainRider(R,H,w,JUMPS);
   const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0)};
   const tk=makeRider(R,H,S,Q),z=()=>new Float64Array(K);
   const aim=z(),went=z(),nv=z(),aimE=z(),wentE=z(),nE=z(),pu=z(),np=z(),pt=z(),na=z(),pl=z();
@@ -851,6 +867,8 @@ onmessage=async e=>{const m=e.data;
       const url = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
       this.ws = Array.from({ length: n }, () => new Worker(url));
       this.seq = 0;
+      // learned jumps the brain rides like their lessons; set before init
+      this.jumps = [];
     }
     call(w, msg, transfer) {
       return new Promise((resolve, reject) => {
@@ -874,7 +892,7 @@ onmessage=async e=>{const m=e.data;
     async init(route, setup) {
       const { wasm, land } = await this.assets();
       this.held = this.ws.map(() => [0]);
-      const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup })));
+      const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup, jumps: this.jumps })));
       return r[0].metas[0];
     }
     // The workers share the lines out: with fewer lines than workers each worker holds one line, and the spare workers
@@ -889,7 +907,7 @@ onmessage=async e=>{const m=e.data;
         this.held = [];
         count.forEach((c, l) => { for (let k = 0; k < c; k++) this.held.push([l]); });
       } else this.held = this.ws.map((_, i) => routes.map((_, l) => l).filter(l => l % W === i));
-      const r = await Promise.all(this.ws.map((w, i) => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: this.held[i].map(l => routes[l]), setup, geo: false })));
+      const r = await Promise.all(this.ws.map((w, i) => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: this.held[i].map(l => routes[l]), setup, geo: false, jumps: this.jumps })));
       return routes.map((_, l) => { const i = this.held.findIndex(h => h.includes(l)); return r[i].metas[this.held[i].indexOf(l)]; });
     }
     // Rides of brains on lines: tasks are [brain index, line index], each sent to a worker holding that line, in turn.
@@ -1039,10 +1057,6 @@ onmessage=async e=>{const m=e.data;
     const mine = localJumps(), have = new Set(mine.map(j => j.id));
     return mine.concat((await communityJumps()).filter(j => !have.has(j.id)));
   }
-  // how different two jumps are (each number divided by a difference that matters); under 4 they count as alike.
-  // Jumps of different lines are mostly 2.5 to 5 apart; a loose match costs little, since every borrowed plan is ridden first.
-  const JUMP_SCALE = [0.12, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.06];
-  const jumpDist = (a, b) => Math.sqrt(a.reduce((s, v, i) => s + ((v - b[i]) / JUMP_SCALE[i]) ** 2, 0));
   // For every jump section of this line: the most similar jumps learned on other lines, nearest first.
   function matchJumps(secs, lib, ownId) {
     const out = secs.map(() => null);
@@ -1117,6 +1131,8 @@ onmessage=async e=>{const m=e.data;
       this.route = route;
       this.setup = riderSetup();
       this.pool = new Pool(workers);
+      // the brain, when it gives the lesson its start, rides the jumps learned on other lines like their lessons
+      this.pool.jumps = (this.library || []).filter(j => j.id !== route.start.id);
       const meta = await this.pool.init(route, this.setup);
       this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
       const mem = this.load();
@@ -1350,12 +1366,14 @@ onmessage=async e=>{const m=e.data;
     }
     save() { try { localStorage.setItem(BRAIN_KEY, JSON.stringify(this.record())); } catch { /* storage full: keep learning anyway */ } }
     stop() { this.running = false; }
-    // Each worker holds every line; train are learned on, test (may be null) only ridden.
-    async prepare(train, test, workers) {
+    // Each worker holds every line; train are learned on, test (may be null) only ridden. The brain rides the jumps
+    // learned on lines like their lessons, except those of the test line (it would no longer be a line never seen).
+    async prepare(train, test, workers, jumps) {
       this.stop();
       if (this.pool) this.pool.close();
       this.setup = riderSetup();
       this.pool = new Pool(workers);
+      this.pool.jumps = jumps || (await gatherJumps()).filter(j => !test || j.id !== test.start.id);
       const routes = (test ? train.concat([test]) : train).map(r => truncLine(r, BRAIN_CAP + 60));
       const metas = await this.pool.initSpread(routes, this.setup);
       this.lines = routes.map((r, i) => ({ id: r.start.id, len: metas[i].length }));
@@ -2174,7 +2192,7 @@ onmessage=async e=>{const m=e.data;
       const plan = clonePlan(now ? trainer.plan : P);
       const rider = makeRider(R, geo.H, secs, plan);
       let known = trainer.plan;
-      const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, tricks: 0, swaps: 0 };
+      const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, tricks: 0, swaps: 0, jumps: ctx.jumps };
       // A newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
       // gets the same states the simulation scored, so the plan's score holds for the rest of this ride too.
       if (now) d.takeNewer = () => {
@@ -2196,8 +2214,9 @@ onmessage=async e=>{const m=e.data;
       if (!route) return null;
       if (rideCtx) rideCtx.pool.close();
       const pool = new Pool(1), setup = riderSetup();
+      pool.jumps = await gatherJumps();
       const meta = await pool.init(route, setup);
-      rideCtx = { id: o.s.id, route, pool, geo: meta.geo, secs: meta.secs, setup };
+      rideCtx = { id: o.s.id, route, pool, geo: meta.geo, secs: meta.secs, setup, jumps: pool.jumps };
       return rideCtx;
     }
     async function aiDrive() {
@@ -2228,7 +2247,7 @@ onmessage=async e=>{const m=e.data;
           : `Đường này chưa có bài học, nên <b>bộ não chung</b> lái (trong mô phỏng đi được ${bs.prog} m). Bấm “Học lái” để AI học đường này.`);
         go = lesson ? () => driveLesson(ctx, P, ls.prog) : () => {
           const geo = ctx.geo, R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
-          ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w), expect: bs.prog, tricks: 0, swaps: 0 }, R);
+          ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w, ctx.jumps), expect: bs.prog, tricks: 0, swaps: 0, jumps: ctx.jumps }, R);
         };
       } catch (err) {
         cant('Lỗi: ' + (err && err.message || err)); console.error(err);
@@ -2315,7 +2334,7 @@ onmessage=async e=>{const m=e.data;
           const leg = next && next.leg;
           if (!leg) { setTimeout(() => stopDrive('về đích'), 0); return null; }
           // ride on: the brain takes the next line from the point of it nearest the bike
-          const g = leg.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length }, r2 = makeBrainRider(R2, g.H, w);
+          const g = leg.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length }, r2 = makeBrainRider(R2, g.H, w, d.jumps);
           let bi = 0, bd = Infinity;
           for (let i = 0; i < Math.min(R2.length, 60); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
           r2.idx = bi;

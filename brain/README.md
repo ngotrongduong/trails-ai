@@ -26,7 +26,7 @@ Pull request sẽ được nhận nếu bộ não mới đi giỏi hơn bộ nã
 ```
 
 - `w`: các trọng số. 22 × 16 đầu tiên nối đầu vào với nơ-ron ẩn, 16 × 4 tiếp theo nối nơ-ron ẩn với đầu ra, 4 số cuối là độ lệch của đầu ra. Mã ở `makeBrainRider` trong [`src/trails-ai.js`](../src/trails-ai.js).
-- `version`: 2 kể từ khi đầu ra tốc độ đòi được 2–18 m/s. Bộ não version 1 không còn được dùng, vì cùng các số đó giờ mang nghĩa khác. Đầu ra góc bay giờ lệch được 0,4 rad so với dốc ở chỗ xe sẽ chạm đất (trước đây là 0,8 rad so với dốc của miếng tiếp đất). Bộ não version 2 cũ lái theo cách này còn giỏi hơn, nên version vẫn giữ là 2.
+- `version`: 2 kể từ khi đầu ra tốc độ đòi được 2–18 m/s và đầu ra góc bay lệch được 0,8 rad. Bộ não version 1 không còn được dùng, vì cùng các số đó giờ mang nghĩa khác.
 - `gen`: số vòng đã luyện. `lines`: các đường đã luyện trên đó. `score` và `test`: phần đường đi được trên các đường luyện và trên đường được để riêng.
 
 `node tools/check-lessons.js` kiểm tra file này mỗi khi có thay đổi.
