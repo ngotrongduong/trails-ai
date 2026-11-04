@@ -513,6 +513,9 @@
   // (tanh), then 4 outputs (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
   const BRAIN = { inp: 22, hid: 16, out: 4 };
   BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
+  // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.8 rad off the landing slope.
+  // (The first brains could only ask for 3 to 13 m/s and 0.4 rad, and a fifth of the jumps learned on lines need more.)
+  const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
   function makeBrainRider(R, H, w) {
     const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
     let nextTake = R.nextTake, nextLand = R.nextLand;
@@ -554,11 +557,11 @@
         for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
         for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
         if (!air) {
-          const e = clamp(8 + 5 * o[0], 2, 18) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+          const e = brainSpeed(o[0]) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
           if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
           if (o[1] > 0.5) btn |= 1;
           if (o[2] > 0) pump = o[2];
-        } else lean = clamp(2.2 * (s[4] - (me.landPt + 0.4 * o[3])) + 0.35 * dp, -1, 1);
+        } else lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
         me.prevP = s[4];
         me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, 0];
       }
@@ -579,8 +582,8 @@
     const pullW = clamp((n - pulls) / Math.max(1, pulls) / 4, 1, 8);
     for (let r = 0; r < n; r++) {
       const q = r * RW + NI, air = rows[q + 4] > 0;
-      if (air) { T[r * NO + 3] = at((rows[q + 3] - rows[q + 5]) / 0.4); M[r * NO + 3] = 1; continue; }
-      T[r * NO] = at((rows[q] - 8) / 5); M[r * NO] = 1;
+      if (air) { T[r * NO + 3] = at((rows[q + 3] - rows[q + 5]) / BRAIN_TILT); M[r * NO + 3] = 1; continue; }
+      T[r * NO] = at(speedOut(rows[q])); M[r * NO] = 1;
       T[r * NO + 1] = rows[q + 1] > 0 ? 1.2 : -1.2; M[r * NO + 1] = rows[q + 1] > 0 ? pullW : 1;
       T[r * NO + 2] = rows[q + 2] > 0 ? at(rows[q + 2]) : -1; M[r * NO + 2] = 1;
     }
@@ -674,6 +677,7 @@ function addLine(route,setup){
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
 const MOVES=${JSON.stringify(MOVES)};
+const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
 // Cut the line into sections: one ends at every takeoff lip, the others every 40 m.
@@ -790,11 +794,11 @@ function brainPlan(w){
     const i=me.idx;if(i>prog){prog=i;progT=t}else if(t-progT>480)break;
     if(me.off>7&&!air||i>=N-3)break;
     if(t%2===0){
-      if(!air){const k=tk.sec,a=clamp(8+5*me.o[0],2,18),v=Math.abs(s[8]);aim[k]+=a;went[k]+=v;nv[k]++;
+      if(!air){const k=tk.sec,a=clamp(brainSpeed(me.o[0]),2,18),v=Math.abs(s[8]);aim[k]+=a;went[k]+=v;nv[k]++;
         if(i>=S[k].b-8){aimE[k]+=a;wentE[k]+=v;nE[k]++}
         if((inp[5]&1)&&R.KIND[i]==='takeoff'&&i<=S[k].b)pl[k]=Math.max(pl[k],S[k].b-i+1);
         if((H[Math.min(N-1,i+1)]-H[Math.min(N-1,i+3)])/2>0.03){pu[k]+=Math.max(0,me.o[2]);np[k]++}}
-      else{const k=tk.airSec;pt[k]+=me.landPt+0.4*me.o[3];na[k]++}
+      else{const k=tk.airSec;pt[k]+=me.landPt+BRAIN_TILT*me.o[3];na[k]++}
     }
     l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
     if(s[13]>0)break;
@@ -1286,15 +1290,16 @@ onmessage=async e=>{const m=e.data;
   // copies of itself (every change tried both ways) on a few of its lines, and moves its weights toward the changes
   // that rode better. The line chosen in the list is kept aside and never learned on: how far the brain rides it shows
   // whether it can ride a line it has never seen. The best brain so far on all its lines is the one kept and used.
-  const BRAIN_KEY = 'trailsai.brain';
-  const BRAIN_FORMAT = 'trails-ai-brain';
+  // version 2: wider speed and air outputs (brainSpeed), so the numbers of a version 1 brain mean something else
+  const BRAIN_KEY = 'trailsai.brain2';
+  const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 2;
   const BRAIN_URL = `https://raw.githubusercontent.com/${REPO}/main/brain/brain.json`;
   const BRAIN_CAP = 400;   // metres of each line a brain is scored on (a long line would hold every round up)
   const weightsOk = w => Array.isArray(w) && w.length === BRAIN.size && w.every(num);
   const readBrain = raw => {
     let m;
     try { m = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
-    return m && m.format === BRAIN_FORMAT && m.version === 1 && weightsOk(m.w) ? m : null;
+    return m && m.format === BRAIN_FORMAT && m.version === BRAIN_VERSION && weightsOk(m.w) ? m : null;
   };
   // The first n metres of a line with only the pieces near them: brains are scored on the start of each line, and
   // fewer pieces load much faster.
@@ -1325,7 +1330,7 @@ onmessage=async e=>{const m=e.data;
       this.hist = m && Array.isArray(m.hist) ? m.hist : [];
     }
     record() {
-      return { format: BRAIN_FORMAT, version: 1, arch: BRAIN, w: this.best, mean: this.mean, adam: this.adam, gen: this.gen, lines: this.seen, score: this.score, test: this.test, hist: this.hist.slice(-400), savedAt: Date.now() };
+      return { format: BRAIN_FORMAT, version: BRAIN_VERSION, arch: BRAIN, w: this.best, mean: this.mean, adam: this.adam, gen: this.gen, lines: this.seen, score: this.score, test: this.test, hist: this.hist.slice(-400), savedAt: Date.now() };
     }
     save() { try { localStorage.setItem(BRAIN_KEY, JSON.stringify(this.record())); } catch { /* storage full: keep learning anyway */ } }
     stop() { this.running = false; }
@@ -1416,29 +1421,47 @@ onmessage=async e=>{const m=e.data;
       Object.assign(info, { rows: rows.length / 28 | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
       return info;
     }
+    // The next BATCH training lines, taken in turn from a shuffled queue: with many lines a round costs the same, and
+    // every line comes up as often.
+    nextLines(BATCH) {
+      if (!this.queue || this.queue.length < BATCH) {
+        const q = this.queue || [];
+        this.queue = q.concat(this.trainIdx.slice().sort(() => Math.random() - 0.5).filter(i => !q.includes(i)));
+      }
+      return this.queue.splice(0, BATCH);
+    }
     async run() {
       if (this.running || !this.pool) return;
       this.running = true;
-      // P changes, each tried both ways, every one on the same BATCH lines. With many lines, each round takes the next
-      // BATCH of them in a shuffled order, so a round costs the same and every line comes up as often.
+      this.queue = null;
+      try { await this.learn(); } finally { this.save(); this.running = false; }
+    }
+    // Evolution strategies: P changes of the mean brain, each tried both ways on the same BATCH lines, and the mean
+    // moved toward the changes that rode better. (Measured against climbing as a line's lesson does, from a new brain
+    // for 6 minutes: climbing learned the training lines as fast but rode lines it had not seen worse, 42 % to 35 %,
+    // while this went 42 % to 46 %.)
+    async learn() {
       const n = BRAIN.size, P = 10, SIG = 0.15, LR = 0.03, WD = 0.002, BATCH = 12;
       if (!this.adam) this.adam = { m: new Array(n).fill(0), v: new Array(n).fill(0), t: 0 };
       const A = this.adam;
-      let queue = [];
       while (this.running) {
-        const t0 = performance.now();
-        if (queue.length < BATCH) queue = queue.concat(this.trainIdx.slice().sort(() => Math.random() - 0.5).filter(i => !queue.includes(i)));
-        const pick = queue.splice(0, BATCH);
+        const t0 = performance.now(), pick = this.nextLines(BATCH);
         const eps = Array.from({ length: P }, () => Array.from({ length: n }, gauss));
         const brains = [];
         for (const e of eps) { brains.push(this.mean.map((w, i) => w + SIG * e[i])); brains.push(this.mean.map((w, i) => w - SIG * e[i])); }
         const rates = await this.rate(brains, pick);
         if (!this.running) break;
-        // by rank, not raw score: one lucky ride cannot swing the step
+        // by rank, not raw score: one lucky ride cannot swing the step; equal scores share a rank (else the change
+        // listed first would always count as the worse one)
         const fits = rates.map(r => r.fit());
         const order = fits.map((_, i) => i).sort((a, b) => fits[a] - fits[b]);
         const rank = new Array(fits.length);
-        order.forEach((i, k) => { rank[i] = k / (fits.length - 1) - 0.5; });
+        for (let k = 0; k < order.length;) {
+          let e = k;
+          while (e + 1 < order.length && fits[order[e + 1]] === fits[order[k]]) e++;
+          for (let q = k; q <= e; q++) rank[order[q]] = (k + e) / 2 / (fits.length - 1) - 0.5;
+          k = e + 1;
+        }
         const g = new Array(n).fill(0);
         eps.forEach((e, p) => { const d = rank[2 * p] - rank[2 * p + 1]; for (let i = 0; i < n; i++) g[i] += d * e[i]; });
         A.t++;
@@ -1461,8 +1484,6 @@ onmessage=async e=>{const m=e.data;
         }
         this.ui.brainProgress({ gen: this.gen, ms: performance.now() - t0, tries: brains.length * pick.length, improved });
       }
-      this.save();
-      this.running = false;
     }
   }
 
@@ -1847,13 +1868,13 @@ onmessage=async e=>{const m=e.data;
     }
     // Lines for the brain, up to BRAIN_LINES: every line learned in this browser, then the lines from the starts nearest
     // the chosen one (any start whose pieces the game has loaded, not only the ones in the list). The chosen line is kept
-    // aside. At least PRACTICE of them are practice lines, more when there are few lines around: drills of every kind
-    // and size, so the brain learns to ride jumps in general instead of the lines near you by heart. Half of those are
-    // drills the AI has learned (their lessons show the brain how to ride them), the others new each time.
-    const BRAIN_LINES = 40, PRACTICE = 8;
+    // aside. Up to DRILLS of them are drills the AI has learned (their lessons are the brain's quickest teachers), and at
+    // least NEW_DRILLS are new ones, more when there are few lines around: drills of every kind and size, so the brain
+    // learns to ride jumps in general instead of the lines near you by heart.
+    const BRAIN_LINES = 40, DRILLS = 12, NEW_DRILLS = 4;
     async function brainLines() {
       const o = choices[+$('.pick').value], at = o ? o.s : choices.length ? choices[0].s : null;
-      const most = BRAIN_LINES, real = most - PRACTICE;
+      const most = BRAIN_LINES, real = most - DRILLS - NEW_DRILLS;
       const testId = o ? o.s.id : null, got = new Map(), drills = [];
       try {
         for (let i = 0; i < localStorage.length; i++) {
@@ -1875,7 +1896,7 @@ onmessage=async e=>{const m=e.data;
       }
       const train = [...got.values()].slice(0, real), seed = Math.floor(Math.random() * 1e6);
       drills.sort(() => Math.random() - 0.5);
-      train.push(...drills.slice(0, PRACTICE / 2));
+      train.push(...drills.slice(0, DRILLS));
       for (let lane = 0; train.length < most && lane < most * 2; lane++) {
         // easy to as hard as the drills the AI practises now
         const r = await practiceLine(seed, lane, drillLevel() * (lane % 4) / 3);

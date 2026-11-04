@@ -55,7 +55,7 @@ if (fs.existsSync(brainFile)) {
   let m = null, errs = [];
   if (fs.statSync(brainFile).size > MAX_BYTES) errs.push('brain.json is too big');
   else { try { m = JSON.parse(fs.readFileSync(brainFile, 'utf8')); } catch (e) { errs.push('not valid JSON: ' + e.message); } }
-  if (m && (m.format !== 'trails-ai-brain' || m.version !== 1)) errs.push('format must be "trails-ai-brain", version 1');
+  if (m && (m.format !== 'trails-ai-brain' || m.version !== 2)) errs.push('format must be "trails-ai-brain", version 2');
   if (m && (!Array.isArray(m.w) || m.w.length !== BRAIN_SIZE || !m.w.every(num))) errs.push(`w must be ${BRAIN_SIZE} numbers`);
   if (errs.length) { bad++; console.log(`✗ brain/brain.json\n  - ${errs.join('\n  - ')}`); }
   else console.log(`brain/brain.json: ${m.gen ?? '?'} rounds on ${Array.isArray(m.lines) ? m.lines.length : '?'} lines\n`);
