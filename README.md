@@ -8,26 +8,29 @@ Một AI tự học cách chạy bất kỳ đường đua nào trong [Trails: T
 
 ## AI học như thế nào
 
-Với từng đường, AI không dùng mạng nơ-ron. Nó học bằng **thử và sai có chọn lọc**, kiểu tiến hóa (phần [bộ não chung](#bộ-não-chung-mạng-nơ-ron) bên dưới mới là mạng nơ-ron):
+Với từng đường, AI không dùng mạng nơ-ron. Nó **dò từng đoạn đường bằng cách thử trong mô phỏng**, nhớ trạng thái của xe ở đầu mỗi đoạn, và lùi lại khi gặp chỗ không qua được (phần [bộ não chung](#bộ-não-chung-mạng-nơ-ron) bên dưới mới là mạng nơ-ron). Cách làm chi tiết nằm trong [docs/design.md](docs/design.md).
 
 1. **Đọc đường đua.** AI đọc các chi tiết của đường (mép nhảy, mặt tiếp đất, cua nghiêng, mô pump…) từ chính dữ liệu game gửi về, rồi nối chúng thành một lộ trình chia theo từng mét.
 2. **Chia thành đoạn.** Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
-3. **Kế hoạch (plan).** Với mỗi đoạn, AI giữ vài con số: tốc độ cần giữ, góc xe khi bay, có nhấc xe ở mép nhảy không, có pump không, làm trick gì, ở độ cao nào. Một đoạn có thể được chia thành các phần khoảng 8 m, mỗi phần một tốc độ riêng, để xe chậm lại qua một mô đất rồi tăng tốc cho cú nhảy ngay sau. Việc lái (bẻ lái theo đường, đạp tới tốc độ, cân xe trên không) do một bộ điều khiển cố định làm.
-4. **Thử trong mô phỏng.** Mỗi luồng CPU chạy một bản **vật lý thật của game** (đúng file WebAssembly game dùng). Mỗi vòng AI tạo vài chục bản sao của kế hoạch, mỗi bản đổi một chút quanh chỗ hay ngã, chạy thử tất cả, và giữ bản tốt nhất.
-5. **Hai giai đoạn.** Đầu tiên học vượt hết đường: lượt nào đi xa hơn là tốt hơn. Chỉ khi đã về đích được, AI mới tập lấy điểm: xem lại từng cú nhảy rồi tập tiếp đất đẹp hơn hoặc tập trick, chấm đúng như game chấm (xem [Chấm từng cú nhảy như game](#chấm-từng-cú-nhảy-như-game)).
+3. **Kế hoạch (plan).** Với mỗi đoạn, AI giữ vài con số: tốc độ cần giữ (có thể chia đoạn thành vài phần, mỗi phần một tốc độ), góc xe khi bay, có nhấc xe ở mép nhảy không, có pump không, dồn người về trước hay ra sau khi bánh còn trên đất, làm trick gì, ở độ cao nào. Việc lái (bẻ lái theo đường, đạp tới tốc độ, cân xe trên không) do một bộ điều khiển cố định làm.
+4. **Mô phỏng nhớ được trạng thái.** Mỗi luồng CPU chạy một bản **vật lý thật của game** (đúng file WebAssembly game dùng). Toàn bộ trạng thái vật lý nằm trong bộ nhớ của file đó, nên AI lưu được xe ở bất kỳ chỗ nào và chạy tiếp từ đó, ra đúng y như chạy từ đầu (đã kiểm tra từng bit, cả khi chuyển trạng thái sang luồng khác). Nhờ vậy thử một cách đi mới ở mét 280 chỉ tốn vài mét chạy, không phải chạy lại 280 m.
+5. **Dò từng đoạn.** AI đi dọc đường, giữ **6 cách đi tốt nhất** tới đầu mỗi đoạn. Từ mỗi cách, nó thử đoạn đó hàng chục kiểu: quanh kế hoạch đang có; vẽ lại hẳn (tốc độ bất kỳ 3–18 m/s, góc bay bất kỳ, có nhấc xe hay không); trên cú nhảy thì cả một lưới tốc độ × góc bay, cách đã thành công ở cú nhảy giống của đường khác, và các trick hợp với thời gian bay. Vòng thử thứ hai lấy giá trị từ những lần tốt nhất của vòng đầu rồi thử quanh chúng. Mỗi lần thử chạy tới khi xe đã chạm đất ở đoạn sau được 0,75 s, vì cú nhảy đúng hay sai lộ ra lúc tiếp đất và lúc chạy tiếp. Sáu lần thử tốt nhất (khác tốc độ nhau, để giữ cả cách đến nhanh lẫn cách đến chậm) thành sáu cách đi tới đoạn sau.
+6. **Gặp chỗ không qua được thì lùi lại.** Không lần thử nào qua được một đoạn thì AI lùi lại 1 đoạn, rồi 2, 4, 6 đoạn, và thử những đoạn đó rộng hơn: nguyên nhân ngã thường nằm ở cách xe đến chỗ đó (chậm quá, nhanh quá, cú nhảy trước tiếp đất xấu).
+7. **So như game chấm.** Hai lần thử được so ở cùng một chỗ: trước hết là mục tiêu bài tập, rồi xe còn chạy hay đã ngã, rồi (còn chạy) điểm game tính tới đó, (đã ngã) lần nào đi xa hơn. Cách đi tốt nhất cả đường được chạy lại từ đầu để kiểm tra rồi mới giữ. Kế hoạch đang giữ luôn có mặt trong 6 cách đi, nên một lượt dò không bao giờ làm mất nó. Lượt dò sau rộng hơn nếu lượt trước không tìm được gì tốt hơn.
 
-Khi bị kẹt, AI dùng thêm ba cách:
+Vượt đường, tiếp đất đẹp để giữ chuỗi nhân, tập trick, pump: tất cả được học cùng lúc trong mỗi lượt dò, không còn chế độ riêng cho từng việc.
 
-- **Tốc độ theo từng phần của đoạn.** Kẹt càng lâu, AI càng hay chia đoạn thành phần nhỏ và đổi tốc độ từng phần.
-- **Đến nhanh hơn là gần hơn.** Hai lượt ngã cùng một chỗ thì lượt lao tới chỗ đó nhanh hơn được tính hơn một chút (tối đa 1 m). Nhờ vậy ở một dốc nhảy chưa leo nổi, AI vẫn biết hướng nào là đúng.
-- **Tìm đường khác.** Kẹt hơn 100 vòng, cứ mỗi vòng thứ hai AI vẽ lại hẳn bốn đoạn trước chỗ ngã, theo đuổi cách tốt nhất trong 60 vòng, và đổi sang cách đó ngay khi nó đi xa hơn. Có khi cách đang dùng chỉ vừa đủ qua chỗ phía trước, nên sửa nhỏ quanh chỗ ngã không bao giờ tới được.
+So với cách học cũ (bản 2: mỗi lần thử chạy cả đường, bảy chế độ học với nhiều luật đặt tay), đo trên cùng máy (18 luồng):
 
-Hai lỗi đã sửa:
+- Đường Trảng Sương 29 (cuarkplp1p, 305 m), **học từ con số 0**: về đích sau 65 giây, 3060 điểm sau 72 giây, 3700 điểm sau 84 giây. Bài học cũ cần 2367 vòng mới được 1890 điểm.
+- Cùng đường, **bắt đầu từ bài học cũ** 1890 điểm: 3130 điểm sau 113 giây.
+- Đường n458teqth2 (177 m): bài học cũ 590 điểm, AI mới lên 1350 điểm trong 2 phút.
+- Đường gf6cqjb3rr: 360 lên 410 điểm, đường practice-996191-0: từ 36 m lên 79 m.
+- Chưa qua được: grl507un6p (mét 144) và gf6cqjb3rr (mét 116). Cả hai là mép nhảy gần như dựng đứng (xe ngóc tới 80°), xe lao thẳng lên rồi rơi xuống tại chỗ. AI đã thử gần 10.000 kiểu (tốc độ 3–18 m/s, nhấc xe, dồn người về trước) mà chưa có kiểu nào qua.
+- Tốc độ thử: khoảng 460 lần thử mỗi giây trên đường này. Ở đường có hàng trăm chi tiết sát đường thì vật lý của game chậm hơn khoảng 6 lần.
+- Trạng thái lưu lại khớp tuyệt đối: trong các lượt đo cuối, mọi lượt chạy từ trạng thái đã lưu đều ra đúng như chạy lại từ đầu. (Trước đó có vài lần lệch: trạng thái được lưu sau bước mà bộ lái đã dùng giá trị cũ của đoạn mới. Giờ trạng thái được lưu ngay trước bước đó.)
 
-- Trước đây AI xen kẽ tập trick ngay khi còn đang kẹt. Bộ đếm "đang kẹt" chỉ chạy ở những vòng tập vượt đường, nên kẹt quá 30 vòng là AI tập trick mãi và không bao giờ thử lại cú nhảy đang kẹt nữa (có máy chạy hơn 100.000 vòng vẫn đứng yên). Sửa xong, đường bị kẹt ở 106 m lên được 124 m trong khoảng một phút.
-- AI chọn lượt tốt nhất theo tổng điểm, nên một lượt có trick ở cú nhảy đầu được coi là hơn những lượt đi xa hơn mà không có trick.
-
-Trên đường đó, AI còn kẹt ở 124 m qua hàng nghìn vòng. Lý do: cú nhảy ở mét 95 bay quá ngắn, xe rơi xuống khoảng trống rồi đâm vào mặt dốc đáp, nên không còn tốc độ cho dốc nhảy step-up ở mét 124. Với ba cách trên, AI tìm ra cách bay qua khoảng trống và **về đích cả đường (272 m) trong chưa đầy 1 phút**.
+(Phần lịch sử: cách học cũ bị kẹt vì AI tập trick khi chưa qua được đường, chọn lượt theo tổng điểm thay vì đi xa, và chỉ giữ một kế hoạch tốt nhất. Một cú cần đến chậm hơn để kịp cú sau thì bị bỏ ngay.)
 
 Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng: học đường đang chọn, tập một bài tập kiểu Training, luyện bộ não chung, xem bên dưới) và **AI lái**. Mọi thứ khác nằm trong mục **Chi tiết, xem lại và chia sẻ** thu gọn ở cuối bảng.
 
@@ -36,6 +39,16 @@ Vật lý của game cho kết quả giống hệt nhau mỗi lần chạy, nên
 ### Vừa lái thật vừa học
 
 Khi bấm **AI lái**, AI lái xe của bạn trong game. Bài học của đường này và bộ não chung đều chạy thử trong mô phỏng trước, cái nào đi xa hơn thì lái. Nếu **Học lái** đang bật, phần nền vẫn tiếp tục học. Mỗi giây AI xem đã có kế hoạch mới tốt hơn chưa. Nếu kế hoạch mới giữ nguyên cách chạy ở phần đường xe đã đi qua, nghĩa là chỉ đổi những đoạn phía trước, thì AI dùng nó ngay trong lượt đang chạy, vì khi đó trạng thái xe ngoài game đúng bằng trạng thái mà mô phỏng đã chấm điểm. Ngã xong, AI tự lái lại từ đầu với bài học mới nhất.
+
+**Lái tiếp cho tới khi hết đường.** Tới vạch đích AI không dừng: nó lái như một người chơi, còn thấy đường là còn đi.
+
+- **Dò đường phía trước:** cứ 2 giây AI tìm đường tiếp theo sau đường cuối cùng nó biết (game tải dần mặt đất phía trước khi xe đi). Đường tiếp theo phải bắt đầu trong vòng 60 m phía trước, đi gần cùng hướng, và không trùng phần lớn với chỗ đã đi trong lượt này. Có thể nhập vào giữa một đường, không cần đúng điểm đầu. AI biết trước tối đa hai đường.
+- **Học trước khi tới:** vừa thấy một đường, AI học nó ngay ở nền (nửa số luồng CPU) bằng cách dò từng đoạn như trên, bắt đầu từ chỗ xe sẽ nhập vào và với đúng tốc độ mà kế hoạch đường trước nói xe sẽ có ở đó. Xe vẫn chạy trong lúc AI học, và kế hoạch tốt hơn được dùng ngay khi nó giữ nguyên phần đường xe đã đi.
+- **Nối liền:** tới cuối đường, AI chuyển sang đường kế tiếp mà không dừng. Đường nào chưa học kịp thì bộ não chung lái. Đã thấy đường mới mà chưa học xong thì AI chạy thẳng theo hướng cũ (khoảng 6 m/s) trong lúc chờ.
+- **Hết đường thì dừng an toàn:** không thấy đường nào phía trước thì AI tiếp đất cú cuối, chạy cho vững rồi phanh dừng hẳn, như người chơi thấy hết đường. Xe đứng lại rồi AI vẫn giữ phanh cho tới khi bạn bấm phím (nếu không, xe đứng ở mép dốc sẽ tự trôi xuống). Xe mà bắt đầu trôi ngược xuống dốc thì AI phanh ngay.
+- **Mô phỏng tập cả đoạn sau đích:** khi học, mỗi lượt cũng phải tiếp đất, chạy vững và phanh dừng an toàn sau vạch đích thì mới tính là về đích. Trước đây mô phỏng dừng ngay ở vạch đích, nên một lượt "về đích" vẫn có thể ngã ngay sau đó ngoài game.
+- Lượt lái kết thúc khi xe ngã, khi bạn bấm phím, hoặc khi không còn đường nào phía trước. Ngã thì AI tự lái lại từ đầu, còn hết đường thì dừng hẳn.
+- **Đo ngoài game** (Trảng Sương 29): trước khi sửa, AI qua vạch đích rồi đạp lên con dốc phía sau, không đủ lực, trôi ngược và ngã. Phía trước đích chỉ có các bục nhảy quay ngược chiều, nên đúng là hết đường. Sau khi sửa, AI đi hết đường với 3120 điểm, đúng bằng số mô phỏng tính, rồi tự phanh dừng và đứng yên.
 
 Mỗi lượt lái thật cũng là một lần kiểm tra mô phỏng: AI so chỗ ngã thật với chỗ mô phỏng dự đoán, và so bản đồ trong mô phỏng với những chi tiết game vừa tải dọc đường. Lệch là dấu hiệu đường đã bị sửa và AI cần dò lại đường.
 
@@ -73,7 +86,7 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 - **Bắt chước bài học:** trước khi tự luyện, bộ não xem các bài học đã có trên máy chạy đường của chúng và học làm giống vậy. Sau đó nó tự chạy, còn bài học chỉ cho nó nên làm gì ở những chỗ nó đến. Kết quả chỉ được giữ nếu giỏi hơn.
 - **Bộ não lái:** khi bấm **AI lái**, bộ não lái nếu nó đi xa hơn bài học của đường đó trong mô phỏng, hoặc nếu đường chưa có bài học.
 - **Tên đường:** mỗi đường trong danh sách có một tên riêng như “Đồi Thông 37” thay vì “điểm xuất phát cách 40 m”. Tên được tạo từ mã của điểm xuất phát, nên đường nào cũng giữ đúng tên đó trên mọi máy. Bấm **✎** cạnh danh sách để tự đặt tên khác (lưu trong trình duyệt); để trống thì dùng lại tên AI đặt.
-- **Đi tiếp sang đường khác:** tới cuối đường, AI tìm một đường bắt đầu trong vòng 35 m phía trước xe và đi gần cùng hướng (lệch tối đa 0,8 rad). Nếu có, bộ não lái tiếp sang đường đó, chạy thẳng qua phần đất ở giữa. Nếu không có, AI dừng như trước, nên xe không bao giờ chạy ra chỗ không có đường. Đường đã đi trong lượt này thì không đi lại, và tối đa 30 đường nối nhau. Khoảng 8 trên 21 đường quanh điểm thử có đường để đi tiếp. Những đường còn lại kết thúc ở chỗ chỉ có đường chạy ngược chiều.
+- **Đi tiếp sang đường khác:** tới cuối đường, AI đi tiếp sang đường phía trước (xem [Vừa lái thật vừa học](#vừa-lái-thật-vừa-học)). Trước bản 3, AI chỉ nhìn 35 m phía trước một lần lúc vào đường, bộ não lái đường đi tiếp, và AI dừng ngay ở vạch đích nếu lúc đó chưa thấy đường. Khi đó khoảng 8 trên 21 đường quanh điểm thử có đường để đi tiếp. Những đường còn lại kết thúc ở chỗ chỉ có đường chạy ngược chiều.
   - **Học luôn các đường đi tiếp:** khi bắt đầu **Học lái**, AI nối luôn các đường đi tiếp đó vào sau đường đã chọn (tối đa 6 đường, 1500 m) và học cả tuyến như một đường. Bài học vì thế biết cả các đường sau, với đúng tốc độ xe tới mỗi đường, và **AI lái** đi tiếp bằng bài học chứ không bằng bộ não. Hết tuyến, bộ não lái tiếp như trên. Bài học cũ (học trên đường lẻ) vẫn giữ được: các đoạn nằm trọn trên đường cũ giữ nguyên, phần nối thêm bắt đầu từ cách bộ não lái nó. Thử trên zwu4bywywe: đường 102 m thành tuyến 255 m, AI giữ 755 vòng đã học và đi được 141 m thay vì 116 m. Bài học chưa học lại theo tuyến thì AI lái vẫn dùng đường lẻ như cũ.
 - **Chỗ khó chung:** trên 62 đường (40 đường luyện, 22 đường để riêng), cả hai phiên bản bộ não đều ngã ở 36 đường, và 26 trong số đó ngã cùng một chỗ (lệch không quá 5 m), phần lớn ở chỗ tiếp đất hoặc mép nhảy. Bài học riêng của từng đường thì vượt được những chỗ đó: đường cuarkplp1p đi được 319 m bằng bài học, chỉ 102–106 m bằng bộ não.
   - **Vì sao ngã ở đó.** Ghi lại từng khoảnh khắc trên không, so bộ não với bài học ở cùng cú nhảy: tốc độ cất cánh gần như bằng nhau, nhưng bài học tiếp đất gần bằng phẳng (−0,05 đến +0,1 rad), còn bộ não chúi mũi (−0,6 đến −1,1 rad) rồi ngã. Bộ não nhắm theo dốc của miếng tiếp đất, trong khi xe thường chạm đất ở chỗ khác, nên nó học cách chúi mũi ở mọi cú nhảy. Khi đã nhắm đúng góc, phần lớn các lần ngã còn lại là do tốc độ cất cánh: bay quá xa (đường sni4rh24nj: xe bay cao 12 m rồi rơi xuống chỗ bằng) hoặc bay hụt, đập vào gờ đất phía trước.
@@ -139,7 +152,7 @@ Game chấm mỗi cú tiếp đất bằng một chữ: **Buttery**, **Clean**, 
 | Whip | +100 |
 | Chuỗi nhân | ×1 đến ×5: tăng 1 sau mỗi cú không Flat, không Cased; Flat hay Cased đưa về ×1 |
 
-Vì chuỗi nhân, một cú tiếp đất xấu ở đầu đường làm mất điểm của mọi cú sau nó. Khi đã về đích, AI làm như sau:
+Vì chuỗi nhân, một cú tiếp đất xấu ở đầu đường làm mất điểm của mọi cú sau nó. Từ bản 3, mỗi lượt dò chọn ở từng đoạn những cách đi được nhiều điểm game nhất tới đó (cùng chuỗi nhân), nên tiếp đất đẹp, giữ chuỗi và trick được học ngay trong lúc vượt đường. Những cách dưới đây là của bản 2 (từng chế độ riêng), giữ lại để biết AI đã đi tới đây thế nào. Sổ tay trick và phần xem lại vẫn dùng như cũ.
 
 - **Xem lại lượt tốt nhất:** mỗi cú nhảy có thời gian bay, độ cao, độ xa, chữ game chấm, trick, điểm và hệ số nhân, kèm lời khuyên. Ví dụ "chúc đầu 32° so với dốc đáp: giữ đầu xe ngẩng hơn", "bay hụt: cần lấy đà nhanh hơn", hoặc "bay đủ lâu cho Backflip". Tất cả có trong mục **Xem lại từng cú nhảy** (phần Chi tiết). Góc lệch lúc chạm đất phân biệt rõ các chữ: Clean lệch khoảng 3°, Sketchy khoảng 32°.
 - **Tập tiếp đất đẹp hơn:** AI chọn một cú không Clean (cú Flat hay Cased được chọn nhiều hơn) rồi thử đổi góc xe khi bay, tốc độ lúc rời mép nhảy, đà ở đoạn trước, và có nhấc xe hay không. Nếu một lần thử tiếp đất đẹp hơn nhưng ngã ở đoạn sau, AI giữ lần đó và tập tiếp phần sau (tối đa 40 vòng) cho tới khi về đích.

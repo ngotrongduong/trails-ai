@@ -326,7 +326,7 @@ start: { id: start.id, x: start.x, z: start.z, heading: start.heading },
 X, Z, KIND, length: X.length, pieces, kinds,
 };
 }
-const ONWARD_GAP = 35;
+const ONWARD_GAP = 60;
 async function nextLine(R, seen) {
 const N = R.length, ex = R.X[N - 1], ez = R.Z[N - 1], k = Math.max(0, N - 6);
 const eh = Math.atan2(ez - R.Z[k], ex - R.X[k]);
@@ -348,7 +348,7 @@ if (c) cands.push(c);
 }
 cands.sort((a, b) => a.sc - b.sc);
 let best = null;
-for (const c of cands.slice(0, 4)) {
+for (const c of cands.slice(0, 6)) {
 const r = await buildRoute({ id: 'onward', x: c.x, z: c.z, heading: c.h });
 if (!r || r.length < 25) continue;
 let old = 0, n = 0;
@@ -556,14 +556,20 @@ return '';
 const trickWords = (tr, turn) =>[tr & 1 ? 'Backflip' : '', tr & 2 ? `Spin ${turn}` : '', tr & 4 ? 'Whip' : ''].filter(Boolean).join(' + ');
 function makeRider(R, H, S, P) {
 const N = R.length;
-const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, rot: 0, let: false, inp: [0, 0, 0, 0, 0, 0, 0] };
+const me = { P, idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, rot: 0, let: false, inp: [0, 0, 0, 0, 0, 0, 0] };
 const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
-const vAt = (k, i) => { const q = P.vs && P.vs[k]; return q && q.length ? q[Math.min(q.length - 1, Math.max(0, Math.floor((i - S[k].a) * q.length / (S[k].b - S[k].a + 1))))] : P.v[k]; };
-me.step = (s, t) => {
-const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
-if (me.prevP === null) me.prevP = s[4];
+const vAt = (P, k, i) => { const q = P.vs && P.vs[k]; return q && q.length ? q[Math.min(q.length - 1, Math.max(0, Math.floor((i - S[k].a) * q.length / (S[k].b - S[k].a + 1))))] : P.v[k]; };
+const near = (bx, bz) => {
 let bi = me.idx, bd = Infinity;
 for (let i = Math.max(0, me.idx - 4); i < Math.min(N, me.idx + 45); i++) { const d = (R.X[i] - bx) ** 2 + (R.Z[i] - bz) ** 2; if (d < bd) { bd = d; bi = i; } }
+return [bi, bd];
+};
+me.peek = s => near(s[0], s[2])[0];
+me.step = (s, t) => {
+const P = me.P;
+const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
+if (me.prevP === null) me.prevP = s[4];
+const [bi, bd] = near(bx, bz);
 me.idx = bi;
 while (me.sec < S.length - 1 && me.idx > S[me.sec].b) me.sec++;
 me.off = Math.sqrt(bd);
@@ -583,7 +589,7 @@ const e1 = wrapA(Math.atan2(R.Z[a1] - bz, R.X[a1] - bx) - bh), e2 = wrapA(Math.a
 let st = air ? 0 : clamp(2.2 * e1 + 0.6 * e2, -1, 1), pedal = 0, brake = 0, lean = 0, btn = 0, whip = 0, pump = 0;
 const sec = me.sec, idx = me.idx;
 if (!air) {
-const e = vAt(sec, idx) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+const e = vAt(P, sec, idx) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
 if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
 if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
 if (P.pu && P.pu[sec] > 0 && R.KIND[idx] !== 'start') {
@@ -593,6 +599,7 @@ else if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
 const gm = MOVES[P.mv[sec] | 0];
 if (gm && R.KIND[idx] === 'takeoff') { if (gm.spin) whip = gm.spin; if (gm.flip) { pedal = 1; brake = 0; } }
 if (gm && gm.man && R.KIND[idx] !== 'takeoff' && !(s[46] > 0 && s[47] >= 0)) btn |= 1;
+if (P.lg && P.lg[sec]) lean = P.lg[sec];
 } else {
 const dp = wrapA(s[4] - me.prevP) * 30;
 me.rot += wrapA(s[4] - me.prevP);
@@ -614,10 +621,12 @@ if (s[12] > 0.1 && by - gnd > P.hr[me.airSec]) { btn = mv.b || 0; if (mv.ln !== 
 }
 me.prevP = s[4];
 me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, Math.round(whip * 127)];
-me.want = air ? [0, 0, 0, P.pt[me.airSec], 1] : [vAt(sec, idx), btn & 1, pump, 0, 0];
+me.want = air ? [0, 0, 0, P.pt[me.airSec], 1] : [vAt(P, sec, idx), btn & 1, pump, 0, 0];
 }
 return me.inp;
 };
+me.save = () => { const o = {}; for (const k in me) if (k !== 'P' && typeof me[k] !== 'function') o[k] = Array.isArray(me[k]) ? me[k].slice() : me[k]; return o; };
+me.load = o => { for (const k in o) me[k] = Array.isArray(o[k]) ? o[k].slice() : o[k]; };
 return me;
 }
 const BRAIN = { inp: 22, hid: 16, out: 4 };
@@ -832,73 +841,180 @@ whip:tr(did(4)),spin:tr(did(2)),flip:tr(did(1)),
 tricks:kinds()+(manual>=120?1:0)+(fin?1:0)}[D.kind]||0;
 return {n:+Math.min(D.need,have).toFixed(2),need:D.need};
 }
-function episode(P,opt){
-opt=opt||{};const rec=opt.rec,until=opt.until||1e9;
-spawn();
-let s=state();
-const N=R.length;let idx=0,prog=0,pts=0,seq=s[16],stall=0,t=0,crash=0,end='hết giờ';
-const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
-const rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
-const vr=new Float32Array(N);
-const tr=rec?[]:null,ev=rec?[]:null;
-const tricks={};let pending=null,manualM=0,landT=-1e9,jumps=0,landAt=-1,lastJ=-1,progAt=0,progT=0;
-const jl=[];let game=0,streak=0,airP=0,manRun=0,manBest=0;
-const PZ=R.PZ||[],zoneAt=u=>PZ.find(z=>u>=z[0]-1.2&&u<=z[1]+0.3)||null,c0=coach();
-let push=null,goodPumps=0,pumpGain=0,seenPump=c0?c0[0]:0;
-const LS=R.lands?R.lands:[];if(!R.lands)for(let i=0;i<N;i++)if(R.KIND[i]==='landing'){if(LS.length&&LS[LS.length-1][1]===i-1)LS[LS.length-1][1]=i;else LS.push([i,i])}
+const zoneAt=u=>(R.PZ||[]).find(z=>u>=z[0]-1.2&&u<=z[1]+0.3)||null;
 const newPush=u=>({from:u,to:u,z:zoneAt(u),since:null,kmh:null});
-for(t=0;t<maxT;t++){
+function landsOf(){
+if(R.lands)return R.lands;if(R.LS)return R.LS;
+const LS=[],N=R.length;for(let i=0;i<N;i++)if(R.KIND[i]==='landing'){if(LS.length&&LS[LS.length-1][1]===i-1)LS[LS.length-1][1]=i;else LS.push([i,i])}
+return R.LS=LS;
+}
+function tailInp(s,inp,halt){
+const n=R.length,k=Math.max(0,n-6),h=Math.atan2(R.Z[n-1]-R.Z[k],R.X[n-1]-R.X[k]),v=s[8],air=s[12]>0;
+const st=Math.round((air?0:clamp(2*wrapA(h-s[3]),-1,1))*127),ln=air?inp[3]:0;
+return noPedals(halt?[0,air?0:v>1.5?70:127,st,ln,0,0,0]:[v<6?127:0,v>9?40:0,st,ln,0,0,0]);
+}
+function Ep(P,opt){
+opt=opt||{};spawn();
+const s=state(),N=R.length,c0=coach();
+const E={P,N,until:opt.until||1e9,t:0,idx:0,prog:0,pts:0,seq:s[16],stall:0,crash:0,end:'hết giờ',done:null,
+maxT:Math.min(120000,Math.round(N/2.5*60)+600),vr:new Float32Array(N),tricks:{},pending:null,manualM:0,landT:-1e9,jumps:0,landAt:-1,lastJ:-1,
+progAt:0,progT:0,jl:[],game:0,streak:0,airP:0,tail:-1,calm:0,halt:0,manRun:0,manBest:0,push:null,goodPumps:0,pumpGain:0,seenPump:c0?c0[0]:0,
+tr:opt.rec?[]:null,ev:opt.rec?[]:null};
+E.rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
+return E;
+}
+function go(E,stop){
+if(E.done)return E.done;
+const N=E.N,rider=E.rider,PZ=R.PZ||[],LS=landsOf(),rec=!!E.tr;
+let s=state();
+for(;E.t<E.maxT;E.t++){
+const t=E.t;
+if(stop&&stop(E,s))return null;
 const air=s[12]>0;
-const inp=noPedals(rider.step(s,t));
+let inp=noPedals(rider.step(s,t));
 if(PZ.length){const u=rider.at,c=!(s[12]>0.12)&&inp[4]>25&&!(inp[5]&1);
-if(c&&!push)push=newPush(u);
-if(push){if(c&&push.since===null)push.to=u;else if(push.since===null)push.since=0;else push.since++;if(c&&push.since!==null)push.since=27}
-const q=coach();if(q&&q[0]!==seenPump){seenPump=q[0];pumpGain+=q[1];if(push)push.kmh=q[1]*3.6}
-if(push&&push.since!==null&&(push.since>=27||push.kmh!==null)){const z=push.z;
-if(z&&push.from>=z[0]-0.8&&push.from<=z[2]+0.2&&push.to<=z[1]+0.8&&push.to>=z[2]-0.2&&!(push.kmh!==null&&push.kmh<0.3))goodPumps++;
-push=c?newPush(u):null}}
-idx=rider.idx;if(idx>prog){for(let i=prog+1;i<=idx;i++)vr[i]=Math.abs(s[8]);prog=idx}
-if(rider.off>7&&!air){end='lạc khỏi đường';pts-=20;break}
-if(idx>=N-3){end='về đích';pts+=150;break}
-if(idx>=until){end='đạt mốc';break}
-if(rider.landed){landT=t;if(s[14]>0.3)landAt=t}
-if(landAt>=0&&t-landAt>=45){if(idx>lastJ+3){pts+=15;jumps++;lastJ=idx}landAt=-1}
-if(prog>progAt){progAt=prog;progT=t}else if(t-progT>480){end='kẹt';pts-=25;break}
+if(c&&!E.push)E.push=newPush(u);
+const p=E.push;
+if(p){if(c&&p.since===null)p.to=u;else if(p.since===null)p.since=0;else p.since++;if(c&&p.since!==null)p.since=27}
+const q=coach();if(q&&q[0]!==E.seenPump){E.seenPump=q[0];E.pumpGain+=q[1];if(p)p.kmh=q[1]*3.6}
+if(p&&p.since!==null&&(p.since>=27||p.kmh!==null)){const z=p.z;
+if(z&&p.from>=z[0]-0.8&&p.from<=z[2]+0.2&&p.to<=z[1]+0.8&&p.to>=z[2]-0.2&&!(p.kmh!==null&&p.kmh<0.3))E.goodPumps++;
+E.push=c?newPush(u):null}}
+const idx=E.idx=rider.idx;if(idx>E.prog){for(let i=E.prog+1;i<=idx;i++)E.vr[i]=Math.abs(s[8]);E.prog=idx}
+if(idx>=N-3&&E.tail<0){if(R.drill){E.end='về đích';E.pts+=150;return fin(E,s)}E.tail=t}
+if(E.tail>=0){
+E.calm=air?0:E.calm+1;
+if(!E.halt&&((E.calm>=30&&t-E.tail>=45)||(!air&&s[8]<-0.3)))E.halt=1;
+if((E.halt&&!air&&Math.abs(s[8])<0.5)||t-E.tail>=420){E.end='về đích';E.pts+=150;return fin(E,s)}
+inp=tailInp(s,inp,E.halt);
+}else if(rider.off>7&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
+if(idx>=E.until){E.end='đạt mốc';return fin(E,s)}
+if(rider.landed){E.landT=t;if(s[14]>0.3)E.landAt=t}
+if(E.landAt>=0&&t-E.landAt>=45){if(idx>E.lastJ+3){E.pts+=15;E.jumps++;E.lastJ=idx}E.landAt=-1}
+if(E.prog>E.progAt){E.progAt=E.prog;E.progT=t}else if(t-E.progT>480){E.end='kẹt';E.pts-=25;return fin(E,s)}
 l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);
 s=state();
 if(rec&&t%2===0){const j=Math.min(N-2,idx),dx=R.X[j+1]-R.X[j],dz=R.Z[j+1]-R.Z[j];
 const f=clamp(((s[0]-R.X[j])*dx+(s[2]-R.Z[j])*dz)/(dx*dx+dz*dz||1),-0.5,1.5);
-tr.push(+(j+f).toFixed(2),+s[1].toFixed(2),+s[4].toFixed(3),s[12]>0?1:0,+Math.abs(s[8]).toFixed(1))}
-if(s[13]>0){crash=s[13];end='ngã';pts-=25;pending=null;if(rec)ev.push({t,crash});break}
-if(s[12]>0)airP=s[4];
-if(s[16]!==seq){seq=s[16];
+E.tr.push(+(j+f).toFixed(2),+s[1].toFixed(2),+s[4].toFixed(3),s[12]>0?1:0,+Math.abs(s[8]).toFixed(1))}
+if(s[13]>0){E.crash=s[13];E.end='ngã';E.pts-=25;E.pending=null;if(rec)E.ev.push({t,crash:E.crash});return fin(E,s)}
+if(s[12]>0)E.airP=s[4];
+if(s[16]!==E.seq){E.seq=s[16];
 const got={};const fl=Math.abs(s[44]||0),spn=Math.abs(s[43]||0),wh=Math.abs(s[41]||0),tb=s[56]||0;
 if(fl>=270)got.flip=Math.round(fl/360)||1;
 if(spn>=300)got.spin=Math.max(1,Math.round(spn/360));
 if(wh>=45)got.whip=wh;
 if(tb&16)got.table=1;if(tb&32)got.tailwhip=Math.max(1,s[57]|0);if(tb&64)got.barspin=Math.max(1,s[58]|0);if(tb&128)got.tbog=1;if(tb&256)got.xup=1;
-if(Object.keys(got).length)pending={got,t};
+if(Object.keys(got).length)E.pending={got,t};
 const gr=s[15]|0;
-if(gr>0){const k=rider.airSec,gp=gamePoints(gr,s[44],s[43],s[41],streak),i=Math.min(N-3,Math.max(2,idx));
-streak=gp.streak;game+=gp.p;
-const dp=airP-Math.atan2(H[i+2]-H[i-2],4);
-const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7);
-jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0});
-if(rec)ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
+if(gr>0){const k=rider.airSec,gp=gamePoints(gr,s[44],s[43],s[41],E.streak),i=Math.min(N-3,Math.max(2,idx));
+E.streak=gp.streak;E.game+=gp.p;
+const dp=E.airP-Math.atan2(H[i+2]-H[i-2],4);
+const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7),P=rider.P;
+E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0});
+if(rec)E.ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
 }
-if(pending&&t-pending.t>=30){const k=Object.keys(pending.got);let p=0;for(const n of k){p+=n==='whip'?pending.got[n]:TP[n]*pending.got[n];tricks[n]=(tricks[n]||0)+(n==='whip'?1:pending.got[n])}
-p*=1+0.5*(k.length-1);pts+=p;if(rec)ev.push({t:pending.t,got:pending.got,p:Math.round(p)});pending=null}
-if(s[46]>0&&!(s[12]>0)){const m=Math.abs(s[8])/60;manualM+=m;pts+=m*10;if(++manRun>manBest)manBest=manRun}else manRun=0;
-if(Math.abs(s[8])<0.6&&!(s[12]>0)){if(++stall>150){end='đứng lại';pts-=25;break}}else stall=0;
+const pd=E.pending;
+if(pd&&t-pd.t>=30){const k=Object.keys(pd.got);let p=0;for(const n of k){p+=n==='whip'?pd.got[n]:TP[n]*pd.got[n];E.tricks[n]=(E.tricks[n]||0)+(n==='whip'?1:pd.got[n])}
+p*=1+0.5*(k.length-1);E.pts+=p;if(rec)E.ev.push({t:pd.t,got:pd.got,p:Math.round(p)});E.pending=null}
+if(s[46]>0&&!(s[12]>0)){const m=Math.abs(s[8])/60;E.manualM+=m;E.pts+=m*10;if(++E.manRun>E.manBest)E.manBest=E.manRun}else E.manRun=0;
+if(Math.abs(s[8])<0.6&&!(s[12]>0)){if(++E.stall>150){E.end='đứng lại';E.pts-=25;return fin(E,s)}}else E.stall=0;
 }
-if(manualM>=2)tricks.manual=Math.round(manualM);
-const sec=rider.sec,crashSec=crash?(s[12]>0||t-landT<60?rider.airSec:sec):sec;
-const pace=0.05*Math.min(20,vr[Math.max(0,prog-5)]);
+return fin(E,state());
+}
+function summary(E,s,final){
+const rider=E.rider,t=E.t,prog=E.prog,tricks={...E.tricks};
+if(E.manualM>=2)tricks.manual=Math.round(E.manualM);
+const sec=rider.sec,crashSec=E.crash?(s[12]>0||t-E.landT<60?rider.airSec:sec):sec;
+const pace=0.05*Math.min(20,E.vr[Math.max(0,prog-5)]);
 const vEnd=+Math.abs(s[8]).toFixed(2),vAvg=+(prog/Math.max(1,t)*60).toFixed(2);
-const res={fit:prog+pts+pace,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps,game,jl,vEnd,vAvg,goodPumps,pumpGain:+pumpGain.toFixed(2)};
-if(R.drill)res.goal=drillGoal(R.drill,end,Math.abs(s[8]),jl,manBest,goodPumps,R.lands&&R.drill.kind==='clean'?R.lands.length:0);
-if(rec)res.trace={tr,ev,H:Array.from(H,h=>+h.toFixed(2))};
+const res={fit:prog+E.pts+pace,prog,pts:Math.round(E.pts),crash:E.crash,end:final?E.end:'đang đi',tricks,ticks:t,sec,crashSec,jumps:E.jumps,game:E.game,streak:E.streak,jl:E.jl.slice(),vEnd,vAvg,goodPumps:E.goodPumps,pumpGain:+E.pumpGain.toFixed(2)};
+if(R.drill)res.goal=drillGoal(R.drill,final?E.end:'về đích',Math.abs(s[8]),E.jl,E.manBest,E.goodPumps,R.lands&&R.drill.kind==='clean'?R.lands.length:0);
 return res;
+}
+function fin(E,s){
+const res=summary(E,s,true);
+if(E.tr)res.trace={tr:E.tr,ev:E.ev,H:Array.from(H,h=>+h.toFixed(2))};
+return E.done=res;
+}
+function episode(P,opt){return go(Ep(P,opt))}
+const PG=4096,PW=PG/4,KP=new Set();let BN=0,BZ=null,BO=null,BB=null,BB32=null,BH=0,clean=false;
+function takeBase(){
+const m32=new Int32Array(l.memory.buffer),n=m32.length/PW;let c=0,h=2166136261;
+BN=n;BZ=new Uint8Array(n);BO=new Int32Array(n);
+for(let p=0;p<n;p++){let z=1;for(let i=p*PW,e=i+PW;i<e;i++){const v=m32[i];h=Math.imul(h^v,16777619);if(v!==0)z=0}BZ[p]=z;if(!z)BO[p]=c++}
+BB=new Uint8Array(c*PG);BB32=new Int32Array(BB.buffer);const m=new Uint8Array(l.memory.buffer);
+for(let p=0;p<n;p++)if(!BZ[p])BB.set(m.subarray(p*PG,p*PG+PG),BO[p]*PG);
+BH=h>>>0;
+}
+function baseIs(m32,p){const o=p*PW;if(p>=BN||BZ[p]){for(let i=o;i<o+PW;i++)if(m32[i]!==0)return false;return true}
+const b=BO[p]*PW;for(let i=0;i<PW;i++)if(m32[o+i]!==BB32[b+i])return false;return true}
+function toBase(m,p){if(p>=BN||BZ[p])m.fill(0,p*PG,p*PG+PG);else m.set(BB.subarray(BO[p]*PG,BO[p]*PG+PG),p*PG)}
+function snapMem(){const ps=Int32Array.from([...KP].sort((a,b)=>a-b)),m=new Uint8Array(l.memory.buffer),d=new Uint8Array(ps.length*PG);
+for(let i=0;i<ps.length;i++)d.set(m.subarray(ps[i]*PG,ps[i]*PG+PG),i*PG);return {ps,d,len:m.length}}
+function putMem(sn){
+if(sn){const have=l.memory.buffer.byteLength;if(have<sn.len)l.memory.grow(Math.ceil((sn.len-have)/65536))}
+const m=new Uint8Array(l.memory.buffer),inS=new Set();
+if(sn)for(let i=0;i<sn.ps.length;i++){const p=sn.ps[i];inS.add(p);KP.add(p);m.set(sn.d.subarray(i*PG,i*PG+PG),p*PG)}
+if(clean){for(const p of KP)if(!inS.has(p))toBase(m,p);return}
+const m32=new Int32Array(l.memory.buffer),n=m32.length/PW;
+for(let p=0;p<n;p++)if(!inS.has(p)&&!baseIs(m32,p)){toBase(m,p);KP.add(p)}
+clean=true;
+}
+function rogue(){const m32=new Int32Array(l.memory.buffer),n=m32.length/PW,out=[];for(let p=0;p<n;p++)if(!KP.has(p)&&!baseIs(m32,p))out.push(p);return out}
+function save(E){
+const e={};for(const k in E)if(k!=='rider'&&k!=='P'&&k!=='tr'&&k!=='ev'&&k!=='done')e[k]=E[k];
+e.vr=E.vr.slice();e.jl=E.jl.slice();e.tricks={...E.tricks};e.pending=E.pending?{got:{...E.pending.got},t:E.pending.t}:null;e.push=E.push?{...E.push}:null;
+return {mem:snapMem(),e,r:E.rider.save()};
+}
+function load(n,P){
+putMem(n.mem);
+const E={...n.e,P,done:null,tr:null,ev:null};
+E.vr=n.e.vr.slice();E.jl=n.e.jl.slice();E.tricks={...n.e.tricks};E.pending=n.e.pending?{got:{...n.e.pending.got},t:n.e.pending.t}:null;E.push=n.e.push?{...n.e.push}:null;
+E.rider=makeRider(R,H,S,P);E.rider.load(n.r);
+return E;
+}
+function calib(plans){
+for(const P of plans)fromBase(P);
+return {list:[...KP],hash:BH,size:BN*PG};
+}
+function fromBase(P,stop){
+use(0);putMem(null);
+const E=Ep(P),r=go(E,stop);
+for(const p of rogue())KP.add(p);
+return stop?E:r;
+}
+function selftest(P,Q){
+const full=fromBase(P),half=Math.max(1,full.ticks>>1),E=fromBase(P,E=>E.t>=half);
+if(E.done)return {ok:true,short:true};
+const n=save(E),X=Ep(Q||P);go(X,X=>X.t>=half+240);for(const p of rogue())KP.add(p);
+const r=go(load(n,P));
+const ok=r.prog===full.prog&&r.ticks===full.ticks&&r.game===full.game&&r.end===full.end&&Math.abs(r.fit-full.fit)<1e-9&&r.jl.length===full.jl.length;
+return {ok,a:[full.prog,full.ticks,full.game,full.end],b:[r.prog,r.ticks,r.game,r.end]};
+}
+const kids=new Map();
+function roll(m){
+use(0);
+for(let lot=0;;lot++){
+const out=[],got=[];let broke=false;
+m.plans.forEach((P,i)=>{
+let kid=null,kt=0,r;
+try{
+let E;if(m.node)E=load(m.node,P);else{putMem(null);E=Ep(P)}
+const stop=(E,s)=>{const idx=E.rider.idx;
+if(!kid&&m.a1>=0&&E.rider.peek(s)>=m.a1){kid=save(E);kt=E.t}
+if(idx>=m.a2)return true;
+return !!kid&&!(s[12]>0)&&E.t-Math.max(E.landT,kt)>=45&&!E.pending&&E.landAt<0};
+const end=go(E,stop);r=end||summary(E,state(),false);
+r.kid=!!kid;r.v=+Math.abs(state()[8]).toFixed(2);
+}catch(err){broke=true;clean=false;kid=null;r={fit:-1e9,prog:0,pts:0,end:'lỗi',crash:1,crashSec:0,sec:0,tricks:{},jl:[],game:0,streak:0,jumps:0,ticks:0,vAvg:0,kid:false,v:0,error:String(err)}}
+if(kid)got.push([m.bid+':'+i,kid]);
+out.push(r);
+});
+const bad=rogue();
+for(const p of bad)KP.add(p);
+if((!bad.length&&!broke)||lot>=3){for(const [k,v] of got)kids.set(k,v);return out}
+}
 }
 function watchPlan(P,until,w){
 spawn();
@@ -906,6 +1022,7 @@ const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
 for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
 if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
 for(const k of ['as','pz','pk'])if(P[k]!==undefined)Q[k]=P[k];
+if(P.lg)Q.lg=S.map((_,i)=>P.lg[i]||0);
 let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
 let prog=0,progT=0,fell=false;
 for(let t=0;t<18000;t++){
@@ -957,12 +1074,20 @@ return P};
 return {prog,plans:[plan(aim,nv),plan(went,nv),plan(aim,nv,aimE),plan(went,nv,wentE)]};
 }
 onmessage=async e=>{const m=e.data;
+if(m.type!=='roll'&&m.type!=='take'&&m.type!=='clear')clean=false;
 try{
-if(m.type==='init'){await init(m);
+if(m.type==='init'){await init(m);if(m.snap)takeBase();
 const metas=lines.map(L=>({secs:L.S,length:L.R.length,geo:m.geo===false?null:{X:Array.from(L.R.X),Z:Array.from(L.R.Z),KIND:Array.from(L.R.KIND),H:Array.from(L.H),PZ:L.R.PZ}}));
 postMessage({type:'ready',id:m.id,...metas[0],metas})}
 else if(m.type==='eval'){use(0);const out=m.plans.map(p=>episode(p,{until:m.until}));postMessage({type:'evals',id:m.id,out})}
 else if(m.type==='replay'){use(0);postMessage({type:'replay',id:m.id,r:episode(m.plan,{rec:true})})}
+else if(m.type==='calib'){postMessage({type:'calib',id:m.id,...calib(m.plans)})}
+else if(m.type==='pages'){for(const p of m.list)KP.add(p);postMessage({type:'pages',id:m.id,test:selftest(m.plans[0],m.plans[1])})}
+else if(m.type==='snapat'){const full=fromBase(m.P),E=fromBase(m.P,E=>E.t>=full.ticks>>1);postMessage({type:'snapat',id:m.id,full,node:E.done?null:save(E)})}
+else if(m.type==='snaptest'){use(0);postMessage({type:'snaptest',id:m.id,r:go(load(m.node,m.P))})}
+else if(m.type==='roll'){postMessage({type:'roll',id:m.id,out:roll(m)})}
+else if(m.type==='take'){const nodes=m.keys.map(k=>kids.get(k)||null);postMessage({type:'take',id:m.id,nodes})}
+else if(m.type==='clear'){kids.clear();postMessage({type:'clear',id:m.id})}
 else if(m.type==='watch'){use(m.line);postMessage({type:'watch',id:m.id,...watchPlan(m.plan,m.until,m.brain)})}
 else if(m.type==='brainplan'){use(0);postMessage({type:'brainplan',id:m.id,...brainPlan(m.w)})}
 else if(m.type==='brains'){const out=m.tasks.map(([b,i])=>{use(i);const r=episode(null,{brain:m.brains[b],until:m.until});return {fit:r.fit,prog:r.prog,end:r.end,jumps:r.jumps}});postMessage({type:'brains',id:m.id,out})}
@@ -973,29 +1098,58 @@ constructor(n) {
 const url = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
 this.ws = Array.from({ length: n }, () => new Worker(url));
 this.seq = 0;
+this.waiting = new Map();
+this.ws.forEach(w => w.addEventListener('error', e => { e.preventDefault(); this.failAll(new Error('worker: ' + (e.message || 'lỗi'))); }));
 }
+failAll(err) { for (const [, rej] of this.waiting) rej(err); this.waiting.clear(); }
 call(w, msg, transfer) {
+if (this.closed) return Promise.reject(new Error('pool closed'));
 return new Promise((resolve, reject) => {
 const id = ++this.seq;
 const h = e => {
 if (e.data.id !== id) return;
 w.removeEventListener('message', h);
+this.waiting.delete(id);
 if (e.data.type === 'error') reject(new Error(e.data.error)); else resolve(e.data);
 };
+this.waiting.set(id, err => { w.removeEventListener('message', h); reject(err); });
 w.addEventListener('message', h);
 w.postMessage({ ...msg, id }, transfer || []);
 });
 }
+async calib(plans) {
+const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'calib', plans })));
+const all = new Set();
+for (const x of r) for (const p of x.list) all.add(p);
+const list = [...all];
+this.pages = list.length;
+const q = await Promise.all(this.ws.map(w => this.call(w, { type: 'pages', list, plans })));
+const same = r.every(x => x.hash === r[0].hash && x.size === r[0].size);
+let cross = { ok: true };
+if (same && this.ws.length > 1) {
+const a = await this.call(this.ws[0], { type: 'snapat', P: plans[0] });
+if (a.node) {
+const f = a.full, b = (await this.call(this.ws[this.ws.length - 1], { type: 'snaptest', node: a.node, P: plans[0] })).r;
+cross = { ok: b.prog === f.prog && b.ticks === f.ticks && b.game === f.game && b.end === f.end && Math.abs(b.fit - f.fit) < 1e-9, a: [f.prog, f.ticks, f.game], b: [b.prog, b.ticks, b.game] };
+}
+}
+this.snapOk = same && cross.ok && q.every(x => x.test && x.test.ok);
+this.snapTest = { same, cross, tests: q.map(x => x.test), hashes: [...new Set(r.map(x => x.hash))] };
+return this.snapOk;
+}
+roll(wi, msg) { return this.call(this.ws[wi], { type: 'roll', ...msg }).then(r => r.out); }
+take(wi, keys) { return this.call(this.ws[wi], { type: 'take', keys }).then(r => r.nodes); }
+clearKids() { return Promise.all(this.ws.map(w => this.call(w, { type: 'clear' }))); }
 async assets() {
 const a = assets();
 const wasm = await (await fetch(a.wasm)).arrayBuffer();
 const land = await Promise.all(a.land.map(u => fetch(u).then(r => r.arrayBuffer())));
 return { wasm, land };
 }
-async init(route, setup) {
+async init(route, setup, snap) {
 const { wasm, land } = await this.assets();
 this.held = this.ws.map(() => [0]);
-const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup })));
+const r = await Promise.all(this.ws.map(w => this.call(w, { type: 'init', wasm: wasm.slice(0), land: land.map(b => b.slice(0)), routes: [route], setup, snap })));
 return r[0].metas[0];
 }
 async initSpread(routes, setup) {
@@ -1047,7 +1201,7 @@ const wi = this.held.findIndex(h => h.includes(line));
 return this.call(this.ws[wi], { type: 'watch', line: this.held[wi].indexOf(line), plan, until, brain }).then(r => ({ rows: r.rows, prog: r.prog }));
 }));
 }
-close() { this.ws.forEach(w => w.terminate()); }
+close() { this.closed = true; this.ws.forEach(w => w.terminate()); this.failAll(new Error('pool closed')); }
 }
 const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 const clonePlan = p => JSON.parse(JSON.stringify(p));
@@ -1063,25 +1217,20 @@ return { plan: two[i], run: runs[i] };
 }
 const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
 const num = v => typeof v === 'number' && Number.isFinite(v);
-const partsOk = (P, n) => P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))));
+const partsOk = (P, n) => (P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num)))))
+&& (P.lg === undefined || (Array.isArray(P.lg) && P.lg.length === n && P.lg.every(num)));
 const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
-const MARK_TRIES = 24;
-const firstLandings = r => { const m = new Map(); for (const e of (r && r.jl) || []) if (!m.has(e.k)) m.set(e.k, e); return m; };
-const jumpVals = (p, k) => [k - 1, k].filter(q => q >= 0).map(q => ({ q, v: p.v[q], vs: p.vs && p.vs[q] ? p.vs[q].slice() : null, pt: p.pt[q], pl: p.pl[q], pu: p.pu[q], mv: p.mv[q], hr: p.hr[q] }));
-function setJumpVals(p, vals, keepTrick) {
-for (const r of vals) {
-if (r.q >= p.v.length) continue;
-p.v[r.q] = r.v; p.pt[r.q] = r.pt; p.pl[r.q] = r.pl; p.pu[r.q] = r.pu;
-if (r.vs || (p.vs && p.vs[r.q])) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[r.q] = r.vs ? r.vs.slice() : null; }
-if (!keepTrick) { p.mv[r.q] = r.mv; p.hr[r.q] = r.hr; }
-}
-}
 const done = r => r.end === 'về đích' && typeof r.game === 'number';
 const goalN = r => (r.goal ? r.goal.n : 0);
+const far = r => (done(r) ? Infinity : r.prog);
 const faster = (a, b) => (typeof a.vAvg === 'number' && typeof b.vAvg === 'number' && Math.abs(a.vAvg - b.vAvg) > 0.05 ? a.vAvg > b.vAvg : null);
-const beats = (a, b) => !b || (goalN(a) !== goalN(b) ? goalN(a) > goalN(b) : a.prog > b.prog || (a.prog === b.prog && (done(a) && done(b) && a.game !== b.game ? a.game > b.game
+const beats = (a, b) => !b || (goalN(a) !== goalN(b) ? goalN(a) > goalN(b) : far(a) > far(b) || (far(a) === far(b) && (done(a) && done(b) && a.game !== b.game ? a.game > b.game
 : done(a) && done(b) && faster(a, b) !== null ? faster(a, b) : a.fit > b.fit + 0.01)));
 const goalMet = r => !!(r && r.goal && r.goal.n >= r.goal.need);
+const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12;
+const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6];
+const setLean = (p, k, v) => { if (!p.lg) { if (!v) return; p.lg = p.v.map(() => 0); } p.lg[k] = v; };
+const aliveAt = r => r.end === 'đang đi' || r.end === 'về đích';
 const BOOK = 'trailsai.trickbook', BOOK_ROWS = 4000;
 function loadBook(mask) {
 try { const b = JSON.parse(localStorage.getItem(BOOK) || 'null'); return b && b.version === 1 && Array.isArray(b[mask]) ? b[mask] : []; } catch { return []; }
@@ -1136,17 +1285,6 @@ if (!D.pedals) { P.pz = 1; P.pu = P.pu.map(() => 1); P.v = P.v.map(() => 18); }
 return P;
 }
 const clampV = v => Math.min(18, Math.max(2, v));
-function moveSpeed(p, s, q, sd, split) {
-if (split && !(p.vs && p.vs[q])) {
-if (!p.vs) p.vs = p.v.map(() => null);
-p.vs[q] = new Array(Math.max(2, Math.round((s.b - s.a + 1) / 8))).fill(p.v[q]);
-}
-const k = p.vs && p.vs[q];
-if (!k) { p.v[q] = clampV(p.v[q] + gauss() * sd); return; }
-if (Math.random() < 0.3) { const d = gauss() * sd; for (let i = 0; i < k.length; i++) k[i] = clampV(k[i] + d); }
-else for (let i = 0; i < k.length; i++) if (Math.random() < 0.5) k[i] = clampV(k[i] + gauss() * sd);
-p.v[q] = k[k.length - 1];
-}
 function readLesson(raw, id) {
 let m;
 try { m = typeof raw === 'string' ? JSON.parse(raw) : raw; } catch { return null; }
@@ -1247,16 +1385,13 @@ return out;
 }
 load() {
 let mine = null;
-try { mine = JSON.parse(localStorage.getItem(this.key()) || 'null'); } catch { mine = null; }
+try { mine = this.temp ? null : JSON.parse(localStorage.getItem(this.key()) || 'null'); } catch { mine = null; }
 this.kept = 0;
 const plan = this.planOf(mine), ok = !!plan;
 this.plan = ok ? clonePlan(plan) : freshPlan(this.secs);
 this.gen = ok ? mine.gen : 0;
 this.hist = ok ? (mine.hist || []) : [];
 this.found = ok ? (mine.found || {}) : {};
-this.marks = ok && mine.marks && typeof mine.marks === 'object' && planFits(mine.plan, this.secs) ? mine.marks : {};
-this.fails = {};
-this.stuck = 0; this.lastProg = -1; this.alt = null; this.fix = null;
 this.best = null;
 return { fromTrack: !!ok, kept: ok ? this.kept : 0 };
 }
@@ -1266,7 +1401,7 @@ const line = { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, l
 if (tour !== undefined) line.tour = tour;
 if (practice) Object.assign(line, { land, practice });
 if (drill) { line.drill = drill; if (lands) line.lands = lands; }
-return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, marks: Object.fromEntries(Object.entries(this.marks || {}).map(([k, { plan, ...m }]) => [k, m])), bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
 }
 jumpRecord() {
 const S = this.secs, P = this.plan, b = this.best, list = [];
@@ -1274,6 +1409,7 @@ if (b) S.forEach((s, k) => { if (s.f && s.b + 25 < b.prog) list.push({ f: s.f, v
 return { version: JUMPS_VERSION, list };
 }
 save() {
+if (this.temp) return;
 if (this.takeStored()) return;
 try { localStorage.setItem(this.key(), JSON.stringify(this.lesson())); } catch { /* storage full: keep training anyway */ }
 }
@@ -1299,14 +1435,17 @@ if (this.pool) this.pool.close();
 this.route = route;
 this.setup = riderSetup();
 this.pool = new Pool(workers);
-const meta = await this.pool.init(route, this.setup);
+const meta = await this.pool.init(route, this.setup, true);
 this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
 this.book = loadBook(this.setup.tricks); this.bookDirty = false;
 const mem = this.load();
 if (!mem.fromTrack && route.drill) drillSeed(this.plan, this.secs, route.drill);
 ({ plan: this.plan, run: this.best } = await settleAir(this.pool, this.plan));
+const slow = freshPlan(this.secs), wild = clonePlan(this.plan);
+if (this.setup.tricks) this.secs.forEach((s, k) => { if (s.jump) wild.mv[k] = TRICK_MOVES[k % TRICK_MOVES.length]; });
+wild.v = wild.v.map(v => clampV(v + 2));
+await this.pool.calib([this.plan, slow, wild]);
 this.borrow = matchJumps(this.secs, this.library || [], route.start.id);
-this.borrowed = new Set(); this.borrowWins = 0;
 const alike = this.borrow.filter(Boolean);
 mem.jumps = this.secs.filter(s => s.jump).length;
 mem.alike = alike.length;
@@ -1342,336 +1481,205 @@ if (beats(runs[bi], this.best)) { this.plan = mixes[bi]; this.best = runs[bi]; }
 return mem;
 }
 stop() { this.running = false; }
-rideCandidates(k, n, wide, base = this.plan) {
-const S = this.secs, out = [], opts = [];
-for (let q = Math.max(0, k - 1); q <= Math.min(S.length - 1, k + 1); q++) for (const o of (this.borrow && this.borrow[q]) || []) opts.push([q, o.j]);
-const nb = Math.min(opts.length, Math.floor(n / 6));
-this.borrowed = new Set();
+airOf(j) { return Math.max(0, ...((this.best && this.best.jl) || []).filter(e => e.k === j).map(e => e.a)); }
+horizon(a, b) {
+const ga = goalN(a), gb = goalN(b);
+if (Math.abs(ga - gb) > 1e-9) return ga - gb;
+const la = aliveAt(a), lb = aliveAt(b);
+if (la !== lb) return la ? 1 : -1;
+if (!la) return a.prog !== b.prog ? a.prog - b.prog : a.fit - b.fit;
+if (a.game !== b.game) return a.game - b.game;
+return a.fit - b.fit;
+}
+movesFor(k, n) {
+const D = this.route.drill, only = D && DRILL_MOVES[D.kind];
+if (only) return Array.from({ length: n }, () => only[Math.floor(Math.random() * only.length)]);
+const air = this.airOf(k);
+return this.setup.tricks && air ? bookMoves(this.book, air, n) : null;
+}
+secTry(base, k, wide, move) {
+const s = this.secs[k], p = clonePlan(base), D = this.route.drill;
+if (!p.vs) p.vs = p.v.map(() => null);
+const sd = 1.0 * wide, u = p.vs[k];
+if (u && u.length) {
+if (Math.random() < 0.15) { p.v[k] = clampV(u[u.length - 1] + gauss() * sd); p.vs[k] = null; }
+else { for (let i = 0; i < u.length; i++) if (Math.random() < 0.7) u[i] = clampV(u[i] + gauss() * sd); p.v[k] = u[u.length - 1]; }
+} else if (Math.random() < 0.15 && s.b - s.a >= 12) {
+const n = 2 + (Math.random() < 0.4 ? 1 : 0);
+p.vs[k] = Array.from({ length: n }, () => +clampV(p.v[k] + gauss() * sd).toFixed(2));
+p.v[k] = p.vs[k][n - 1];
+} else if (Math.random() < 0.85) p.v[k] = clampV(p.v[k] + gauss() * sd);
+if (Math.random() < (s.jump ? 0.8 : 0.3)) p.pt[k] += gauss() * (s.jump ? 0.12 : 0.04) * wide;
+if (s.jump && Math.random() < 0.2 * wide) p.pl[k] = Math.random() < 0.4 ? 0 : 1 + Math.floor(Math.random() * 5);
+if (Math.random() < 0.2 * wide) p.pu[k] = [0, 0.5, 0.8, 1][Math.floor(Math.random() * 4)];
+if (Math.random() < 0.12 * wide) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
+if (s.jump && move !== undefined && move !== null) {
+p.mv[k] = move;
+if (move === FLIP && Math.random() < 0.5) p.pl[k] = 1 + Math.floor(Math.random() * 5);
+}
+if (s.jump && (p.mv[k] | 0) && Math.random() < 0.6) p.hr[k] = +clamp(p.hr[k] + gauss() * 0.5 * wide, 0.3, 2.8).toFixed(2);
+if (!s.jump && D && (D.kind === 'manual' || D.kind === 'tricks') && Math.random() < 0.3) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
+return p;
+}
+wildTry(nd, k) {
+const s = this.secs[k], p = clonePlan(nd.plan), r = (a, b) => a + Math.random() * (b - a);
+if (!p.vs) p.vs = p.v.map(() => null);
+if (Math.random() < 0.5 && s.b - s.a >= 12) {
+const n = 2 + Math.floor(Math.random() * 3);
+p.vs[k] = Array.from({ length: n }, () => +r(3, 18).toFixed(2));
+p.v[k] = p.vs[k][n - 1];
+} else { p.vs[k] = null; p.v[k] = r(3, 18); }
+if (s.jump) {
+p.pt[k] = Math.random() < 0.5 ? s.pt + r(-0.6, 0.4) : r(-1.2, 0.6);
+p.pl[k] = Math.random() < 0.6 ? 1 + Math.floor(Math.random() * 6) : 0;
+}
+p.pu[k] = Math.random() < 0.3 ? [0.5, 0.8, 1][Math.floor(Math.random() * 3)] : 0;
+if (Math.random() < 0.4) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
+return { p };
+}
+firstTries(nd, k, wide, n, wild) {
+const S = this.secs, s = S[k], out = [{ p: clonePlan(nd.plan), same: true }];
+if (s.jump) {
+for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
+const p = clonePlan(nd.plan), u = p.vs && p.vs[k];
+if (u) { u[u.length - 1] = clampV(u[u.length - 1] + dv * wide); p.v[k] = u[u.length - 1]; } else p.v[k] = clampV(p.v[k] + dv * wide);
+p.pt[k] += da;
+out.push({ p });
+}
+for (const o of ((this.borrow && this.borrow[k]) || []).slice(0, 2)) { const p = clonePlan(nd.plan); applyJump(p, s, k, o.j); out.push({ p }); }
+}
+const moves = s.jump ? this.movesFor(k, n) : null;
 for (let i = 0; i < n; i++) {
-const p = clonePlan(base);
-if (i < nb) {
-const [q, j] = opts[(this.gen * nb + i) % opts.length];
-applyJump(p, S[q], q, j);
-if (Math.random() < 0.5) { p.v[q] = clampV(p.v[q] + gauss() * 0.7); p.pt[q] += gauss() * 0.06; }
-this.borrowed.add(i);
-out.push(p);
+if (Math.random() < wild) { out.push(this.wildTry(nd, k)); continue; }
+out.push({ p: this.secTry(nd.plan, k, wide, moves && Math.random() < 0.5 ? moves[i % moves.length] : undefined) });
+}
+return out;
+}
+eliteTry(el, k) {
+const one = () => el[Math.floor(Math.random() * el.length)];
+const p = clonePlan(one()), spread = f => { const xs = el.map(f); const m = xs.reduce((a, x) => a + x, 0) / xs.length; return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length); };
+const sv = Math.max(0.15, spread(q => q.v[k])), sp = Math.max(0.015, spread(q => q.pt[k]));
+const from = one();
+if (!p.vs) p.vs = p.v.map(() => null);
+p.vs[k] = from.vs && from.vs[k] ? from.vs[k].map(v => +clampV(v + gauss() * sv).toFixed(2)) : null;
+p.v[k] = p.vs[k] ? p.vs[k][p.vs[k].length - 1] : clampV(from.v[k] + gauss() * sv);
+p.pt[k] = one().pt[k] + gauss() * sp;
+p.pl[k] = one().pl[k]; p.pu[k] = one().pu[k];
+const m = one(); p.mv[k] = m.mv[k]; p.hr[k] = clamp(m.hr[k] + gauss() * 0.15, 0.3, 2.8);
+const w = one();
+if (w.lg || p.lg) { if (!p.lg) p.lg = p.v.map(() => 0); p.lg[k] = w.lg ? w.lg[k] : 0; }
+return { p };
+}
+async rollAll(cs, a1, a2) {
+const pool = this.pool, W = pool.ws.length, per = Math.ceil(cs.length / W), jobs = [];
+for (let wi = 0; wi < W; wi++) {
+const part = cs.slice(wi * per, (wi + 1) * per);
+if (!part.length) continue;
+jobs.push((async () => {
+for (let i = 0; i < part.length;) {
+let j = i; while (j < part.length && part[j].nd === part[i].nd) j++;
+const bid = `${++this.bid}`, group = part.slice(i, j);
+const out = await pool.roll(wi, { node: group[0].nd.n, plans: group.map(c => c.p), a1, a2, bid });
+group.forEach((c, q) => { c.r = out[q]; c.wi = wi; c.key = `${bid}:${q}`; });
+i = j;
+}
+})());
+}
+await Promise.all(jobs);
+this.tries += cs.length;
+}
+async sweep(wide) {
+const S = this.secs, K = S.length, pool = this.pool;
+let beam = [{ n: null, plan: clonePlan(this.plan), inc: true }], k = 0, backs = 0, bestEnd = null, last = null;
+const beams = [beam], widen = new Map(), fails = {}, t0 = performance.now();
+this.tries = 0; this.bid = this.bid || 0;
+while (k < K && this.running) {
+const a1 = k + 1 < K ? S[k + 1].a : -1, a2 = k + 2 < K ? S[k + 2].a : this.N + 10, w = wide * (widen.get(k) || 1);
+const n1 = Math.max(12, Math.ceil(SWEEP_TRIES / beam.length)), cs = [];
+const front = this.best.end === 'về đích' ? K : this.best.crashSec, wild = k >= front - 1 && k <= front ? 0.5 : widen.has(k) ? 0.3 : 0.1;
+for (const nd of beam) for (const c of this.firstTries(nd, k, w, n1, wild)) cs.push({ nd, ...c });
+await this.rollAll(cs, a1, a2);
+if (!this.running) return null;
+const more = [];
+for (const nd of beam) {
+const mine = cs.filter(c => c.nd === nd).sort((x, y) => this.horizon(y.r, x.r));
+const el = mine.slice(0, Math.max(2, Math.ceil(mine.length / 5))).map(c => c.p);
+for (let i = 0; i < Math.ceil(n1 / 2); i++) more.push({ nd, ...this.eliteTry(el, k) });
+}
+await this.rollAll(more, a1, a2);
+if (!this.running) return null;
+const all = cs.concat(more);
+if (S[k].jump) this.learnBook(k, all);
+for (const c of all) if (c.r.end !== 'đang đi' && (!bestEnd || beats(c.r, bestEnd.r))) bestEnd = c;
+this.ui.progress({ gen: this.gen, best: this.best, mean: all.reduce((a, c) => a + c.r.fit, 0) / all.length, ms: performance.now() - t0, mode: 'sweep', label: `đoạn ${k + 1}/${K}${backs ? `, lùi lại ${backs} lần` : ''}`, tries: this.tries });
+if (a1 < 0) break;
+const ok = all.filter(c => c.r.kid).sort((x, y) => this.horizon(y.r, x.r));
+if (!ok.length) {
+if (backs >= MAX_BACKS) break;
+const f = (fails[k] = (fails[k] || 0) + 1), back = Math.min(k, [1, 2, 4, 6][Math.min(3, f - 1)]);
+for (let q = k - back; q <= k; q++) widen.set(q, Math.min(4, (widen.get(q) || 1) * 1.8));
+backs++; k -= back; beam = beams[k]; beams.length = k + 1;
+await pool.clearKids();
 continue;
 }
-const span = 1 + Math.floor(Math.random() * (this.stuck > 60 ? 5 : 3));
-const split = this.stuck > 20 ? 0.3 : 0.1;
-for (let q = Math.max(0, k - span); q <= Math.min(S.length - 1, k + 1); q++) {
-if (Math.random() < 0.7) moveSpeed(p, S[q], q, 1.5 * wide, Math.random() < split);
-if (S[q].jump && Math.random() < 0.4) p.pt[q] += gauss() * 0.15;
-if (S[q].jump && Math.random() < 0.15) p.pl[q] = p.pl[q] ? 0 : 1 + Math.floor(Math.random() * 5);
-if (Math.random() < 0.1) p.pu[q] = p.pu[q] ? 0 : +(Math.random() * 0.6).toFixed(2);
+const sel = [], speeds = new Set(), own = ok.find(c => c.nd.inc && c.same);
+if (own) { sel.push(own); speeds.add(Math.round(own.r.v)); }
+for (const c of ok) { if (sel.length >= BEAM) break; const v = Math.round(c.r.v); if (!sel.includes(c) && !speeds.has(v)) { speeds.add(v); sel.push(c); } }
+for (const c of ok) { if (sel.length >= BEAM) break; if (!sel.includes(c)) sel.push(c); }
+const nodes = new Array(sel.length);
+await Promise.all([...new Set(sel.map(c => c.wi))].map(async wi => {
+const mine = sel.map((c, i) => [c, i]).filter(([c]) => c.wi === wi);
+const got = await pool.take(wi, mine.map(([c]) => c.key));
+mine.forEach(([c, i], q) => { nodes[i] = { n: got[q], plan: c.p, inc: !!(c.nd.inc && c.same), r: c.r }; });
+}));
+await pool.clearKids();
+beam = nodes.filter(nd => nd.n);
+last = { k, r: sel[0].r };
+k++; beams[k] = beam;
 }
-out.push(p);
+if (!this.running || !bestEnd) return { improved: false, stuck: last };
+const full = (await pool.evalAll([bestEnd.p]))[0];
+if (full.prog !== bestEnd.r.prog || full.game !== bestEnd.r.game || full.end !== bestEnd.r.end) {
+this.drift = (this.drift || 0) + 1;
+(this.drifts = this.drifts || []).push({ k, wi: bestEnd.wi, a: [bestEnd.r.prog, bestEnd.r.game, bestEnd.r.end, bestEnd.r.ticks], b: [full.prog, full.game, full.end, full.ticks], p: bestEnd.p, inc: !!bestEnd.nd.inc });
 }
-return out;
-}
-wildCandidates(k, n) {
-const S = this.secs, out = [], r = (a, b) => a + Math.random() * (b - a);
-for (let i = 0; i < n; i++) {
-const p = clonePlan(this.plan);
-if (!p.vs) p.vs = p.v.map(() => null);
-for (let q = Math.max(0, k - 3); q <= k; q++) {
-p.vs[q] = null; p.mv[q] = 0;
-p.v[q] = r(4, 18);
-if (Math.random() < 0.6) moveSpeed(p, S[q], q, 4, true);
-p.pt[q] = S[q].pt + r(-0.5, 0.4);
-p.pl[q] = S[q].jump && Math.random() < 0.6 ? Math.floor(r(1, 6)) : 0;
-p.pu[q] = Math.random() < 0.4 ? +r(0.1, 0.9).toFixed(2) : 0;
-}
-out.push(p);
-}
-return out;
-}
-airOf(j) { return Math.max(0, ...((this.best && this.best.jl) || []).filter(e => e.k === j).map(e => e.a)); }
-pointsTarget(passed) {
-const jl = this.best.jl || [], tricksOn = !!this.setup.tricks;
-const worst = new Map();
-for (const e of jl) worst.set(e.k, Math.max(worst.get(e.k) || 0, e.g));
-const weak = [...worst].filter(([, g]) => g >= 3);
-const pickW = list => {
-let x = Math.random() * list.reduce((a, [, w]) => a + w, 0);
-for (const [k, w] of list) { x -= w; if (x <= 0) return k; }
-return list[list.length - 1][0];
-};
-const M = this.marks || {};
-const lost = [...firstLandings(this.best)].filter(([k, e]) => M[k] && M[k].g < e.g && (M[k].tries || 0) < MARK_TRIES);
-if (lost.length && Math.random() < 0.4) return { j: pickW(lost.map(([k, e]) => [k, e.g - M[k].g])), land: true };
-if (weak.length && (!tricksOn || Math.random() < 0.6)) return { j: pickW(weak.map(([k, g]) => [k, g >= 4 ? 4 : 2])), land: true };
-if (!tricksOn) {
-const clean = [...worst].filter(([, g]) => g === 2);
-return clean.length ? { j: clean[Math.floor(Math.random() * clean.length)][0], land: true } : null;
-}
-const bare = passed.filter(j => !jl.some(e => e.k === j && e.tr) && (worst.get(j) || 9) <= 2);
-const from = bare.length && Math.random() < 0.7 ? bare : passed;
-return { j: pickW(from.map(j => [j, 0.3 + this.airOf(j)])), land: false };
-}
-drillTarget(passed, finished) {
-const D = this.route.drill, b = this.best;
-if (goalMet(b)) return finished && passed.length ? this.pointsTarget(passed) : null;
-if (D.kind === 'manual' || (D.kind === 'tricks' && Math.random() < 0.3)) return { manual: true };
-if (!D.pedals) return { pump: true };
-const off = (b.jl || []).filter(e => e.a > 0.4 && (e.g > 2 || e.spot === false) && passed.includes(e.k));
-if (off.length && (D.kind === 'clean' || D.kind === 'boost' || D.kind === 'racer' || D.kind === 'finish')) return { j: off[Math.random() < 0.7 ? 0 : Math.floor(Math.random() * off.length)].k, land: true };
-if (DRILL_MOVES[D.kind] && finished && Math.random() < 0.25) return this.pointsTarget(passed);
-if (DRILL_MOVES[D.kind]) {
-let seen = 0;
-const bare = passed.filter(j => {
-const e = (b.jl || []).find(x => x.k === j && x.tr);
-if (!e) return true;
-const dup = D.kind === 'tricks' && (e.tr & seen) === e.tr;
-seen |= e.tr;
-return dup;
-});
-const from = bare.length ? bare : passed;
-return from.length ? { j: from[Math.floor(Math.random() * from.length)], land: false } : null;
-}
-return finished && passed.length ? this.pointsTarget(passed) : null;
-}
-pumpCandidates(n) {
-const S = this.secs, out = [];
-for (let i = 0; i < n; i++) {
-const p = clonePlan(this.plan);
-if (!p.pz && Math.random() < 0.6) { p.pz = 1; if (Math.random() < 0.5) p.pu = p.pu.map(() => 1); }
-if (Math.random() < 0.5) { const q = p.pk || PUMP0; p.pk = [clamp(q[0] + gauss() * 0.3, -1, 1), clamp(q[1] + gauss() * 0.3, -1, 1)].map(v => +v.toFixed(2)); }
-const m = 1 + Math.floor(Math.random() * 3);
-for (let j = 0; j < m; j++) p.pu[Math.floor(Math.random() * S.length)] = [0, 0.5, 0.8, 1][Math.floor(Math.random() * 4)];
-out.push(p);
-}
-return out;
-}
-manualCandidates(n) {
-const S = this.secs, flats = S.map((s, k) => (s.jump ? -1 : k)).filter(k => k >= 0), out = [];
-for (let i = 0; i < n; i++) {
-const p = clonePlan(this.plan), k = flats[Math.floor(Math.random() * flats.length)];
-if (k === undefined) { out.push(p); continue; }
-if (Math.random() < 0.6) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
-if (Math.random() < 0.6) moveSpeed(p, S[k], k, 1.5, false);
-out.push(p);
-}
-return out;
-}
-landCandidates(k, n, base = this.plan, ref = this.best) {
-const S = this.secs, out = [];
-const faster = (p, q, dv) => { const u = p.vs && p.vs[q]; if (u) { u[u.length - 1] = clampV(u[u.length - 1] + dv); p.v[q] = u[u.length - 1]; } else p.v[q] = clampV(p.v[q] + dv); };
-const mk = this.marks && this.marks[k], now = firstLandings(ref).get(k);
-if (mk && (mk.tries || 0) < MARK_TRIES && (!now || mk.g < now.g || (mk.g === now.g && mk.mis < now.mis - 1))) {
-mk.tries = (mk.tries || 0) + 1;
-const keep = (base.mv[k] | 0) !== 0;
-if (mk.plan && planFits(mk.plan, S)) {
-const p = clonePlan(base), q = mk.plan;
-for (let s = 0; s <= k; s++) {
-for (const key of PLAN_KEYS) if (!(keep && s === k && (key === 'mv' || key === 'hr'))) p[key][s] = q[key][s];
-if ((q.vs && q.vs[s]) || (p.vs && p.vs[s])) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[s] = q.vs && q.vs[s] ? q.vs[s].slice() : null; }
-}
-for (const key of ['pz', 'pk', 'as']) if (q[key] !== undefined) p[key] = Array.isArray(q[key]) ? q[key].slice() : q[key]; else delete p[key];
-out.push(p);
-}
-for (const how of ['all', 'own', 'nudge']) {
-const p = clonePlan(base);
-setJumpVals(p, how === 'own' ? mk.vals.filter(r => r.q === k) : mk.vals, keep);
-if (how === 'nudge') p.pt[k] += gauss() * 0.05;
-out.push(p);
-}
-}
-if (this.gen % 2 === 0) {
-const short = k > 0 && S[k].b - S[k].a < 15;
-for (const dv of [-1.2, -0.6, 0, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
-const p = clonePlan(base);
-faster(p, k, dv);
-if (short) faster(p, k - 1, dv * 3);
-p.pt[k] += da;
-out.push(p);
-}
-}
-const deep = (this.fails && this.fails[k]) || 0;
-for (let i = out.length; i < n; i++) {
-const p = clonePlan(base);
-if (Math.random() < 0.8) p.pt[k] += gauss() * 0.12;
-if (Math.random() < 0.5) moveSpeed(p, S[k], k, 0.8, false);
-if (k > 0 && Math.random() < 0.25) moveSpeed(p, S[k - 1], k - 1, 0.8, false);
-if (S[k].jump && Math.random() < 0.15) p.pl[k] = p.pl[k] ? 0 : 1 + Math.floor(Math.random() * 5);
-if (deep >= 8 && k > 1 && i % 3 === 0) {
-const span = Math.min(k, 2 + Math.floor(deep / 8), 6);
-for (let q = k - span; q < k; q++) {
-if (Math.random() < 0.6) moveSpeed(p, S[q], q, 1.5, Math.random() < 0.3);
-if (S[q].jump && Math.random() < 0.4) p.pt[q] += gauss() * 0.15;
-if (S[q].jump && Math.random() < 0.15) p.pl[q] = p.pl[q] ? 0 : 1 + Math.floor(Math.random() * 5);
-if (Math.random() < 0.2) p.pu[q] = [0, 0.5, 1][Math.floor(Math.random() * 3)];
-}
-}
-out.push(p);
-}
-return out;
-}
-worseJump(r) {
-const a = firstLandings(this.best), b = [...firstLandings(r)];
-const w = b.find(([k, e]) => e.g > ((a.get(k) || {}).g || 9) || (e.g >= 3 && !a.has(k)));
-if (w) return w[0];
-const bad = b.filter(([, e]) => e.g >= 3).sort((x, y) => y[1].g - x[1].g);
-return bad.length ? bad[0][0] : -1;
-}
-noteMarks(cands, res) {
-const M = this.marks || (this.marks = {});
-res.forEach((r, i) => {
-if (!r || !cands[i]) return;
-for (const [k, e] of firstLandings(r)) {
-if (!(e.g > 0) || (r.crash && r.crashSec === k) || !(r.end === 'về đích' || r.prog > e.i + 12)) continue;
-const m = M[k];
-if (m && !(e.g < m.g || (e.g === m.g && (e.mis < m.mis - 1 || !m.plan)))) continue;
-M[k] = { g: e.g, mis: +e.mis.toFixed(1), vals: jumpVals(cands[i], k), plan: clonePlan(cands[i]) };
-}
-});
-}
-trickCandidates(j, n) {
-const out = [], air = this.airOf(j), only = this.route.drill && DRILL_MOVES[this.route.drill.kind];
-const moves = !only && air ? bookMoves(this.book, air, n) : null;
-for (let i = 0; i < n; i++) {
-const p = clonePlan(this.plan);
-if (only) {
-const kind = m => (m === FLIP ? 1 : m === SPIN_L || m === SPIN_R ? 2 : m === WHIP_L || m === WHIP_R ? 4 : 0);
-let used = 0;
-this.secs.forEach((s, k) => { if (k !== j && s.jump) used |= kind(p.mv[k]); });
-const fresh = only.filter(m => !(used & kind(m))), from = fresh.length && Math.random() < 0.75 ? fresh : only;
-if (!only.includes(p.mv[j]) || (used & kind(p.mv[j])) || Math.random() < 0.3) p.mv[j] = from[Math.floor(Math.random() * from.length)];
-}
-else if (i < n * 0.8 || !p.mv[j]) p.mv[j] = moves ? moves[i] : 1 + Math.floor(Math.random() * (N_MOVES - 1));
-if (p.mv[j] === FLIP && Math.random() < 0.5) p.pl[j] = 1 + Math.floor(Math.random() * 5);
-p.hr[j] = +(0.3 + Math.random() * 2.5).toFixed(2);
-if (Math.random() < 0.5) p.pt[j] += gauss() * 0.12;
-if (Math.random() < 0.3) {
-const q = p.vs && p.vs[j];
-if (q) { q[q.length - 1] = clampV(q[q.length - 1] + gauss()); p.v[j] = q[q.length - 1]; } else p.v[j] = clampV(p.v[j] + gauss());
-}
-out.push(p);
-}
-return out;
+const improved = beats(full, this.best);
+if (improved) { this.plan = bestEnd.p; this.best = full; }
+return { improved, full, stuck: k < K - 1 ? k : null, backs, ms: performance.now() - t0 };
 }
 async run() {
 if (this.running || !this.pool) return;
 this.running = true;
-const LAMBDA = Math.max(24, this.pool.ws.length * 2 - 1), S = this.secs;
+try {
+if (!this.pool.snapOk) throw new Error('trạng thái vật lý không lưu lại được trên máy này');
+let wide = 1;
 while (this.running) {
-const t0 = performance.now();
-const best = this.best;
-const finished = best.end === 'về đích';
-const passedJumps = S.map((s, i) => (s.jump && s.b < best.prog - 8 ? i : -1)).filter(i => i >= 0);
-if (this.fix && (!finished || this.fix.n >= 40)) this.fix = null;
-const fixing = !!this.fix && this.gen % 2 === 1;
-const D = this.route.drill;
-const target = fixing ? null : D ? (finished || this.gen % 4 === 1 ? this.drillTarget(passedJumps, finished) : null)
-: finished && this.gen % 5 === 2 ? { pump: true } : finished && passedJumps.length ? this.pointsTarget(passedJumps) : null;
-let cands, until, mode;
-if (target && (target.manual || target.pump)) {
-cands = target.pump ? this.pumpCandidates(LAMBDA) : this.manualCandidates(LAMBDA);
-this.borrowed = new Set();
-until = undefined;
-mode = target.pump ? 'pump' : 'manual';
-} else if (fixing) {
-const F = this.fix;
-let j = F.land !== undefined && F.n % 2 === 0 ? F.land : -1;
-if (j < 0 && F.best.end === 'về đích') j = this.worseJump(F.best);
-cands = j >= 0 ? this.landCandidates(j, LAMBDA, F.plan, F.best)
-: this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
-this.borrowed = new Set();
-until = undefined;
-mode = 'fix';
-} else if (target) {
-cands = target.land ? this.landCandidates(target.j, LAMBDA) : this.trickCandidates(target.j, LAMBDA);
-this.borrowed = new Set();
-until = undefined;
-mode = target.land ? 'land' : 'trick';
-} else if (!finished && this.stuck > 100 && this.gen % 2) {
-const A = this.alt;
-if (!A || A.n >= 60) { this.alt = null; cands = this.wildCandidates(Math.min(S.length - 1, best.crashSec), LAMBDA); }
-else cands = this.rideCandidates(Math.min(S.length - 1, A.best.crashSec), LAMBDA, 2, A.plan);
-this.borrowed = new Set();
-until = Math.min(this.N, best.prog + 120);
-mode = 'other';
-} else {
-const k = Math.min(S.length - 1, best.crashSec);
-cands = this.rideCandidates(k, LAMBDA, 1 + Math.min(2, this.stuck / 15));
-until = finished ? undefined : Math.min(this.N, best.prog + 120);
-mode = 'ride';
-}
-const other = mode === 'other';
-if (mode === 'manual' || mode === 'pump') cands.unshift(clonePlan(this.plan));
-else if (mode === 'fix') cands.unshift(clonePlan(this.fix.plan));
-else if (!other) cands.unshift(clonePlan(this.plan));
-else if (this.alt) cands.unshift(clonePlan(this.alt.plan));
-const res = await this.pool.evalAll(cands, until);
-if (!this.running && !res) break;
-if (mode === 'trick') this.learnBook(target.j, cands, res);
-this.noteMarks(cands, res);
-const prev = this.best;
-let bi = 0;
-res.forEach((r, i) => { if (beats(r, res[bi])) bi = i; });
-let improved = false, borrowed = false;
-if (mode === 'fix') {
-const F = this.fix;
-F.n++;
-if (beats(res[bi], F.best)) { F.plan = cands[bi]; F.best = res[bi]; }
-if (beats(F.best, this.best)) { this.plan = F.plan; this.best = F.best; improved = true; this.fix = null; }
-} else if (other) {
-if (!this.alt || beats(res[bi], this.alt.best)) this.alt = { plan: cands[bi], best: res[bi], n: this.alt ? this.alt.n : 0 };
-this.alt.n++;
-if (beats(this.alt.best, this.best)) {
-const full = (await this.pool.evalAll([this.alt.plan]))[0];
-if (beats(full, this.best)) { this.plan = this.alt.plan; this.best = full; improved = true; this.stuck = 0; this.alt = null; }
-}
-} else if (bi > 0) {
-const full = until === undefined ? res[bi] : (await this.pool.evalAll([cands[bi]]))[0];
-if (beats(full, this.best)) {
-this.plan = cands[bi]; this.best = full; improved = true;
-if (this.borrowed.has(bi - 1)) { borrowed = true; this.borrowWins++; }
-}
-} else if (mode === 'land') {
-const k = target.j, g0 = Math.min(...(best.jl || []).filter(e => e.k === k).map(e => e.g), 9);
-let pick = -1;
-res.forEach((r, i) => {
-const e = i && r.jl.find(q => q.k === k);
-if (e && e.g < g0 && e.g <= 3 && (r.end === 'về đích' || r.prog > e.i + 15) && (pick < 0 || beats(r, res[pick]))) pick = i;
-});
-if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0 };
-} else if (mode === 'trick') {
-const j = target.j;
-let pick = -1;
-res.forEach((r, i) => {
-const e = i && firstLandings(r).get(j);
-if (e && e.tr && e.g <= 3 && !(r.crash && r.crashSec === j) && (r.end === 'về đích' || r.prog > e.i + 15) && (pick < 0 || beats(r, res[pick]))) pick = i;
-});
-if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0, land: j };
-}
-if (mode === 'land') {
-const k = target.j, g = r => { const e = firstLandings(r).get(k); return e ? e.g : 9; };
-const F = this.fails || (this.fails = {});
-F[k] = g(this.best) < g(prev) ? 0 : (F[k] || 0) + 1;
-}
-if (improved && mode === 'ride') this.alt = null;
-if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;
-this.lastProg = Math.max(this.lastProg, this.best.prog);
+const prev = this.best, r = await this.sweep(wide);
+if (!this.running) break;
+const improved = r && r.improved;
+wide = improved ? 1 : Math.min(2.5, wide * 1.35);
 const news = [];
 for (const k of Object.keys(this.best.tricks)) if (!this.found[k]) { this.found[k] = this.gen + 1; news.push(TRICK_NAMES[k] || k); }
-if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved, borrowed, prev);
+if (improved || news.length) this.ui.record(this.gen + 1, this.best, news, !improved, false, prev);
 this.gen++;
-if (this.bookDirty && this.gen % 10 === 0) { saveBook(this.setup.tricks, this.book); this.bookDirty = false; }
-const mean = res.reduce((a, r) => a + r.fit, 0) / res.length;
-this.hist.push([this.gen, Math.round(this.best.fit), Math.round(mean), this.best.prog]);
-this.ui.progress({ gen: this.gen, best: this.best, mean, ms: performance.now() - t0, mode, tries: res.length });
-if (improved || this.gen % 5 === 0) this.save();
+if (this.bookDirty) { saveBook(this.setup.tricks, this.book); this.bookDirty = false; }
+this.hist.push([this.gen, Math.round(this.best.fit), Math.round(r && r.full ? r.full.fit : this.best.fit), this.best.prog]);
+this.ui.progress({ gen: this.gen, best: this.best, mean: this.best.fit, ms: r && r.ms || 0, mode: 'sweep', label: improved ? 'vừa tìm được cách đi tốt hơn' : `lượt dò thứ ${this.gen}, dò rộng hơn (×${wide.toFixed(1)})`, tries: this.tries });
+this.save();
 }
+} catch (err) {
+if (this.running && !(this.pool && this.pool.closed)) throw err;
+} finally {
 this.save();
 if (this.bookDirty) { saveBook(this.setup.tricks, this.book); this.bookDirty = false; }
 this.running = false;
 }
-learnBook(j, cands, res) {
+}
+learnBook(j, cs) {
 const ref = this.airOf(j);
-for (let i = 1; i < cands.length; i++) {
-const mv = cands[i].mv[j] | 0, r = res[i];
-if (!mv || !r) continue;
+for (const c of cs) {
+const mv = c.p.mv[j] | 0, r = c.r;
+if (!mv || c.same || !r) continue;
 const e = r.jl.find(q => q.k === j), fell = !e || (r.crash && r.crashSec === j);
 if (!e && !ref) continue;
 this.book.push([e ? e.a : ref, mv, fell ? 0 : 1, e ? e.tr : 0, e ? e.g : 0]);
@@ -2052,9 +2060,9 @@ log(`Vòng ${gen}: kỷ lục mới ${run.prog} m (${pts}${prev && typeof prev.g
 },
 progress(p) {
 $('.k-gen').textContent = p.gen;
-$('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : p.mode === 'land' ? 'tiếp đất đẹp hơn, giữ chuỗi nhân' : p.mode === 'fix' ? 'chạy tiếp sau cú tiếp đất đẹp hơn' : p.mode === 'manual' ? 'manual (bánh sau)' : p.mode === 'pump' ? 'pump qua các chỗ trũng (lấy tốc độ)' : 'vượt hết đường';
+$('.k-mode').textContent = p.label || 'dò từng đoạn';
 showBest(p.best);
-$('.k-speed').textContent = `${(p.ms / 1000).toFixed(1)} s / vòng (${p.tries} lần thử, ${workers} luồng)`;
+$('.k-speed').textContent = `${(p.ms / 1000).toFixed(1)} s cho lượt dò này (${p.tries} lần thử, ${workers} luồng)`;
 showBorrow();
 draw();
 },
@@ -2119,7 +2127,7 @@ const brain = new BrainTrainer(ui);
 function showBorrow() {
 if (!trainer.borrow) return;
 const alike = trainer.borrow.filter(Boolean).length, jumps = trainer.secs.filter(s => s.jump).length;
-$('.k-borrow').textContent = alike ? `${alike}/${jumps} cú nhảy giống · giúp ${trainer.borrowWins} lần` : `chưa có cú nhảy giống`;
+$('.k-borrow').textContent = alike ? `${alike}/${jumps} cú nhảy giống (được thử ở mỗi lượt dò)` : `chưa có cú nhảy giống`;
 }
 function draw() {
 const c = $('canvas'), x = c.getContext('2d'), h = trainer.hist;
@@ -2484,8 +2492,9 @@ cancel = true; trainer.stop(); brain.stop(); drill.stop();
 }
 let badge = null, starting = false, looping = false;
 const driveLabel = on => { $('.drive').textContent = on ? 'Dừng AI lái' : 'AI lái'; $('.drive').classList.toggle('on', on); };
-function stopDrive(why, byPlayer) {
-if (byPlayer) { looping = false; driveLabel(false); }
+function stopDrive(why, byPlayer, end, park) {
+if (byPlayer || end) { looping = false; driveLabel(false); }
+if (live.drive && live.drive.hold) { live.drive = null; if (badge) { badge.remove(); badge = null; } return; }
 if (!live.drive) return;
 const d = live.drive;
 live.drive = null;
@@ -2504,9 +2513,16 @@ if (looping) {
 say(`${d.who} lái thật: ${why} sau ${m} m. Lái lại sau 3 giây với những gì mới học được (bấm phím bất kỳ để dừng).`);
 setTimeout(() => { if (looping && !live.drive) aiDrive(); }, 3000);
 } else say(`${d.who} lái thật: ${why} sau ${m} m${extra}.`);
+if (park) {
+live.drive = { hold: true, step: () => [0, 127, 0, 0, 0, 0, 0] };
+badge = document.createElement('div'); badge.id = 'tai-badge';
+badge.innerHTML = `Đã dừng: ${why}<small>AI giữ phanh · bấm phím bất kỳ để lấy lại tay lái</small>`;
+document.body.appendChild(badge);
+}
 }
 function driveButton() {
-if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
+if (live.drive && live.drive.hold) stopDrive('', true);
+else if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
 looping = true; driveLabel(true);
 aiDrive();
 }
@@ -2518,23 +2534,31 @@ for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new Keyboar
 await new Promise(r => setTimeout(r, 500));
 starting = false;
 }
-function driveLesson(ctx, P, expect) {
+function driveLesson(ctx, P, expect, vEnd) {
 const now = !P, geo = now ? trainer.geo : ctx.geo, secs = now ? trainer.secs : ctx.secs;
 const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length, PZ: geo.PZ };
 const plan = clonePlan(now ? trainer.plan : P);
 const rider = makeRider(R, geo.H, secs, plan);
-let known = trainer.plan;
-const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, tricks: 0, swaps: 0 };
-if (now) d.takeNewer = () => {
-const p = trainer.plan;
-if (p === known || !trainer.running) return;
+const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, vEnd, tricks: 0, swaps: 0 };
+if (now) d.takeNewer = swapper(trainer, plan, rider, secs, () => { d.swaps++; d.expect = trainer.best.prog; });
+ride(d, R);
+}
+function swapper(T, plan, rider, secs, took) {
+let known = T.plan;
+const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+return () => {
+const p = T.plan;
+if (p === known || !T.running) return;
 known = p;
 const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
 for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
+for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0)) return;
+for (const k of ['pz', 'pk', 'as']) if (!same(p[k], plan[k])) return;
 for (const k of PLAN_KEYS) plan[k] = p[k].slice();
-d.swaps++; d.expect = trainer.best.prog;
+if (p.vs) plan.vs = p.vs.map(q => (q ? q.slice() : null)); else delete plan.vs;
+if (p.lg) plan.lg = p.lg.slice(); else delete plan.lg;
+took();
 };
-ride(d, R);
 }
 let rideCtx = null;
 async function lineCtx(o) {
@@ -2580,9 +2604,9 @@ const better = (a, b) => a.prog > b.prog || (a.prog === b.prog && a.fit >= b.fit
 const lesson = ls && (!!ls.goal || better(ls, bs));
 log(ls ? `AI lái bằng <b>${lesson ? 'bài học của đường này' : 'bộ não chung'}</b>: trong mô phỏng bài học đi được ${ls.prog} m, bộ não ${bs.prog} m.`
 : `Đường này chưa có bài học, nên <b>bộ não chung</b> lái (trong mô phỏng đi được ${bs.prog} m). Bấm “Học lái” để AI học đường này.`);
-go = lesson ? () => driveLesson(ctx, P, ls.prog) : () => {
+go = lesson ? () => driveLesson(ctx, P, ls.prog, ls.vEnd) : () => {
 const geo = ctx.geo, R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
-ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w), expect: bs.prog, tricks: 0, swaps: 0 }, R);
+ride({ who: 'Bộ não', route: ctx.route, rider: makeBrainRider(R, geo.H, w), expect: bs.prog, vEnd: 8, tricks: 0, swaps: 0 }, R);
 };
 } catch (err) {
 cant('Lỗi: ' + (err && err.message || err)); console.error(err);
@@ -2592,12 +2616,16 @@ if (o.drill && !(await drillsNow()).some(r => r.start.id === o.s.id)) return can
 if (!styles) await getUp(!!o.drill);
 go();
 }
-const ONWARD_LEGS = 30;
-async function onwardLeg(R, seen) {
-const best = await nextLine(R, seen);
-if (!best) return null;
-const pool = new Pool(1), meta = await pool.init(best, riderSetup());
-return { route: best, pool, geo: meta.geo };
+const ONWARD_LEGS = 200, LEG_WORKERS = Math.max(2, Math.floor(workers / 2));
+const quiet = new Proxy({}, { get: () => () => {} });
+function newLeg(route, d) {
+const T = new Trainer(quiet), leg = { route, T };
+T.temp = true; T.library = trainer.library || []; T.brainW = brain.gen ? brain.best.slice() : null;
+T.prepare(route, LEG_WORKERS).then(() => {
+if (d.over) { T.pool.close(); return; }
+T.run().catch(err => console.error(err));
+}).catch(err => { if (!d.over) console.error(err); leg.failed = true; });
+return leg;
 }
 function ride(d, R) {
 const st = d.route.start;
@@ -2608,16 +2636,43 @@ if (!drill) {
 live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
 live.ex.trails_game_reset(live.g);
 }
-let t = 0, seq = null, rider = d.rider, next = null;
-const { mark, seen } = ground(), pools = [], w = brain.best.slice();
-const lookAhead = () => {
-const h = next = { leg: null };
-if (d.legs >= ONWARD_LEGS || d.route.practice) return;
-onwardLeg(R, seen).then(l => { if (!l) return; if (d.over) l.pool.close(); else h.leg = l; }).catch(err => console.error(err));
+let t = 0, seq = null, rider = d.rider, cur = null, coast = null, finding = null;
+const { mark, seen } = ground(), w = brain.best.slice(), ahead = [];
+const look = () => {
+if (finding) return finding;
+if (d.over || d.route.practice || d.route.drill) return Promise.resolve(ahead.length > 0);
+const last = ahead[ahead.length - 1];
+if (ahead.length >= 2 || d.legs + ahead.length >= ONWARD_LEGS || (last && !(last.T.best && last.T.best.end === 'về đích'))) return Promise.resolve(ahead.length > 0);
+const from = last ? last.route : R, v = last ? last.T.best.vEnd : (cur ? cur.T.best && cur.T.best.vEnd : d.vEnd);
+return (finding = (async () => {
+try {
+const r = await nextLine(from, seen);
+if (r && !d.over) { r.start.v = Math.max(0, v || 0); mark(r); ahead.push(newLeg(r, d)); }
+} catch (err) { console.error(err); } finally { finding = null; }
+return ahead.length > 0;
+})());
 };
-d.cleanup = () => { d.over = true; pools.forEach(p => p.close()); if (next && next.leg) next.leg.pool.close(); };
-mark(R); lookAhead();
+const finder = setInterval(look, 2000);
+d.cleanup = () => {
+d.over = true; clearInterval(finder);
+for (const l of ahead.concat(cur ? [cur] : [])) { l.T.stop(); if (l.T.pool) l.T.pool.close(); }
+};
+mark(R); look();
+const handOver = (leg, s) => {
+const T = leg.T, g = T.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length, PZ: g.PZ };
+let r2;
+if (T.best) { const plan = clonePlan(T.plan); r2 = makeRider(R2, g.H, T.secs, plan); d.takeNewer = swapper(T, plan, r2, T.secs, () => d.swaps++); d.who = 'AI'; }
+else { r2 = makeBrainRider(R2, g.H, w); d.takeNewer = null; d.who = 'Bộ não'; }
+let bi = 0, bd = Infinity;
+for (let i = 0; i < Math.min(R2.length, 80); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
+r2.idx = bi;
+if (cur) { cur.T.stop(); cur.T.pool.close(); }
+cur = leg;
+d.base += (coast ? coast.at : rider.idx) - bi; d.legs++; coast = null;
+R = R2; rider = d.rider = r2;
+};
 d.step = () => {
+try {
 const s = liveState();
 if (seq === null) seq = s[16];
 if (s[13] > 0) { setTimeout(() => stopDrive('ngã'), 0); return null; }
@@ -2632,22 +2687,42 @@ d.streak = gp.streak; d.game = (d.game || 0) + gp.p; d.top = Math.max(d.top || 1
 }
 }
 if (d.takeNewer && t % 30 === 0) d.takeNewer();
-const inp = rider.step(s, t++).slice();
-if (drill && !drill.pedals) inp[0] = 0;
-if (rider.idx >= R.length - 3) {
-const leg = next && next.leg;
-if (!leg) { setTimeout(() => stopDrive('về đích'), 0); return null; }
-const g = leg.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length }, r2 = makeBrainRider(R2, g.H, w);
-let bi = 0, bd = Infinity;
-for (let i = 0; i < Math.min(R2.length, 60); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
-r2.idx = bi;
-d.base += rider.idx - bi; d.legs++; d.takeNewer = null; d.who = 'Bộ não';
-pools.push(leg.pool); R = R2; rider = d.rider = r2;
-mark(R); lookAhead();
+if (coast || rider.idx >= R.length - 3) {
+const leg = ahead[0];
+if (leg && leg.T.geo) { ahead.shift(); handOver(leg, s); look(); }
+else if (leg && leg.failed) ahead.shift();
 }
+let inp;
+if (!coast && rider.idx >= R.length - 3) {
+const n = R.length, k = Math.max(0, n - 6);
+const c = coast = { x: s[0], z: s[2], h: Math.atan2(R.Z[n - 1] - R.Z[k], R.X[n - 1] - R.X[k]), at: rider.idx, t0: t, calm: 0, none: false, halt: false };
+look().then(any => { if (!any) c.none = true; });
+}
+if (coast) {
+const v = s[8], air = s[12] > 0, far = Math.hypot(s[0] - coast.x, s[2] - coast.z);
+coast.calm = air ? 0 : coast.calm + 1;
+if (!coast.halt && ((coast.none && coast.calm >= 30 && t - coast.t0 >= 45) || far > ONWARD_GAP || (!air && v < -0.3))) coast.halt = true;
+if (coast.halt && !air && Math.abs(v) < 0.5) {
+if (!coast.parked) { coast.parked = true; setTimeout(() => stopDrive('không còn thấy đường nào phía trước', false, true, true), 0); }
+return [0, 127, 0, 0, 0, 0, 0];
+}
+const st = air ? 0 : clamp(2 * wrapA(coast.h - s[3]), -1, 1), own = rider.step(s, t++), ln = air ? own[3] : 0;
+inp = coast.halt ? [0, air ? 0 : v > 1.5 ? 70 : 127, Math.round(st * 127), ln, 0, 0, 0] : [v < 6 ? 127 : 0, v > 9 ? 40 : 0, Math.round(st * 127), ln, 0, 0, 0];
+} else {
+inp = rider.step(s, t++).slice();
 if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive('lạc khỏi đường'), 0); return null; }
-if (badge && t % 15 === 0) badge.firstChild.textContent = `${d.who} đang lái · ${Math.max(0, d.base + rider.idx)} m${d.legs ? ` · đường thứ ${d.legs + 1}` : ''}${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
+}
+if (drill && !drill.pedals) inp[0] = 0;
+if (badge && t % 15 === 0) {
+const m = Math.max(0, d.base + (coast ? coast.at : rider.idx));
+badge.firstChild.textContent = coast ? (coast.halt ? `Không còn thấy đường phía trước, đang dừng lại · ${m} m` : `${d.who} đang tìm đường tiếp · ${m} m`) : `${d.who} đang lái · ${m} m${d.legs ? ` · đường thứ ${d.legs + 1}` : ''}${ahead.length ? ` · đã thấy ${ahead.length} đường phía trước` : ''}${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
+}
 return inp;
+} catch (err) {
+console.error(err);
+setTimeout(() => stopDrive('lỗi: ' + (err && err.message || err)), 0);
+return null;
+}
 };
 live.drive = d;
 const watchBail = setInterval(() => {
