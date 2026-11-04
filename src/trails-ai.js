@@ -525,7 +525,7 @@
   // before the lip and its angle in the air. Where the brains fell and the lessons got over, the bike had come at the
   // lip at the wrong speed, or held the wrong angle in the air: what a lesson found for one jump is right for a jump of
   // the same shape, while a brain learns one way for all jumps.
-  const JUMP_NEAR = 3, JUMP_RUN = 25;
+  const JUMP_NEAR = 3, JUMP_RUN = 40;
   function makeBrainRider(R, H, w, jumps) {
     const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
     let nextTake = R.nextTake, nextLand = R.nextLand;
@@ -551,8 +551,10 @@
       const f = [Math.atan2(at(i) - at(i - 3), 3), H[i] - lo].concat([3, 6, 9, 12, 16].map(d => at(i + d) - H[i]), [(at(i - 5) - at(i - 25)) / 20]).map(v => +v.toFixed(3));
       let best = null, bd = JUMP_NEAR;
       for (const j of jumps) { const d = jumpDist(f, j.f); if (d < bd) { bd = d; best = j; } }
-      if (best) known.set(i, { v: best.v, pl: best.pl, pt: landSlope(i) + best.dpt });
+      if (best) known.set(i, { v: best.v, pl: best.pl, pt: landSlope(i) + best.dpt, from: Math.max(0, i - JUMP_RUN) });
     }
+    // a lesson holds a jump's speed over the jump's whole section: from the lip before (at most JUMP_RUN metres back)
+    for (let i = 0, prev = -1; i < N; i++) if (lipAhead[i] === i) { const k = known.get(i); if (k) k.from = Math.max(k.from, prev + 1); prev = i; }
     me.known = known.size;
     me.step = (s, t) => {
       const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
@@ -583,7 +585,7 @@
         for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
         for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
         if (!air) {
-          const L = lipAhead[idx], kj = L >= 0 && L - idx <= JUMP_RUN ? known.get(L) : null;
+          const L = lipAhead[idx], k0 = L >= 0 ? known.get(L) : null, kj = k0 && idx >= k0.from ? k0 : null;
           const e = (kj ? kj.v : brainSpeed(o[0])) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
           if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
           if (kj ? kj.pl > 0 && R.KIND[idx] === 'takeoff' && idx >= L - kj.pl : o[1] > 0.5) btn |= 1;
