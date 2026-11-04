@@ -529,6 +529,18 @@
     const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
     // the slope to land on for a jump whose lip is at i
     const landSlope = i => { const nl = nextLand[i]; const j = nl >= 0 && nl - i < 45 ? nl : Math.min(N - 5, i + 12); return clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2); };
+    // In the air: where the bike will come down, from its fall at its speed now (the game's gravity is 9 m/s² and the
+    // bike rides 0.42 m above the ground), and the slope there. Short of the landing or past it, that is the slope it
+    // lands on, and the one to match: aiming at the landing's own slope threw the bike nose down onto flat ground.
+    const touchSlope = (by, sp) => {
+      const hv = Math.sqrt(Math.max(1, sp * sp - me.vy * me.vy));
+      let j = Math.min(N - 1, me.idx + Math.round(hv * 3));
+      for (let k = 1; k <= 90; k++) {
+        const tt = k / 30, q = Math.min(N - 1, Math.round(me.idx + hv * tt));
+        if (by + me.vy * tt - 4.5 * tt * tt - 0.42 <= H[q]) { j = q; break; }
+      }
+      return clamp(Math.atan2(H[Math.min(N - 1, j + 2)] - H[Math.max(0, j - 2)], 4), -0.9, 0.3);
+    };
     me.step = (s, t) => {
       const bx = s[0], by = s[1], bz = s[2], bh = s[3], sp = s[8], air = s[12] > 0;
       if (me.prevP === null) { me.prevP = s[4]; me.prevY = by; }
@@ -537,7 +549,7 @@
       for (let i = Math.max(0, me.idx - 4); i < Math.min(N, me.idx + 45); i++) { const d = (R.X[i] - bx) ** 2 + (R.Z[i] - bz) ** 2; if (d < bd) { bd = d; bi = i; } }
       me.idx = bi;
       me.off = Math.sqrt(bd);
-      if (air && !me.wasAir) me.landPt = landSlope(me.idx);
+      if (air) me.landPt = touchSlope(by, Math.abs(sp));
       me.landed = !air && me.wasAir;
       me.wasAir = air;
       if (t % 2 === 0) {
