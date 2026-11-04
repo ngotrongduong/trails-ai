@@ -1065,6 +1065,17 @@ const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
 const num = v => typeof v === 'number' && Number.isFinite(v);
 const partsOk = (P, n) => P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))));
 const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
+const MARK_TRIES = 24;
+const firstLandings = r => { const m = new Map(); for (const e of (r && r.jl) || []) if (!m.has(e.k)) m.set(e.k, e); return m; };
+const jumpVals = (p, k) => [k - 1, k].filter(q => q >= 0).map(q => ({ q, v: p.v[q], vs: p.vs && p.vs[q] ? p.vs[q].slice() : null, pt: p.pt[q], pl: p.pl[q], pu: p.pu[q], mv: p.mv[q], hr: p.hr[q] }));
+function setJumpVals(p, vals, keepTrick) {
+for (const r of vals) {
+if (r.q >= p.v.length) continue;
+p.v[r.q] = r.v; p.pt[r.q] = r.pt; p.pl[r.q] = r.pl; p.pu[r.q] = r.pu;
+if (r.vs || (p.vs && p.vs[r.q])) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[r.q] = r.vs ? r.vs.slice() : null; }
+if (!keepTrick) { p.mv[r.q] = r.mv; p.hr[r.q] = r.hr; }
+}
+}
 const done = r => r.end === 'về đích' && typeof r.game === 'number';
 const goalN = r => (r.goal ? r.goal.n : 0);
 const faster = (a, b) => (typeof a.vAvg === 'number' && typeof b.vAvg === 'number' && Math.abs(a.vAvg - b.vAvg) > 0.05 ? a.vAvg > b.vAvg : null);
@@ -1084,16 +1095,30 @@ localStorage.setItem(BOOK, JSON.stringify(b));
 } catch { /* storage full or blocked */ }
 }
 const trickValue = tr => (tr & 1 ? 300 : 0) + (tr & 2 ? 200 : 0) + (tr & 4 ? 100 : 0);
-function bookMove(rows, air) {
-const w = [0];
+const TRICK_MOVES = [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R];
+const moveBit = m => (m === FLIP ? 1 : m === SPIN_L || m === SPIN_R ? 2 : m === WHIP_L || m === WHIP_R ? 4 : 0);
+function bookMoves(rows, air, n) {
+const near = rows.filter(r => Math.abs(r[0] - air) <= 0.2);
+let landed = 0;
+for (const r of rows) if (r[2] && r[0] <= air + 0.1) landed |= r[3];
+const tries = new Array(N_MOVES).fill(0), w = new Array(N_MOVES).fill(0);
+for (const r of near) if (r[1] > 0 && r[1] < N_MOVES) tries[r[1]]++;
+const all = near.length;
 for (let m = 1; m < N_MOVES; m++) {
-let n = 0, ok = 0, val = 0;
-for (const r of rows) if (r[1] === m && Math.abs(r[0] - air) <= 0.2) { n++; if (r[2] && r[3]) { ok++; val += trickValue(r[3]); } }
-w.push(((ok + 1) / (n + 2)) * (ok ? val / ok : 150));
+let ok = 0, val = 0;
+for (const r of near) if (r[1] === m && r[2] && r[3]) { ok++; val += trickValue(r[3]); }
+const b = moveBit(m), prior = b ? trickValue(b) * (landed & b || !rows.length ? 1 : 0.5) : 40;
+const est = ((ok + 1) / (tries[m] + 2)) * (ok ? val / ok : prior);
+w[m] = est + 150 * Math.sqrt(Math.log(all + 2) / (tries[m] + 1)) * (b ? 1 : 0.25);
 }
-let x = Math.random() * w.reduce((a, v) => a + v * v, 0);
-for (let m = 1; m < N_MOVES; m++) { x -= w[m] * w[m]; if (x <= 0) return m; }
-return N_MOVES - 1;
+const out = TRICK_MOVES.filter(m => tries[m] < 3).sort((a, b) => w[b] - w[a]).slice(0, n);
+const sum = w.reduce((a, v) => a + v * v, 0);
+while (out.length < n) {
+let x = Math.random() * sum, m = 1;
+for (; m < N_MOVES - 1; m++) { x -= w[m] * w[m]; if (x <= 0) break; }
+out.push(m);
+}
+return out;
 }
 function bookSummary(rows) {
 return [[1, 'Backflip'], [2, 'Spin'], [4, 'Whip']].map(([b, name]) => {
@@ -1229,17 +1254,19 @@ this.plan = ok ? clonePlan(plan) : freshPlan(this.secs);
 this.gen = ok ? mine.gen : 0;
 this.hist = ok ? (mine.hist || []) : [];
 this.found = ok ? (mine.found || {}) : {};
+this.marks = ok && mine.marks && typeof mine.marks === 'object' && planFits(mine.plan, this.secs) ? mine.marks : {};
+this.fails = {};
 this.stuck = 0; this.lastProg = -1; this.alt = null; this.fix = null;
 this.best = null;
 return { fromTrack: !!ok, kept: ok ? this.kept : 0 };
 }
 lesson() {
-const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour, drill } = this.route;
+const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour, drill, lands } = this.route;
 const line = { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length };
 if (tour !== undefined) line.tour = tour;
 if (practice) Object.assign(line, { land, practice });
-if (drill) line.drill = drill;
-return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+if (drill) { line.drill = drill; if (lands) line.lands = lands; }
+return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, marks: Object.fromEntries(Object.entries(this.marks || {}).map(([k, { plan, ...m }]) => [k, m])), bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
 }
 jumpRecord() {
 const S = this.secs, P = this.plan, b = this.best, list = [];
@@ -1370,6 +1397,9 @@ let x = Math.random() * list.reduce((a, [, w]) => a + w, 0);
 for (const [k, w] of list) { x -= w; if (x <= 0) return k; }
 return list[list.length - 1][0];
 };
+const M = this.marks || {};
+const lost = [...firstLandings(this.best)].filter(([k, e]) => M[k] && M[k].g < e.g && (M[k].tries || 0) < MARK_TRIES);
+if (lost.length && Math.random() < 0.4) return { j: pickW(lost.map(([k, e]) => [k, e.g - M[k].g])), land: true };
 if (weak.length && (!tricksOn || Math.random() < 0.6)) return { j: pickW(weak.map(([k, g]) => [k, g >= 4 ? 4 : 2])), land: true };
 if (!tricksOn) {
 const clean = [...worst].filter(([, g]) => g === 2);
@@ -1377,7 +1407,7 @@ return clean.length ? { j: clean[Math.floor(Math.random() * clean.length)][0], l
 }
 const bare = passed.filter(j => !jl.some(e => e.k === j && e.tr) && (worst.get(j) || 9) <= 2);
 const from = bare.length && Math.random() < 0.7 ? bare : passed;
-return { j: from[Math.floor(Math.random() * from.length)], land: false };
+return { j: pickW(from.map(j => [j, 0.3 + this.airOf(j)])), land: false };
 }
 drillTarget(passed, finished) {
 const D = this.route.drill, b = this.best;
@@ -1424,31 +1454,81 @@ out.push(p);
 }
 return out;
 }
-landCandidates(k, n) {
+landCandidates(k, n, base = this.plan, ref = this.best) {
 const S = this.secs, out = [];
 const faster = (p, q, dv) => { const u = p.vs && p.vs[q]; if (u) { u[u.length - 1] = clampV(u[u.length - 1] + dv); p.v[q] = u[u.length - 1]; } else p.v[q] = clampV(p.v[q] + dv); };
+const mk = this.marks && this.marks[k], now = firstLandings(ref).get(k);
+if (mk && (mk.tries || 0) < MARK_TRIES && (!now || mk.g < now.g || (mk.g === now.g && mk.mis < now.mis - 1))) {
+mk.tries = (mk.tries || 0) + 1;
+const keep = (base.mv[k] | 0) !== 0;
+if (mk.plan && planFits(mk.plan, S)) {
+const p = clonePlan(base), q = mk.plan;
+for (let s = 0; s <= k; s++) {
+for (const key of PLAN_KEYS) if (!(keep && s === k && (key === 'mv' || key === 'hr'))) p[key][s] = q[key][s];
+if ((q.vs && q.vs[s]) || (p.vs && p.vs[s])) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[s] = q.vs && q.vs[s] ? q.vs[s].slice() : null; }
+}
+for (const key of ['pz', 'pk', 'as']) if (q[key] !== undefined) p[key] = Array.isArray(q[key]) ? q[key].slice() : q[key]; else delete p[key];
+out.push(p);
+}
+for (const how of ['all', 'own', 'nudge']) {
+const p = clonePlan(base);
+setJumpVals(p, how === 'own' ? mk.vals.filter(r => r.q === k) : mk.vals, keep);
+if (how === 'nudge') p.pt[k] += gauss() * 0.05;
+out.push(p);
+}
+}
 if (this.gen % 2 === 0) {
 const short = k > 0 && S[k].b - S[k].a < 15;
 for (const dv of [-1.2, -0.6, 0, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
-const p = clonePlan(this.plan);
+const p = clonePlan(base);
 faster(p, k, dv);
 if (short) faster(p, k - 1, dv * 3);
 p.pt[k] += da;
 out.push(p);
 }
 }
+const deep = (this.fails && this.fails[k]) || 0;
 for (let i = out.length; i < n; i++) {
-const p = clonePlan(this.plan);
+const p = clonePlan(base);
 if (Math.random() < 0.8) p.pt[k] += gauss() * 0.12;
 if (Math.random() < 0.5) moveSpeed(p, S[k], k, 0.8, false);
 if (k > 0 && Math.random() < 0.25) moveSpeed(p, S[k - 1], k - 1, 0.8, false);
 if (S[k].jump && Math.random() < 0.15) p.pl[k] = p.pl[k] ? 0 : 1 + Math.floor(Math.random() * 5);
+if (deep >= 8 && k > 1 && i % 3 === 0) {
+const span = Math.min(k, 2 + Math.floor(deep / 8), 6);
+for (let q = k - span; q < k; q++) {
+if (Math.random() < 0.6) moveSpeed(p, S[q], q, 1.5, Math.random() < 0.3);
+if (S[q].jump && Math.random() < 0.4) p.pt[q] += gauss() * 0.15;
+if (S[q].jump && Math.random() < 0.15) p.pl[q] = p.pl[q] ? 0 : 1 + Math.floor(Math.random() * 5);
+if (Math.random() < 0.2) p.pu[q] = [0, 0.5, 1][Math.floor(Math.random() * 3)];
+}
+}
 out.push(p);
 }
 return out;
 }
+worseJump(r) {
+const a = firstLandings(this.best), b = [...firstLandings(r)];
+const w = b.find(([k, e]) => e.g > ((a.get(k) || {}).g || 9) || (e.g >= 3 && !a.has(k)));
+if (w) return w[0];
+const bad = b.filter(([, e]) => e.g >= 3).sort((x, y) => y[1].g - x[1].g);
+return bad.length ? bad[0][0] : -1;
+}
+noteMarks(cands, res) {
+const M = this.marks || (this.marks = {});
+res.forEach((r, i) => {
+if (!r || !cands[i]) return;
+for (const [k, e] of firstLandings(r)) {
+if (!(e.g > 0) || (r.crash && r.crashSec === k) || !(r.end === 'về đích' || r.prog > e.i + 12)) continue;
+const m = M[k];
+if (m && !(e.g < m.g || (e.g === m.g && (e.mis < m.mis - 1 || !m.plan)))) continue;
+M[k] = { g: e.g, mis: +e.mis.toFixed(1), vals: jumpVals(cands[i], k), plan: clonePlan(cands[i]) };
+}
+});
+}
 trickCandidates(j, n) {
 const out = [], air = this.airOf(j), only = this.route.drill && DRILL_MOVES[this.route.drill.kind];
+const moves = !only && air ? bookMoves(this.book, air, n) : null;
 for (let i = 0; i < n; i++) {
 const p = clonePlan(this.plan);
 if (only) {
@@ -1458,7 +1538,7 @@ this.secs.forEach((s, k) => { if (k !== j && s.jump) used |= kind(p.mv[k]); });
 const fresh = only.filter(m => !(used & kind(m))), from = fresh.length && Math.random() < 0.75 ? fresh : only;
 if (!only.includes(p.mv[j]) || (used & kind(p.mv[j])) || Math.random() < 0.3) p.mv[j] = from[Math.floor(Math.random() * from.length)];
 }
-else if (i < n * 0.75 || !p.mv[j]) p.mv[j] = air && Math.random() < 0.75 ? bookMove(this.book, air) : Math.floor(Math.random() * N_MOVES);
+else if (i < n * 0.8 || !p.mv[j]) p.mv[j] = moves ? moves[i] : 1 + Math.floor(Math.random() * (N_MOVES - 1));
 if (p.mv[j] === FLIP && Math.random() < 0.5) p.pl[j] = 1 + Math.floor(Math.random() * 5);
 p.hr[j] = +(0.3 + Math.random() * 2.5).toFixed(2);
 if (Math.random() < 0.5) p.pt[j] += gauss() * 0.12;
@@ -1492,7 +1572,10 @@ until = undefined;
 mode = target.pump ? 'pump' : 'manual';
 } else if (fixing) {
 const F = this.fix;
-cands = this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
+let j = F.land !== undefined && F.n % 2 === 0 ? F.land : -1;
+if (j < 0 && F.best.end === 'về đích') j = this.worseJump(F.best);
+cands = j >= 0 ? this.landCandidates(j, LAMBDA, F.plan, F.best)
+: this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
 this.borrowed = new Set();
 until = undefined;
 mode = 'fix';
@@ -1522,6 +1605,7 @@ else if (this.alt) cands.unshift(clonePlan(this.alt.plan));
 const res = await this.pool.evalAll(cands, until);
 if (!this.running && !res) break;
 if (mode === 'trick') this.learnBook(target.j, cands, res);
+this.noteMarks(cands, res);
 const prev = this.best;
 let bi = 0;
 res.forEach((r, i) => { if (beats(r, res[bi])) bi = i; });
@@ -1549,9 +1633,22 @@ const k = target.j, g0 = Math.min(...(best.jl || []).filter(e => e.k === k).map(
 let pick = -1;
 res.forEach((r, i) => {
 const e = i && r.jl.find(q => q.k === k);
-if (e && e.g < g0 && e.g <= 3 && r.end !== 'về đích' && r.prog > e.i + 15 && (pick < 0 || r.prog > res[pick].prog)) pick = i;
+if (e && e.g < g0 && e.g <= 3 && (r.end === 'về đích' || r.prog > e.i + 15) && (pick < 0 || beats(r, res[pick]))) pick = i;
 });
 if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0 };
+} else if (mode === 'trick') {
+const j = target.j;
+let pick = -1;
+res.forEach((r, i) => {
+const e = i && firstLandings(r).get(j);
+if (e && e.tr && e.g <= 3 && !(r.crash && r.crashSec === j) && (r.end === 'về đích' || r.prog > e.i + 15) && (pick < 0 || beats(r, res[pick]))) pick = i;
+});
+if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0, land: j };
+}
+if (mode === 'land') {
+const k = target.j, g = r => { const e = firstLandings(r).get(k); return e ? e.g : 9; };
+const F = this.fails || (this.fails = {});
+F[k] = g(this.best) < g(prev) ? 0 : (F[k] || 0) + 1;
 }
 if (improved && mode === 'ride') this.alt = null;
 if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;

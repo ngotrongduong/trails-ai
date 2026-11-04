@@ -1313,6 +1313,21 @@ onmessage=async e=>{const m=e.data;
   // vs, a speed for every part of a section, is there only once learning has split a section
   const partsOk = (P, n) => P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))));
   const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
+  // rounds a jump's best landing (Trainer.marks) is tried again before the AI stops coming back to it
+  const MARK_TRIES = 24;
+  // The first landing of each jump section in a ride (its review, jl), by section.
+  const firstLandings = r => { const m = new Map(); for (const e of (r && r.jl) || []) if (!m.has(e.k)) m.set(e.k, e); return m; };
+  // What a plan does on jump section k and its run-up (the section before), to put back later with setJumpVals; with
+  // keepTrick the move and its timing stay as they are in p.
+  const jumpVals = (p, k) => [k - 1, k].filter(q => q >= 0).map(q => ({ q, v: p.v[q], vs: p.vs && p.vs[q] ? p.vs[q].slice() : null, pt: p.pt[q], pl: p.pl[q], pu: p.pu[q], mv: p.mv[q], hr: p.hr[q] }));
+  function setJumpVals(p, vals, keepTrick) {
+    for (const r of vals) {
+      if (r.q >= p.v.length) continue;
+      p.v[r.q] = r.v; p.pt[r.q] = r.pt; p.pl[r.q] = r.pl; p.pu[r.q] = r.pu;
+      if (r.vs || (p.vs && p.vs[r.q])) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[r.q] = r.vs ? r.vs.slice() : null; }
+      if (!keepTrick) { p.mv[r.q] = r.mv; p.hr[r.q] = r.hr; }
+    }
+  }
   // Ride a beats ride b when it gets further, or as far with more points. Points only decide once rides get as far
   // (in the end, all the way): before, a trick a ride did on an earlier jump made it count over rides that went further.
   // Once both get all the way, the game's own points for their jumps decide first (gamePoints): landing clean and keeping
@@ -1343,18 +1358,38 @@ onmessage=async e=>{const m=e.data;
     } catch { /* storage full or blocked */ }
   }
   const trickValue = tr => (tr & 1 ? 300 : 0) + (tr & 2 ? 200 : 0) + (tr & 4 ? 100 : 0);
-  // A move for a jump with air seconds in the air: each move weighs its chance of landing a trick on jumps within 0.2 s
-  // of that (one success and one failure assumed to start with) times what its tricks were worth, squared.
-  function bookMove(rows, air) {
-    const w = [0];
+  // n moves to try on a jump with air seconds in the air, each trick given its turn. A move's worth: its chance of
+  // landing a trick on jumps within 0.2 s of that much air (one success and one failure assumed to start with) times
+  // what its tricks were worth, or before it has landed one there what its trick is worth to the game (a backflip 300,
+  // a 360 200, a whip 100; the old button moves 40), less when the trick has never been landed with this little air.
+  // To that is added more the fewer times a move was tried at this air (as a bandit picks its arms: upper confidence
+  // bound), so a move tried a few times and failed is not given up on, and the best is not tried only. Every trick
+  // move that has had fewer than 3 tries at this air gets one try in the round first; the rest are drawn by worth.
+  // (Weighing what the moves had landed, squared, made the whip, the easiest trick, take nearly every try.)
+  const TRICK_MOVES = [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R];
+  const moveBit = m => (m === FLIP ? 1 : m === SPIN_L || m === SPIN_R ? 2 : m === WHIP_L || m === WHIP_R ? 4 : 0);
+  function bookMoves(rows, air, n) {
+    const near = rows.filter(r => Math.abs(r[0] - air) <= 0.2);
+    let landed = 0;
+    for (const r of rows) if (r[2] && r[0] <= air + 0.1) landed |= r[3];
+    const tries = new Array(N_MOVES).fill(0), w = new Array(N_MOVES).fill(0);
+    for (const r of near) if (r[1] > 0 && r[1] < N_MOVES) tries[r[1]]++;
+    const all = near.length;
     for (let m = 1; m < N_MOVES; m++) {
-      let n = 0, ok = 0, val = 0;
-      for (const r of rows) if (r[1] === m && Math.abs(r[0] - air) <= 0.2) { n++; if (r[2] && r[3]) { ok++; val += trickValue(r[3]); } }
-      w.push(((ok + 1) / (n + 2)) * (ok ? val / ok : 150));
+      let ok = 0, val = 0;
+      for (const r of near) if (r[1] === m && r[2] && r[3]) { ok++; val += trickValue(r[3]); }
+      const b = moveBit(m), prior = b ? trickValue(b) * (landed & b || !rows.length ? 1 : 0.5) : 40;
+      const est = ((ok + 1) / (tries[m] + 2)) * (ok ? val / ok : prior);
+      w[m] = est + 150 * Math.sqrt(Math.log(all + 2) / (tries[m] + 1)) * (b ? 1 : 0.25);
     }
-    let x = Math.random() * w.reduce((a, v) => a + v * v, 0);
-    for (let m = 1; m < N_MOVES; m++) { x -= w[m] * w[m]; if (x <= 0) return m; }
-    return N_MOVES - 1;
+    const out = TRICK_MOVES.filter(m => tries[m] < 3).sort((a, b) => w[b] - w[a]).slice(0, n);
+    const sum = w.reduce((a, v) => a + v * v, 0);
+    while (out.length < n) {
+      let x = Math.random() * sum, m = 1;
+      for (; m < N_MOVES - 1; m++) { x -= w[m] * w[m]; if (x <= 0) break; }
+      out.push(m);
+    }
+    return out;
   }
   // For each trick the game counts: the least air it was landed with (the shortest tenth of its landings left out) and
   // how often it was landed out of the tries with at least that much air.
@@ -1523,21 +1558,25 @@ onmessage=async e=>{const m=e.data;
       this.gen = ok ? mine.gen : 0;
       this.hist = ok ? (mine.hist || []) : [];
       this.found = ok ? (mine.found || {}) : {};
+      // (the records of a lesson made for these very sections only)
+      this.marks = ok && mine.marks && typeof mine.marks === 'object' && planFits(mine.plan, this.secs) ? mine.marks : {};
+      this.fails = {};
       this.stuck = 0; this.lastProg = -1; this.alt = null; this.fix = null;
       this.best = null;
       return { fromTrack: !!ok, kept: ok ? this.kept : 0 };
     }
     lesson() {
       // the line is kept with the memory: rebuilt later from whatever the game has loaded, it could come out shorter
-      const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour, drill } = this.route;
+      const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour, drill, lands } = this.route;
       // numbers are kept exact: the ride is so sensitive that a route rounded to the centimetre rides differently
       const line = { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length };
       // the number of lines joined on after the line (see extendRoute)
       if (tour !== undefined) line.tour = tour;
       // a practice line is laid on its own ground; a Training drill also keeps what the game asks for
       if (practice) Object.assign(line, { land, practice });
-      if (drill) line.drill = drill;
-      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+      // (and where its landings are, which its goal is judged by: see drillGoal)
+      if (drill) { line.drill = drill; if (lands) line.lands = lands; }
+      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, marks: Object.fromEntries(Object.entries(this.marks || {}).map(([k, { plan, ...m }]) => [k, m])), bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
     }
     // What the jumps this line's best ride got over teach other lines: each jump's shape and the plan used on it.
     jumpRecord() {
@@ -1691,6 +1730,10 @@ onmessage=async e=>{const m=e.data;
         for (const [k, w] of list) { x -= w; if (x <= 0) return k; }
         return list[list.length - 1][0];
       };
+      // a jump that once landed better than it does now (buttery that went back to clean, say): its record is tried again
+      const M = this.marks || {};
+      const lost = [...firstLandings(this.best)].filter(([k, e]) => M[k] && M[k].g < e.g && (M[k].tries || 0) < MARK_TRIES);
+      if (lost.length && Math.random() < 0.4) return { j: pickW(lost.map(([k, e]) => [k, e.g - M[k].g])), land: true };
       if (weak.length && (!tricksOn || Math.random() < 0.6)) return { j: pickW(weak.map(([k, g]) => [k, g >= 4 ? 4 : 2])), land: true };
       if (!tricksOn) {
         // all landed clean or better: buttery is still worth a little more, on every jump of the streak
@@ -1699,7 +1742,8 @@ onmessage=async e=>{const m=e.data;
       }
       const bare = passed.filter(j => !jl.some(e => e.k === j && e.tr) && (worst.get(j) || 9) <= 2);
       const from = bare.length && Math.random() < 0.7 ? bare : passed;
-      return { j: from[Math.floor(Math.random() * from.length)], land: false };
+      // the more air, the more tricks fit: long jumps are tried more often
+      return { j: pickW(from.map(j => [j, 0.3 + this.airOf(j)])), land: false };
     }
     // On a Training drill, what its goal still lacks in the best ride: a trick drill tries its trick on a jump that has
     // not landed one yet (or any jump), and a manual on the flats (Manual, Trick line); the others land the jumps better.
@@ -1762,33 +1806,97 @@ onmessage=async e=>{const m=e.data;
     // 1.8 faster) by angles in the air (0.1 rad either way), the rest of the plan as it is. The take-off speed is the
     // run-up's too (three times the change) when the jump's own section is too short to get to it (under 15 m: the
     // speed at the lip is the one the bike came in at).
-    landCandidates(k, n) {
+    // A jump that landed better in some earlier try than in ride ref (see noteMarks) first gets that try's values back:
+    // all of them, only the jump's own, and with a little change of angle. A trick in base stays (only the way in and
+    // the angle come back). A jump that has stayed bad for many rounds (this.fails) is also tried with the sections
+    // before it changed, further back the longer it stays bad (2 to 6 sections): a jump comes at the lip the way the
+    // jumps before it send it, and the change it needs may lie there.
+    landCandidates(k, n, base = this.plan, ref = this.best) {
       const S = this.secs, out = [];
       const faster = (p, q, dv) => { const u = p.vs && p.vs[q]; if (u) { u[u.length - 1] = clampV(u[u.length - 1] + dv); p.v[q] = u[u.length - 1]; } else p.v[q] = clampV(p.v[q] + dv); };
+      const mk = this.marks && this.marks[k], now = firstLandings(ref).get(k);
+      if (mk && (mk.tries || 0) < MARK_TRIES && (!now || mk.g < now.g || (mk.g === now.g && mk.mis < now.mis - 1))) {
+        mk.tries = (mk.tries || 0) + 1;
+        const keep = (base.mv[k] | 0) !== 0;
+        // The try itself, as it was up to the jump with the rest from base: the ride is the same up to there, so the
+        // jump lands as it did (the values of the jump alone come at it with a run-up that may have changed since)
+        if (mk.plan && planFits(mk.plan, S)) {
+          const p = clonePlan(base), q = mk.plan;
+          for (let s = 0; s <= k; s++) {
+            for (const key of PLAN_KEYS) if (!(keep && s === k && (key === 'mv' || key === 'hr'))) p[key][s] = q[key][s];
+            if ((q.vs && q.vs[s]) || (p.vs && p.vs[s])) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[s] = q.vs && q.vs[s] ? q.vs[s].slice() : null; }
+          }
+          // (how the whole line is pumped too)
+          for (const key of ['pz', 'pk', 'as']) if (q[key] !== undefined) p[key] = Array.isArray(q[key]) ? q[key].slice() : q[key]; else delete p[key];
+          out.push(p);
+        }
+        for (const how of ['all', 'own', 'nudge']) {
+          const p = clonePlan(base);
+          setJumpVals(p, how === 'own' ? mk.vals.filter(r => r.q === k) : mk.vals, keep);
+          if (how === 'nudge') p.pt[k] += gauss() * 0.05;
+          out.push(p);
+        }
+      }
       if (this.gen % 2 === 0) {
         const short = k > 0 && S[k].b - S[k].a < 15;
         for (const dv of [-1.2, -0.6, 0, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
-          const p = clonePlan(this.plan);
+          const p = clonePlan(base);
           faster(p, k, dv);
           if (short) faster(p, k - 1, dv * 3);
           p.pt[k] += da;
           out.push(p);
         }
       }
+      const deep = (this.fails && this.fails[k]) || 0;
       for (let i = out.length; i < n; i++) {
-        const p = clonePlan(this.plan);
+        const p = clonePlan(base);
         if (Math.random() < 0.8) p.pt[k] += gauss() * 0.12;
         if (Math.random() < 0.5) moveSpeed(p, S[k], k, 0.8, false);
         if (k > 0 && Math.random() < 0.25) moveSpeed(p, S[k - 1], k - 1, 0.8, false);
         if (S[k].jump && Math.random() < 0.15) p.pl[k] = p.pl[k] ? 0 : 1 + Math.floor(Math.random() * 5);
+        if (deep >= 8 && k > 1 && i % 3 === 0) {
+          const span = Math.min(k, 2 + Math.floor(deep / 8), 6);
+          for (let q = k - span; q < k; q++) {
+            if (Math.random() < 0.6) moveSpeed(p, S[q], q, 1.5, Math.random() < 0.3);
+            if (S[q].jump && Math.random() < 0.4) p.pt[q] += gauss() * 0.15;
+            if (S[q].jump && Math.random() < 0.15) p.pl[q] = p.pl[q] ? 0 : 1 + Math.floor(Math.random() * 5);
+            if (Math.random() < 0.2) p.pu[q] = [0, 0.5, 1][Math.floor(Math.random() * 3)];
+          }
+        }
         out.push(p);
       }
       return out;
     }
-    // Trick tries on jump section j: a move (mostly one the trick book says fits this much air), how high to let go of
-    // it, and the landing angle.
+    // The first jump of ride r that lands worse than in the best ride, else its worst landing not clean (-1: none).
+    worseJump(r) {
+      const a = firstLandings(this.best), b = [...firstLandings(r)];
+      const w = b.find(([k, e]) => e.g > ((a.get(k) || {}).g || 9) || (e.g >= 3 && !a.has(k)));
+      if (w) return w[0];
+      const bad = b.filter(([, e]) => e.g >= 3).sort((x, y) => y[1].g - x[1].g);
+      return bad.length ? bad[0][0] : -1;
+    }
+    // Every try's landings: the best each jump ever came down (its grade, then how square to the slope) in a try that
+    // rode on from it, with the try's values for the jump and its run-up. The plan kept is the one with the most points
+    // over the whole line, so a change for one jump can make another land worse than it once did: it gets them back.
+    noteMarks(cands, res) {
+      const M = this.marks || (this.marks = {});
+      res.forEach((r, i) => {
+        if (!r || !cands[i]) return;
+        for (const [k, e] of firstLandings(r)) {
+          if (!(e.g > 0) || (r.crash && r.crashSec === k) || !(r.end === 'về đích' || r.prog > e.i + 12)) continue;
+          const m = M[k];
+          // (a record from a stored lesson has no plan: a try that lands as well gives it one)
+          if (m && !(e.g < m.g || (e.g === m.g && (e.mis < m.mis - 1 || !m.plan)))) continue;
+          // (the whole plan of that try only while learning: kept with the lesson, the records would weigh too much)
+          M[k] = { g: e.g, mis: +e.mis.toFixed(1), vals: jumpVals(cands[i], k), plan: clonePlan(cands[i]) };
+        }
+      });
+    }
+    // Trick tries on jump section j: a move (from the trick book, for this much air: see bookMoves), how high to let go
+    // of it, and the landing angle.
     trickCandidates(j, n) {
       const out = [], air = this.airOf(j), only = this.route.drill && DRILL_MOVES[this.route.drill.kind];
+      const moves = !only && air ? bookMoves(this.book, air, n) : null;
       for (let i = 0; i < n; i++) {
         const p = clonePlan(this.plan);
         // a trick drill tries only its own tricks (the Trick line keeps the one a jump has, mostly)
@@ -1800,7 +1908,8 @@ onmessage=async e=>{const m=e.data;
           const fresh = only.filter(m => !(used & kind(m))), from = fresh.length && Math.random() < 0.75 ? fresh : only;
           if (!only.includes(p.mv[j]) || (used & kind(p.mv[j])) || Math.random() < 0.3) p.mv[j] = from[Math.floor(Math.random() * from.length)];
         }
-        else if (i < n * 0.75 || !p.mv[j]) p.mv[j] = air && Math.random() < 0.75 ? bookMove(this.book, air) : Math.floor(Math.random() * N_MOVES);
+        // (a fifth of the tries keep the jump's move and change only how it is done)
+        else if (i < n * 0.8 || !p.mv[j]) p.mv[j] = moves ? moves[i] : 1 + Math.floor(Math.random() * (N_MOVES - 1));
         if (p.mv[j] === FLIP && Math.random() < 0.5) p.pl[j] = 1 + Math.floor(Math.random() * 5);
         p.hr[j] = +(0.3 + Math.random() * 2.5).toFixed(2);
         if (Math.random() < 0.5) p.pt[j] += gauss() * 0.12;
@@ -1843,8 +1952,14 @@ onmessage=async e=>{const m=e.data;
           until = undefined;
           mode = target.pump ? 'pump' : 'manual';
         } else if (fixing) {
+          // After a trick try, every other round lands that jump better with the trick kept (see the trick round below).
+          // A try followed that rides to the end (a jump landed better, the points lost further on) works on the first
+          // jump after it that lands worse than in the best ride.
           const F = this.fix;
-          cands = this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
+          let j = F.land !== undefined && F.n % 2 === 0 ? F.land : -1;
+          if (j < 0 && F.best.end === 'về đích') j = this.worseJump(F.best);
+          cands = j >= 0 ? this.landCandidates(j, LAMBDA, F.plan, F.best)
+            : this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
           this.borrowed = new Set();
           until = undefined;
           mode = 'fix';
@@ -1879,6 +1994,7 @@ onmessage=async e=>{const m=e.data;
         const res = await this.pool.evalAll(cands, until);
         if (!this.running && !res) break;
         if (mode === 'trick') this.learnBook(target.j, cands, res);
+        this.noteMarks(cands, res);
         const prev = this.best;
         let bi = 0;
         res.forEach((r, i) => { if (beats(r, res[bi])) bi = i; });
@@ -1904,14 +2020,32 @@ onmessage=async e=>{const m=e.data;
             if (this.borrowed.has(bi - 1)) { borrowed = true; this.borrowWins++; }
           }
         } else if (mode === 'land') {
-          // no try got as far with more points: keep the one that landed this jump better and got furthest after it
+          // no try got as far with more points: keep the one that landed this jump better and rode best after it (to
+          // the end with fewer points, too: the jumps after it are then worked on, see fixing)
           const k = target.j, g0 = Math.min(...(best.jl || []).filter(e => e.k === k).map(e => e.g), 9);
           let pick = -1;
           res.forEach((r, i) => {
             const e = i && r.jl.find(q => q.k === k);
-            if (e && e.g < g0 && e.g <= 3 && r.end !== 'về đích' && r.prog > e.i + 15 && (pick < 0 || r.prog > res[pick].prog)) pick = i;
+            if (e && e.g < g0 && e.g <= 3 && (r.end === 'về đích' || r.prog > e.i + 15) && (pick < 0 || beats(r, res[pick]))) pick = i;
           });
           if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0 };
+        } else if (mode === 'trick') {
+          // No try got more points: a trick that was landed (even sketchy) and ridden on from is not thrown away. It is
+          // followed for 40 rounds (this.fix), landing that jump better with the trick kept and riding on from it, as a
+          // trick costs the landing and the speed after it until the rest of the line is fitted to it.
+          const j = target.j;
+          let pick = -1;
+          res.forEach((r, i) => {
+            const e = i && firstLandings(r).get(j);
+            if (e && e.tr && e.g <= 3 && !(r.crash && r.crashSec === j) && (r.end === 'về đích' || r.prog > e.i + 15) && (pick < 0 || beats(r, res[pick]))) pick = i;
+          });
+          if (pick > 0 && (!this.fix || beats(res[pick], this.fix.best))) this.fix = { plan: cands[pick], best: res[pick], n: 0, land: j };
+        }
+        // a jump worked on for its landing without landing it better counts one more failed round (see landCandidates)
+        if (mode === 'land') {
+          const k = target.j, g = r => { const e = firstLandings(r).get(k); return e ? e.g : 9; };
+          const F = this.fails || (this.fails = {});
+          F[k] = g(this.best) < g(prev) ? 0 : (F[k] || 0) + 1;
         }
         if (improved && mode === 'ride') this.alt = null;
         if (mode === 'ride') this.stuck = this.best.prog > this.lastProg ? 0 : this.stuck + 1;
