@@ -1419,12 +1419,16 @@ onmessage=async e=>{const m=e.data;
     async run() {
       if (this.running || !this.pool) return;
       this.running = true;
-      // P changes, each tried both ways, every one on all the lines (each worker holds one line, so all of them work)
-      const n = BRAIN.size, P = 10, SIG = 0.15, LR = 0.03, WD = 0.002, pick = this.trainIdx;
+      // P changes, each tried both ways, every one on the same BATCH lines. With many lines, each round takes the next
+      // BATCH of them in a shuffled order, so a round costs the same and every line comes up as often.
+      const n = BRAIN.size, P = 10, SIG = 0.15, LR = 0.03, WD = 0.002, BATCH = 12;
       if (!this.adam) this.adam = { m: new Array(n).fill(0), v: new Array(n).fill(0), t: 0 };
       const A = this.adam;
+      let queue = [];
       while (this.running) {
         const t0 = performance.now();
+        if (queue.length < BATCH) queue = queue.concat(this.trainIdx.slice().sort(() => Math.random() - 0.5).filter(i => !queue.includes(i)));
+        const pick = queue.splice(0, BATCH);
         const eps = Array.from({ length: P }, () => Array.from({ length: n }, gauss));
         const brains = [];
         for (const e of eps) { brains.push(this.mean.map((w, i) => w + SIG * e[i])); brains.push(this.mean.map((w, i) => w - SIG * e[i])); }
@@ -1841,15 +1845,15 @@ onmessage=async e=>{const m=e.data;
       if (!route) { route = await buildRoute(s); if (route) routeCache.set(s.id, route); }
       return route;
     }
-    // Lines for the brain: every line learned in this browser, then the lines near you, up to one per worker (and at most
-    // 12) with one more worker for the chosen line, which is kept aside. At least PRACTICE of them are practice lines,
-    // more when there are few lines around: drills of every kind and size, so the brain learns to ride jumps in general
-    // instead of the few lines near you by heart. Half of them are drills the AI has learned (their lessons show the
-    // brain how to ride them), the others new each time.
-    const PRACTICE = 4;
+    // Lines for the brain, up to BRAIN_LINES: every line learned in this browser, then the lines from the starts nearest
+    // the chosen one (any start whose pieces the game has loaded, not only the ones in the list). The chosen line is kept
+    // aside. At least PRACTICE of them are practice lines, more when there are few lines around: drills of every kind
+    // and size, so the brain learns to ride jumps in general instead of the lines near you by heart. Half of those are
+    // drills the AI has learned (their lessons show the brain how to ride them), the others new each time.
+    const BRAIN_LINES = 40, PRACTICE = 8;
     async function brainLines() {
-      const o = choices[+$('.pick').value];
-      const most = Math.min(12, Math.max(3, workers - 1)), real = most - PRACTICE;
+      const o = choices[+$('.pick').value], at = o ? o.s : choices.length ? choices[0].s : null;
+      const most = BRAIN_LINES, real = most - PRACTICE;
       const testId = o ? o.s.id : null, got = new Map(), drills = [];
       try {
         for (let i = 0; i < localStorage.length; i++) {
@@ -1860,11 +1864,14 @@ onmessage=async e=>{const m=e.data;
           else if (L && id !== testId && !lineStale(L)) got.set(id, L);
         }
       } catch { /* storage blocked */ }
-      for (const c of choices) {
+      // starts a few metres apart lead onto the same line: one of them is enough (and none next to the chosen line)
+      const taken = [...got.values()].map(r => r.start).concat(o ? [o.s] : []);
+      const near = at ? cap.starts.map(s => ({ s, d: Math.hypot(s.x - at.x, s.z - at.z) })).filter(q => q.d < 800).sort((a, b) => a.d - b.d) : [];
+      for (const { s } of near) {
         if (got.size >= real) break;
-        if (c.s.id === testId || got.has(c.s.id)) continue;
-        const r = await lineFor(c.s);
-        if (r && r.length >= 40) got.set(c.s.id, r);
+        if (got.has(s.id) || taken.some(t => Math.hypot(t.x - s.x, t.z - s.z) < 3)) continue;
+        const r = await lineFor(s);
+        if (r && r.length >= 40) { got.set(s.id, r); taken.push(s); }
       }
       const train = [...got.values()].slice(0, real), seed = Math.floor(Math.random() * 1e6);
       drills.sort(() => Math.random() - 0.5);
@@ -1900,8 +1907,8 @@ onmessage=async e=>{const m=e.data;
           say(`Đang nạp ${train.length + (test ? 1 : 0)} đường vào ${workers} luồng cho bộ não chung (có thể mất một phút)…`);
           const t0 = performance.now();
           await brain.prepare(train, test, workers);
-          const np = train.filter(r => r.practice).length;
-          if (!brainTold) log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường (${train.map(r => r.length + ' m').join(', ')}), trong đó ${np} bài tập kiểu Training AI tự tạo mới, mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
+          const real = train.filter(r => !r.practice), lens = real.map(r => r.length);
+          if (!brainTold) log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường: ${real.length} đường thật quanh bạn${real.length ? ` (dài ${Math.min(...lens)}–${Math.max(...lens)} m)` : ''} và ${train.length - real.length} bài tập kiểu Training AI tự tạo. Mỗi vòng thử trên ${Math.min(12, train.length)} đường lần lượt, mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
           brainTold = true;
           const shared = await communityBrain();
           if (shared) {
