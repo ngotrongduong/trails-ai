@@ -151,6 +151,34 @@ Vì chuỗi nhân, một cú tiếp đất xấu ở đầu đường làm mất
 - Lần AI lái thật trong game được chấm đúng như mô phỏng: 1130 điểm ở một lần, 1510 điểm ở lần sau.
 - Với trick mở khóa, AI làm được backflip, nhưng trick rất khó tiếp đất: trong 284 lần thử chỉ 2 lần whip thành công. Sổ tay sẽ giúp dần khi có nhiều lần thử trên nhiều đường.
 
+### Các bài Training của game
+
+Mở một bài trong **Home › Training** rồi bấm **Ride**: bài đó hiện trong danh sách đường của AI ("Training: Pump & pull"…). AI dựng lại bài trong mô phỏng và học cho tới khi đạt đúng điều game yêu cầu, chấm như game chấm (AI đọc luật từ mã của game):
+
+| Bài | Game yêu cầu | AI chấm thế nào |
+|---|---|---|
+| Pumping | 6 lần pump tốt trong một lượt, không đạp | Mỗi lần ấn pump được chấm như game: bắt đầu và kết thúc quanh đáy chỗ trũng, và phải tăng ít nhất 0,3 km/h |
+| Pump track | 2 vòng không đạp, không dừng | Về đích (một vòng) không đạp |
+| Jumping, Pump & pull | Mọi cú nhảy tiếp đất sạch trong một lượt | Từng cú theo thứ tự. Một cú nhảy bị bỏ qua (chỉ nảy lên mặt bàn) tính là hỏng. Chỗ tiếp đất đo đúng như game: qua khỏi gờ đáp, chưa quá chân dốc |
+| Boost & racer | 2 lần boost (bay cao ít nhất 0,97 m) và 2 lần racer (bay thấp, tối đa 0,86 m), xen kẽ | Hai bài học riêng. Khi lái thật, AI đọc dòng "now: boost / racer" trên màn hình game để chọn đúng bài |
+| Beginner line | Về đích không ngã | Về đích |
+| Manual, Whip, 360, Backflip | Làm được trick đó | Trick được game tính |
+| Trick line | Backflip, 360, whip (mỗi cú nhảy một trick khác nhau) và manual tới đích | Mỗi cú nhảy tính nhiều nhất một loại trick |
+
+Luật quan trọng nhất học được khi lái thật: game chỉ tính tiếp đất **sạch** khi lực va dưới 5 và xe lệch dốc đáp không quá 12°. Riêng boost được phép đáp mạnh tới 6,5. Một cú mà mô phỏng chấm "Clean" nhưng sát giới hạn thì lái thật có thể thành Sketchy. Vì vậy AI chỉ tính một cú là đạt khi còn dư: Buttery, hoặc lực va dưới 4,5 và lệch dưới 12°. Với boost: lực va dưới 6, bay cao ít nhất 1,02 m.
+
+Khi lái thật, độ cao và lực va đo trong game khớp mô phỏng đến hai chữ số (boost: 1,08 m và 5,62 cả hai bên).
+
+Đã qua trong game thật: cả 6 bài Basics (Pumping, Pump track, Jumping, Pump & pull, Boost & racer, Beginner line) và 4 bài trick (Manual, Whip, 360, Backflip). Ví dụ Pump & pull: cú nhảy đầu chỉ có 3 m lấy đà, nên AI phải giữ khoảng 35 km/h từ dốc xuất phát. Lượt thật được 2 Buttery và 1 Clean.
+
+Chưa qua: **Trick line**. Cú nhảy thứ ba là cú nhảy xuống dốc (step-down) với khoảng 2 s bay. AI chưa xoay xong 360 trước khi chạm đất nên bị ngã. Tailwhip, Barspin và No-hander còn khóa: game mở chúng khi lên cấp trick 4, 6 và 9.
+
+### Pump và chọn tốc độ, góc cho mỗi cú nhảy
+
+- **Pump đúng chỗ:** AI tìm các chỗ trũng trên đường như game tìm (độ cong mặt đất, không tính chỗ sát mép nhảy) và chỉ ấn pump từ ngay trước tới ngay sau đáy chỗ trũng. Trên các đường đã về đích, cứ 5 vòng AI dành một vòng thử bật/tắt pump ở từng đoạn và dời điểm bắt đầu/kết thúc pump.
+- **Tốc độ và góc cho mỗi cú nhảy:** khi tập một cú tiếp đất chưa đẹp, AI thử cả một lưới: tốc độ rời mép nhảy lệch −1,2 đến +1,8 m/s và góc xe khi bay lệch −0,1, 0, +0,1 rad. Nếu đoạn lấy đà ngắn hơn 15 m, AI đổi luôn tốc độ ở đoạn trước đó (gấp 3 lần), vì đoạn ngắn không kịp tăng tốc.
+- **Nhanh hơn khi bằng điểm:** giữa hai lượt cùng kết quả, lượt có tốc độ trung bình cao hơn được giữ lại. Ở bài Jumping, tốc độ trung bình lên từ 26,9 lên 37,4 km/h mà vẫn tiếp đất sạch.
+
 ## Học nhanh hơn: cùng nhau
 
 - AI dùng gần hết các luồng CPU của máy (tối đa 16). Mở thêm tab trên cùng máy **không** nhanh hơn; các tab cùng học một đường sẽ tự trao cho nhau bài học giỏi nhất.

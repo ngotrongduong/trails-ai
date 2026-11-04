@@ -100,6 +100,16 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 </div>
 
 <div class="card">
+<h2>Các bài Training của game</h2>
+<ol>
+<li>Trong game mở <b>Home › Training</b>, chọn một bài, bấm <b>Ride</b>. Bài đó hiện trong danh sách của AI (“Training: Pump &amp; pull”…).</li>
+<li>Bấm <b>Học lái</b>: AI học tới khi đạt đúng điều game yêu cầu, chấm như game chấm (pump tốt, tiếp đất sạch từng cú theo thứ tự, boost/racer, trick…). Một cú tiếp đất chỉ được tính khi còn dư so với giới hạn của game.</li>
+<li>Bấm <b>AI lái</b>. Ở Boost &amp; racer, AI tự đọc game đang hỏi kiểu nào và lái đúng bài học đó.</li>
+</ol>
+<p class="note">Đã qua trong game thật: cả 6 bài Basics và Manual, Whip, 360, Backflip. Trick line chưa qua.</p>
+</div>
+
+<div class="card">
 <h2>Bên trong: bài học, mượn kinh nghiệm và bộ não chung</h2>
 <ul>
 <li><b>Bài học</b> của một đường là kế hoạch cho từng đoạn: tốc độ (có thể khác nhau ở từng phần khoảng 8 m của đoạn), chỗ nhấc xe trước mép nhảy, pump, góc xe khi bay. Nó chỉ dùng được trên đúng đường đó.</li>

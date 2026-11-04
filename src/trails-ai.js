@@ -73,7 +73,21 @@
 
   // ---------------------------------------------------------------- constants
   const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
-  const N_MOVES = 16;          // trick moves the worker knows (index 0 = none)
+  const N_MOVES = 21;          // trick moves for the air the worker knows (index 0 = none); MANUAL is on the ground
+  const SPIN_L = 16, SPIN_R = 17, FLIP = 18, WHIP_L = 19, WHIP_R = 20, MANUAL = 21;
+  // The game's Training drills, by what each asks for (as the game judges it): need is how much of it one ride must get.
+  // pumps: the rollers without pedals, faster at the end than at the start (the game counts 6 good pumps); laps: two laps
+  // of the pump track without pedals; clean: every jump landed clean in one ride (Jumping, Pump & pull); boost / racer:
+  // the jump of Boost & racer landed at least 0.97 m up (clean, or hard but under 6.5) / clean at most 0.86 m up (the
+  // game asks for one, then the other, twice each); finish: the line without a fall;
+  // manual: 2 s on the back wheel; whip, spin, flip: that trick landed (twice for the whip); tricks: the Trick line, a
+  // backflip, a 360, a whip and a manual in one ride to the end.
+  const DRILL_GOALS = {
+    pumps: { name: 'Pumping', pedals: false, need: 6 }, laps: { name: 'Pump track', pedals: false },
+    clean4: { name: 'Jumping' }, clean3: { name: 'Pump & pull' }, boost: { name: 'Boost & racer (boost)' },
+    racer: { name: 'Boost & racer (racer)' }, finish: { name: 'Beginner line' }, manual: { name: 'Manual', need: 2 },
+    whip: { name: 'Whip', need: 2 }, spin: { name: '360' }, flip: { name: 'Backflip' }, tricks: { name: 'Trick line', need: 5 },
+  };
   const STORE = 'trailsai.v2.';
   // A name for every line, easier to tell apart than "the start 40 m away": the one the player gave it, else one made
   // from the start's id, so a line keeps its name on every computer (place, what is there, a number: "Đồi Thông 37").
@@ -87,6 +101,8 @@
     if (given) return given;
     const drill = /^practice-(\d+)-(\d+)$/.exec(id);
     if (drill) return `Đường tập ${drill[1]}${+drill[2] ? '-' + drill[2] : ''}`;
+    const tr = /^training-(\w+)$/.exec(id);
+    if (tr && DRILL_GOALS[tr[1]]) return `Training: ${DRILL_GOALS[tr[1]].name}`;
     let h = 2166136261;
     for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
     return `${NAME_PLACE[h & 15]} ${NAME_WHAT[(h >>> 4) & 15]} ${10 + ((h >>> 8) % 90)}`;
@@ -113,7 +129,7 @@
   // change: while the AI rides, the AI's controls replace the player's on every physics step.
   const WAI = WebAssembly.instantiate.bind(WebAssembly);
   // tricks, bike and tunes are what the game set for your rider; training uses the same so a plan rides the same
-  const live = { ex: null, g: 0, SL: 0, drive: null, tricks: null, bike: 0, tunes: {} };
+  const live = { ex: null, g: 0, SL: 0, drive: null, tricks: null, bike: 0, tunes: {}, spawn: null };
   WebAssembly.instantiate = async function (src, imports) {
     const r = await WAI(src, imports);
     const ex = r && r.instance && r.instance.exports;
@@ -124,6 +140,8 @@
     px.trails_set_tricks = (g, m) => { if (mine(g)) live.tricks = m; return ex.trails_set_tricks(g, m); };
     px.trails_bike_select = (g, b) => { if (mine(g)) live.bike = b; return ex.trails_bike_select(g, b); };
     px.trails_tune = (g, i, v) => { if (mine(g)) live.tunes[i] = v; return ex.trails_tune(g, i, v); };
+    // where the game puts you back after a fall (a Training drill sets its start here, with the speed you start at)
+    px.trails_keep_spawn = (g, x, z, h, v) => { if (mine(g)) live.spawn = { x, z, heading: h, v: v || 0 }; return ex.trails_keep_spawn(g, x, z, h, v); };
     px.trails_game_step = (g, ...inp) => {
       if (live.drive && g === live.g) {
         try { const o = live.drive.step(); if (o) inp = o; } catch (err) { live.drive = null; console.error(err); }
@@ -288,15 +306,16 @@
     return { X, Z, KIND };
   }
 
-  async function buildRoute(start) {
+  // The line from start along the pieces the game has loaded (or along pieces src, on ground land).
+  async function buildRoute(start, src, land) {
     const e = await engine();
-    const all = [...cap.chunks.values()].flat();
+    const all = src || [...cap.chunks.values()].flat();
     const near = all.filter(p => e.kidx[p.kind] !== undefined && Math.hypot(p.x - start.x, p.z - start.z) < 2500);
     const segs = [];
     for (const p of near) {
       if (!PHYS_KINDS.includes(p.kind)) continue;
       let lay;
-      try { lay = e.layout(p); } catch { continue; }
+      try { lay = e.layout(p, land); } catch { continue; }
       if (!lay || !lay.path || lay.path.length < 2) continue;
       // layouts come back in world coordinates: path rows are [s, x, z]
       const pts = lay.path.map(q => [q[1], q[2]]);
@@ -333,7 +352,8 @@
         const lat = -dx * Math.sin(eh) + dz * Math.cos(eh);
         const dh = Math.abs(wrapA(lh - eh));
         const maxF = jump ? 40 : 3.5;
-        if (f < -2.5 || f > maxF) continue;
+        // (a berm's way in and out are 3 m long and lie over the flats either side of it)
+        if (f < -3.5 || f > maxF) continue;
         if (Math.abs(lat) > 1.5 + Math.max(0, f) * (jump ? 0.45 : 0.3)) continue;
         if (dh > (jump ? 0.75 : 0.65)) continue;
         const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
@@ -344,12 +364,23 @@
     }
     // resample into 1 m steps, starting from the point nearest the start
     const raw = [];
+    // On a drill's own ground (src) a piece's way in can lie over the piece before (a berm's 3 m): the points of a piece
+    // behind where the line has got to are left out, so the line never doubles back.
+    let hx = 0, hz = 0, hh = null;
+    const add = (x, z, kd, h) => {
+      if (src && hh !== null && (x - hx) * Math.cos(hh) + (z - hz) * Math.sin(hh) < 0.2) return;
+      if (hh !== null || src) { hh = h !== undefined ? h : raw.length ? Math.atan2(z - hz, x - hx) : 0; }
+      hx = x; hz = z; raw.push([x, z, kd]);
+    };
+    let n0 = 0;
     chain.forEach((s, ci) => {
-      for (const q of s.pts) raw.push([q[0], q[1], s.p.kind]);
-      raw.push([s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind]);
+      for (const q of s.pts) add(q[0], q[1], s.p.kind);
+      add(s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind, s.end[2]);
+      if (!ci) n0 = raw.length;
     });
+    // the line starts on the first piece (a line that goes round comes back past the start)
     let k0 = 0, d0 = Infinity;
-    raw.forEach((q, i) => { const d = Math.hypot(q[0] - start.x, q[1] - start.z); if (d < d0) { d0 = d; k0 = i; } });
+    raw.forEach((q, i) => { const d = Math.hypot(q[0] - start.x, q[1] - start.z); if ((i < n0 || !src) && d < d0) { d0 = d; k0 = i; } });
     const { X, Z, KIND } = resample(raw, k0);
     if (X.length < 20) return null;
     // pieces the physics needs: everything close to the route
@@ -546,10 +577,88 @@
     };
   }
 
+  // ---------------------------------------------------------------- the game's Training drills
+  // Opening a drill in the game's Training lays all its drills out in the physics, on a slope of their own, and puts the
+  // spawn at the start of the one chosen (with the speed you start at, see trails_keep_spawn) with the tricks that
+  // drill is about unlocked (none for the six basic drills). The AI reads the drill from there, as the game has it: its
+  // pieces, its start, and from those and the tricks what the game asks for (DRILL_GOALS).
+  async function trainingWorld() {
+    if (!live.ex || !live.g) return null;
+    const e = await engine(), ex = live.ex, sz = ex.trails_world_sizes(), FF = sz & 65535, HL = sz >>> 16 || 5;
+    const p = ex.trails_world_flat(live.g, 0);
+    // the trails lie on the game's own terrain (ground 2), the drills on a plain slope (ground 1)
+    if (new Float64Array(ex.memory.buffer, p, HL)[1] !== 1) return null;
+    const land = Array.from(new Float64Array(ex.memory.buffer, p + 8, 4)), pieces = [];
+    for (let r = 0; r < 2000; r++) {
+      const a = new Float64Array(ex.memory.buffer, p + (HL + r * FF) * 8, FF), K = e.K[a[1]];
+      if (!(a[0] > 0) || a[0] % 1 || !K) break;
+      const params = {};
+      K.params.forEach((q, i) => { params[q.key] = a[5 + i]; });
+      pieces.push({ kind: K.key, x: a[2], z: a[3], heading: a[4], params });
+    }
+    return pieces.length ? { land, pieces } : null;
+  }
+  // The drill open in the game now, as lines the AI can learn (two for Boost & racer, one for each way to ride it), or
+  // an empty list when the game is not in Training. A pump track goes round: its line is two laps of it.
+  async function drillsNow() {
+    const sp = live.spawn, w = sp && await trainingWorld();
+    if (!w) return [];
+    const r = await buildRoute({ id: 'training', x: sp.x, z: sp.z, heading: sp.heading }, w.pieces, w.land);
+    if (!r) return [];
+    const k = r.kinds, jumps = k.takeoff || 0, mask = live.tricks || 0, N = r.length;
+    const loop = N > 30 && Math.hypot(r.X[N - 1] - r.X[0], r.Z[N - 1] - r.Z[0]) < 8 && !!k.berm;
+    let goals;
+    if (mask) goals = [mask === 1 ? 'whip' : mask === 2 ? 'spin' : mask === 4 ? 'flip' : mask === 8 ? 'manual' : 'tricks'];
+    else goals = loop ? ['laps'] : !jumps ? ['pumps'] : k.berm ? ['finish'] : jumps === 1 ? ['boost', 'racer'] : [jumps >= 4 ? 'clean4' : 'clean3'];
+    let { X, Z, KIND } = r;
+    if (loop) {
+      X = Array.from(X); Z = Array.from(Z); KIND = Array.from(KIND);
+      for (let i = 0; i < N + 15; i++) { X.push(r.X[i % N]); Z.push(r.Z[i % N]); KIND.push(r.KIND[i % N]); }
+    }
+    // Every landing on the line, as [where its deck starts, where its slope ends] in metres along the line, to the
+    // centimetre: the Training judges a landing by where on it the wheels come down (see the landings in episode).
+    const e = await engine(), along = (x, z) => {
+      let bi = -1, bd = 1.5;
+      for (let i = 0; i < X.length - 1; i++) {
+        const dx = X[i + 1] - X[i], dz = Z[i + 1] - Z[i], t = clamp(((x - X[i]) * dx + (z - Z[i]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        const d = Math.hypot(x - X[i] - dx * t, z - Z[i] - dz * t);
+        if (d < bd) { bd = d; bi = i + t; }
+      }
+      return bi;
+    };
+    const lands = [];
+    for (const p of r.pieces || []) {
+      if (p.kind !== 'landing') continue;
+      let lay = null;
+      try { lay = e.layout(p, w.land); } catch { lay = null; }
+      if (!lay || !lay.points || !lay.points.length) continue;
+      const b = lay.points[lay.points.length - 1][0], a0 = along(p.x, p.z);
+      const a1 = along(p.x + b * Math.cos(p.heading), p.z + b * Math.sin(p.heading));
+      if (a0 >= 0 && a1 > a0) lands.push([+a0.toFixed(2), +a1.toFixed(2)]);
+    }
+    lands.sort((a, b) => a[0] - b[0]);
+    return goals.map(goal => {
+      const kind = goal.startsWith('clean') ? 'clean' : goal;
+      const drill = { goal, kind, need: DRILL_GOALS[goal].need || (kind === 'clean' ? jumps : 1), pedals: DRILL_GOALS[goal].pedals !== false, tricks: mask };
+      return {
+        start: { id: `training-${goal}`, x: sp.x, z: sp.z, heading: sp.heading, v: sp.v },
+        X, Z, KIND, length: X.length, pieces: r.pieces, kinds: k, land: w.land, practice: true, drill, lands,
+      };
+    });
+  }
+
   // ---------------------------------------------------------------- the rider
   const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
-  // Moves the AI may try in the air: buttons to hold, plus an optional lean, steer or whip.
-  const MOVES = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 }, { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
+  // Moves the AI may try in the air: buttons to hold, plus an optional lean, steer or whip. The last six are done as
+  // the game's Training teaches them: a 360 either way (SPIN_L, SPIN_R: the whip held from the bottom of the takeoff,
+  // let go hr × 100° round), a backflip (FLIP: the pedals held up the takeoff and a pull pl metres before the lip, then
+  // let it go round), a whip either way let go hr × 0.25 s after the lip (WHIP_L, WHIP_R: in time for the bike to come
+  // back straight, a whip held down to the landing is landed crossed up) and a manual (MANUAL: on the ground, the front
+  // wheel held up).
+  const MOVES = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 }, { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 },
+    { spin: -1 }, { spin: 1 }, { flip: 1 }, { wt: -1 }, { wt: 1 }, { man: 1 }];
+  // when to pump through a dip, unless a plan has its own (P.pk): from 0.1 m past where it starts to 0.2 m past its end
+  const PUMP0 = [0.1, 0.2];
 
   // The game's points for one jump, counted as the game counts them in trains (its only points): 100, plus 60 for a
   // buttery landing or 40 for a clean one, 300 for a flip, 100 per half turn of a spin of 360° or more, 100 for a whip.
@@ -588,7 +697,8 @@
   // (it is copied into them as text) and in the real game, so a learned plan rides the same in both.
   function makeRider(R, H, S, P) {
     const N = R.length;
-    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, inp: [0, 0, 0, 0, 0, 0, 0] };
+    // rot: how far the bike has turned over backwards since it took off; let: the whip of a 360 let go
+    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, rot: 0, let: false, inp: [0, 0, 0, 0, 0, 0, 0] };
     const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
     // the speed to hold: one for the section, or, when P.vs has a list for it, one for each equal part of the section
     const vAt = (k, i) => { const q = P.vs && P.vs[k]; return q && q.length ? q[Math.min(q.length - 1, Math.max(0, Math.floor((i - S[k].a) * q.length / (S[k].b - S[k].a + 1))))] : P.v[k]; };
@@ -600,7 +710,16 @@
       me.idx = bi;
       while (me.sec < S.length - 1 && me.idx > S[me.sec].b) me.sec++;
       me.off = Math.sqrt(bd);
-      if (air && !me.wasAir) { me.airSec = me.sec; for (let k = me.sec; k >= 0 && k >= me.sec - 1; k--) if (S[k].jump) { me.airSec = k; break; } }
+      // at: how far along the line the bike is, between its points (they are a metre apart)
+      { const j = Math.min(N - 2, bi), dx = R.X[j + 1] - R.X[j], dz = R.Z[j + 1] - R.Z[j];
+        me.at = j + clamp(((bx - R.X[j]) * dx + (bz - R.Z[j]) * dz) / (dx * dx + dz * dz || 1), -0.5, 1.5); }
+      if (air && !me.wasAir) {
+        me.airSec = me.sec; me.rot = 0; me.let = false;
+        // off a lip just passed (3 m or less behind) the jump is that lip's, even when the section after it ends at a lip too
+        const k0 = me.sec - 1;
+        if (k0 >= 0 && S[k0].jump && S[k0].b >= me.idx - 3 && !(S[me.sec].jump && S[me.sec].b <= me.idx + 2)) me.airSec = k0;
+        else for (let k = me.sec; k >= 0 && k >= me.sec - 1; k--) if (S[k].jump) { me.airSec = k; break; }
+      }
       me.landed = !air && me.wasAir;
       me.wasAir = air;
       if (t % 2 === 0) {
@@ -613,13 +732,37 @@
           const e = vAt(sec, idx) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
           if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
           if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
-          if (P.pu && P.pu[sec] > 0 && (H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
+          // Pump, as hard as the section says. A plan with pz pumps through the dips as the game's Training teaches (the
+          // zones R.PZ: from pk[0] m past where one starts to pk[1] m past where it ends); older plans where the ground
+          // 1 to 3 m ahead falls away. Not on the start hill: there the real game throws you off where the simulation
+          // does not.
+          if (P.pu && P.pu[sec] > 0 && R.KIND[idx] !== 'start') {
+            if (P.pz && R.PZ) { const pk = P.pk || PUMP0, u = me.at; if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec]; }
+            else if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
+          }
+          // tricks that start on the ground: a 360 is wound up with the whip held up the takeoff, a backflip popped
+          // with the pedals held up it; a manual pulls while the front drops and lets go as it rises past the balance
+          const gm = MOVES[P.mv[sec] | 0];
+          if (gm && R.KIND[idx] === 'takeoff') { if (gm.spin) whip = gm.spin; if (gm.flip) { pedal = 1; brake = 0; } }
+          if (gm && gm.man && R.KIND[idx] !== 'takeoff' && !(s[46] > 0 && s[47] >= 0)) btn |= 1;
         } else {
           // keep the bike at the planned angle for the landing, unless a trick needs the lean
-          const dp = (s[4] - me.prevP) * 30;
+          const dp = wrapA(s[4] - me.prevP) * 30;
+          me.rot += wrapA(s[4] - me.prevP);
           lean = clamp(2.2 * (s[4] - P.pt[me.airSec]) + 0.35 * dp, -1, 1);
           const mv = MOVES[P.mv[me.airSec] | 0];
-          if (mv) {
+          if (mv && mv.spin) {
+            // hold the whip until the bike is hr × 100° round, and leave its angle alone while it turns
+            const a = Math.abs(s[48]);
+            if (a >= P.hr[me.airSec] * 100) me.let = true;
+            if (!me.let) whip = mv.spin;
+            if (a > 5 && a < 320) lean = 0;
+          } else if (mv && mv.flip) {
+            // let it go over, then bring it to the landing angle
+            if (me.rot > -0.6 && me.rot < 5) lean = 0;
+          } else if (mv && mv.wt) {
+            if (s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
+          } else if (mv && !mv.man) {
             const gnd = Math.max(H[look(3)], H[look(8)]);
             if (s[12] > 0.1 && by - gnd > P.hr[me.airSec]) { btn = mv.b || 0; if (mv.ln !== undefined) lean = mv.ln; if (mv.st) st = mv.st; if (mv.w) whip = mv.w; }
           }
@@ -783,7 +926,8 @@ function addLine(route,setup){
   // the route starts at the first piece after the start hill: add a straight run-in from the spawn
   {const d=Math.hypot(R.X[0]-R.start.x,R.Z[0]-R.start.z),n=Math.floor(d);
     if(n>=2){const X=[],Z=[],KI=[];for(let i=0;i<n;i++){const f=i/d;X.push(R.start.x+(R.X[0]-R.start.x)*f);Z.push(R.start.z+(R.Z[0]-R.start.z)*f);KI.push('start')}
-      R.X=X.concat(Array.from(R.X));R.Z=Z.concat(Array.from(R.Z));R.KIND=KI.concat(Array.from(R.KIND));R.length=R.X.length}}
+      R.X=X.concat(Array.from(R.X));R.Z=Z.concat(Array.from(R.Z));R.KIND=KI.concat(Array.from(R.KIND));R.length=R.X.length;
+      if(R.lands)R.lands=R.lands.map(q=>[q[0]+n,q[1]+n])}}
   // the game's terrain, or the ground of a practice line (R.land)
   const arr=[fmt,...(R.land||[2,0,0,0])];let n=0;
   for(const f of R.pieces){const ki=kidx[f.kind];if(ki===undefined)continue;n++;
@@ -800,11 +944,12 @@ function addLine(route,setup){
   R.nextTake=new Int32Array(R.length).fill(-1);R.nextLand=new Int32Array(R.length).fill(-1);
   let t=-1,ld=-1;for(let i=R.length-1;i>=0;i--){if(R.KIND[i]==='takeoff')t=i;if(R.KIND[i]==='landing')ld=i;R.nextTake[i]=t;R.nextLand[i]=ld}
   S=sections();
+  R.PZ=pumpZones();
   lines.push({g,R,H,S});
 }
 const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
-const MOVES=${JSON.stringify(MOVES)};
+const MOVES=${JSON.stringify(MOVES)},PUMP0=${JSON.stringify(PUMP0)};
 const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
@@ -828,10 +973,71 @@ function sections(){
   }
   return out;
 }
+// Where the game's Training says to pump (its green): where the ground bends up (a dip: over ±0.5 m it curves more
+// than 0.06), at least 0.8 m long, not on a takeoff (from 0.3 m before it to 1.5 m past its lip) and not a dip just
+// before one (2.5 m or less from it, a takeoff's run-in: there you pull). Each zone is [from, to, its lowest point], in
+// metres along the line, found every 5 cm as the game does.
+function pumpZones(){
+  const N=R.length,st=0.05,n=Math.floor((N-1)/st)+1,h=new Float64Array(n),e=10;
+  for(let i=0;i<n;i++){const u=i*st,j=Math.min(N-2,Math.floor(u)),f=u-j;h[i]=l.trails_draft_height(g,R.X[j]+(R.X[j+1]-R.X[j])*f,R.Z[j]+(R.Z[j+1]-R.Z[j])*f)}
+  const tk=[];
+  for(let i=0;i<N;i++)if(R.KIND[i]==='takeoff'&&(i===0||R.KIND[i-1]!=='takeoff')){let b=i;while(b+1<N&&R.KIND[b+1]==='takeoff')b++;tk.push([i,b+1])}
+  const near=u=>tk.some(q=>u>=q[0]-0.3&&u<=q[1]+1.5),out=[];
+  let a=-1;
+  for(let i=0;i<n;i++){
+    const c=(h[Math.max(0,i-e)]-2*h[i]+h[Math.min(n-1,i+e)])/0.25>0.06&&!near(i*st);
+    if(c&&a<0)a=i;
+    if((!c||i===n-1)&&a>=0){
+      if((i-a)*st>=0.8){let p=a;for(let m=a;m<=i;m++)if(h[m]<h[p])p=m;const z=[a*st,i*st,p*st].map(v=>+v.toFixed(2));if(!tk.some(q=>q[0]-z[1]<2.5&&q[0]>z[2]))out.push(z)}
+      a=-1}
+  }
+  return out;
+}
+// The game's coach: [pumps so far, speed the last one gave (m/s), ...] (older games have none)
+const coach=()=>l.trails_coach?new Float64Array(l.memory.buffer,l.trails_coach(g),9):null;
 // One ride of the line with plan P (or the brain opt.brain). Returns how far it got, the points and why it ended.
+// A Training drill starts at its own speed, and some drills take the pedals away (the game zeroes them)
+function spawn(){l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,R.start.v||0);l.trails_game_reset(g)}
+const noPedals=inp=>{if(R.drill&&!R.drill.pedals)inp[0]=0;return inp};
+// How much of what a Training drill asks for one ride got (see DRILL_GOALS): manual is the longest manual in ticks.
+// A trick counts when it came off a real jump, was not landed flat or cased, and the ride went on to the end (the game
+// wants you to ride away from it). So on a trick drill the AI first learns to ride the drill to the end, as on any
+// line, and then puts the tricks in, a ride with one more of them counting over one with fewer. The Trick line wants
+// one trick off each jump: a jump counts for one of its tricks only (kinds: how many of flip, spin and whip the jumps
+// give, each jump used once), and each of them counts before the end too, so the AI learns them one by one.
+function trickKinds(js){
+  let best=0;
+  const go=(i,got)=>{ if(i===js.length){ let n=0; for(const b of [1,2,4]) if(got&b) n++; if(n>best) best=n; return; }
+    go(i+1,got); for(const b of [1,2,4]) if((js[i].tr&b)&&!(got&b)) go(i+1,got|b); };
+  go(0,0);
+  return best;
+}
+// A jump is judged by its first landing: a bounce after a cased landing is no landing of its own.
+function drillGoal(D,end,v,jl,manual,pumps,nl){
+  const fin=end==='về đích',seen=new Set(),big=jl.filter(e=>e.a>0.4&&!seen.has(e.k)&&seen.add(e.k)),ok=e=>e.g>0&&e.g<=2&&e.spot!==false;
+  const did=b=>big.filter(e=>(e.tr&b)&&e.g<=3).length,tr=n=>fin?Math.min(D.need,n):0;
+  const kinds=()=>trickKinds(big.filter(e=>e.tr&&e.g<=3));
+  // the jumps of Jumping and Pump & pull are learned in order: the clean landings in a row from the first, and a
+  // tenth for each clean one after (so a ride that lands the first jump right counts, even if the next ones go worse).
+  // With the drill's landings known (nl of them) each is judged by the first landing on it, and a jump not flown at
+  // all (a hop onto its table) counts as missed: else skipping a hard first jump looks better than trying it.
+  // A clean landing at the edge of the game's limits (impact near 5, the bike well off the slope) came down sketchy
+  // in a real ride: there a clean one needs some to spare, a buttery one has it.
+  const safe=e=>ok(e)&&(e.g===1||(e.imp<4.5&&e.mis<12));
+  const on=nl?Array.from({length:nl},(_,j)=>jl.find(e=>e.li===j)||null):big,okAt=e=>!!e&&(nl?safe(e):ok(e));
+  let first=0;while(first<on.length&&okAt(on[first]))first++;
+  const have={pumps,laps:fin?1:0,finish:fin?1:0,clean:first+0.1*on.slice(first).filter(okAt).length,
+    // a boost comes down from high up, never softly: the game counts it landed clean, or hard (impact under 6.5, not
+    // the engine's grade) on the landing's sweet spot with the bike within 12° of the slope. Real rides came out as
+    // high and as hard as the simulation's; some to spare on both all the same (0.97 m up / 0.86 m at most).
+    boost:big.filter(e=>ok(e)&&e.mis<12&&e.imp<6&&e.h>=1.02).length,racer:big.filter(e=>safe(e)&&e.h<=0.8).length,manual:Math.min(2,manual/60),
+    whip:tr(did(4)),spin:tr(did(2)),flip:tr(did(1)),
+    tricks:kinds()+(manual>=120?1:0)+(fin?1:0)}[D.kind]||0;
+  return {n:+Math.min(D.need,have).toFixed(2),need:D.need};
+}
 function episode(P,opt){
   opt=opt||{};const rec=opt.rec,until=opt.until||1e9;
-  l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
+  spawn();
   let s=state();
   const N=R.length;let idx=0,prog=0,pts=0,seq=s[16],stall=0,t=0,crash=0,end='hết giờ';
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
@@ -842,10 +1048,26 @@ function episode(P,opt){
   const tr=rec?[]:null,ev=rec?[]:null;
   const tricks={};let pending=null,manualM=0,landT=-1e9,jumps=0,landAt=-1,lastJ=-1,progAt=0,progT=0;
   // every jump the game counts (it grades the landing), with the game's own points for it (gamePoints) and the streak
-  const jl=[];let game=0,streak=0,airP=0;
+  const jl=[];let game=0,streak=0,airP=0,manRun=0,manBest=0;
+  // pumps judged as the game's Training judges them: a push (pump held on the ground) is good when it starts no more than
+  // 0.8 m before a zone and no later than 0.2 m past its lowest point, goes on to 0.2 m before that point or further,
+  // ends no more than 0.8 m past the zone, and the game's coach says it gave 0.3 km/h or more. pumpGain: what all the
+  // pushes gave, m/s. A push ends 0.45 s after it is let go, or when the coach has counted it.
+  const PZ=R.PZ||[],zoneAt=u=>PZ.find(z=>u>=z[0]-1.2&&u<=z[1]+0.3)||null,c0=coach();
+  let push=null,goodPumps=0,pumpGain=0,seenPump=c0?c0[0]:0;
+  // the landings: [deck, bottom] of each, exact on a drill (R.lands), else its first and last point
+  const LS=R.lands?R.lands:[];if(!R.lands)for(let i=0;i<N;i++)if(R.KIND[i]==='landing'){if(LS.length&&LS[LS.length-1][1]===i-1)LS[LS.length-1][1]=i;else LS.push([i,i])}
+  const newPush=u=>({from:u,to:u,z:zoneAt(u),since:null,kmh:null});
   for(t=0;t<maxT;t++){
     const air=s[12]>0;
-    const inp=rider.step(s,t);
+    const inp=noPedals(rider.step(s,t));
+    if(PZ.length){const u=rider.at,c=!(s[12]>0.12)&&inp[4]>25&&!(inp[5]&1);
+      if(c&&!push)push=newPush(u);
+      if(push){if(c&&push.since===null)push.to=u;else if(push.since===null)push.since=0;else push.since++;if(c&&push.since!==null)push.since=27}
+      const q=coach();if(q&&q[0]!==seenPump){seenPump=q[0];pumpGain+=q[1];if(push)push.kmh=q[1]*3.6}
+      if(push&&push.since!==null&&(push.since>=27||push.kmh!==null)){const z=push.z;
+        if(z&&push.from>=z[0]-0.8&&push.from<=z[2]+0.2&&push.to<=z[1]+0.8&&push.to>=z[2]-0.2&&!(push.kmh!==null&&push.kmh<0.3))goodPumps++;
+        push=c?newPush(u):null}}
     idx=rider.idx;if(idx>prog){for(let i=prog+1;i<=idx;i++)vr[i]=Math.abs(s[8]);prog=idx}
     if(rider.off>7&&!air){end='lạc khỏi đường';pts-=20;break}
     if(idx>=N-3){end='về đích';pts+=150;break}
@@ -872,12 +1094,17 @@ function episode(P,opt){
         streak=gp.streak;game+=gp.p;
         // the bike's pitch just before it came down less the slope of the ground there (above 0: nose too high)
         const dp=airP-Math.atan2(H[i+2]-H[i-2],4);
-        jl.push({k,i:idx,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0});
+        // where on the landing the wheels came down, as the game's Training judges it: the back wheel past the knuckle
+        // (0.8 m down the landing and 0.2 more) and the front no more than 1 m past its bottom, else short or overshot
+        // (the wheels about half a metre either side of the bike; a metre to spare at the knuckle: real rides came down
+        // up to a metre shorter than the simulation's, 0.3 m at the bottom)
+        const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7);
+        jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0});
         if(rec)ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
     }
     if(pending&&t-pending.t>=30){const k=Object.keys(pending.got);let p=0;for(const n of k){p+=n==='whip'?pending.got[n]:TP[n]*pending.got[n];tricks[n]=(tricks[n]||0)+(n==='whip'?1:pending.got[n])}
       p*=1+0.5*(k.length-1);pts+=p;if(rec)ev.push({t:pending.t,got:pending.got,p:Math.round(p)});pending=null}
-    if(s[46]>0&&!(s[12]>0)){const m=Math.abs(s[8])/60;manualM+=m;pts+=m*10}
+    if(s[46]>0&&!(s[12]>0)){const m=Math.abs(s[8])/60;manualM+=m;pts+=m*10;if(++manRun>manBest)manBest=manRun}else manRun=0;
     if(Math.abs(s[8])<0.6&&!(s[12]>0)){if(++stall>150){end='đứng lại';pts-=25;break}}else stall=0;
   }
   if(manualM>=2)tricks.manual=Math.round(manualM);
@@ -886,7 +1113,10 @@ function episode(P,opt){
   // closer to making it. Without this every try that fails at a steep ramp scores the same, and learning has nothing
   // to go by there.
   const pace=0.05*Math.min(20,vr[Math.max(0,prog-5)]);
-  const res={fit:prog+pts+pace,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps,game,jl};
+  // vEnd: the speed at the end; vAvg: the mean speed along the line (m/s)
+  const vEnd=+Math.abs(s[8]).toFixed(2),vAvg=+(prog/Math.max(1,t)*60).toFixed(2);
+  const res={fit:prog+pts+pace,prog,pts:Math.round(pts),crash,end,tricks,ticks:t,sec,crashSec,jumps,game,jl,vEnd,vAvg,goodPumps,pumpGain:+pumpGain.toFixed(2)};
+  if(R.drill)res.goal=drillGoal(R.drill,end,Math.abs(s[8]),jl,manBest,goodPumps,R.lands&&R.drill.kind==='clean'?R.lands.length:0);
   if(rec)res.trace={tr,ev,H:Array.from(H,h=>+h.toFixed(2))};
   return res;
 }
@@ -896,7 +1126,7 @@ function episode(P,opt){
 // With brain w, the brain rides instead and the plan only says what it would do: so the brain also learns what to do
 // where its own mistakes take it, places the plan never went.
 function watchPlan(P,until,w){
-  l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
+  spawn();
   // the line here may be cut short: keep the plan's first sections, fresh values past its end
   const D={v:()=>8,pt:i=>S[i].pt,mv:()=>0,hr:()=>1.5,pl:()=>0,pu:()=>0},Q={};
   for(const k in D)Q[k]=S.map((_,i)=>P[k]&&typeof P[k][i]==='number'?P[k][i]:D[k](i));
@@ -906,6 +1136,7 @@ function watchPlan(P,until,w){
   for(let t=0;t<18000;t++){
     let inp=rider.step(s,t);eye.step(s,t);
     if(me)inp=me.step(s,t);
+    noPedals(inp);
     if(t%2===0&&eye.seen&&rider.want){for(const v of eye.x)rows.push(v);for(const v of rider.want)rows.push(v);rows.push(eye.landPt)}
     if(rider.idx>prog){prog=rider.idx;progT=t}else if(t-progT>480)break;
     if(rider.idx>=Math.min(N-3,until))break;
@@ -921,7 +1152,7 @@ function watchPlan(P,until,w){
 // Sections past its fall keep fresh values. Returns how far the brain got and four plans (the speed as aimed or as
 // ridden, on the whole section or on its end): which one rides closest to the brain differs from line to line.
 function brainPlan(w){
-  l.trails_set_spawn_at(g,R.start.x,R.start.z,R.start.heading,0);l.trails_game_reset(g);
+  spawn();
   const N=R.length,K=S.length,me=makeBrainRider(R,H,w);
   const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0)};
   const tk=makeRider(R,H,S,Q),z=()=>new Float64Array(K);
@@ -929,7 +1160,7 @@ function brainPlan(w){
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
   let s=state(),prog=0,progT=0,stall=0;
   for(let t=0;t<maxT;t++){
-    const air=s[12]>0,inp=me.step(s,t);tk.step(s,t);
+    const air=s[12]>0,inp=noPedals(me.step(s,t));tk.step(s,t);
     const i=me.idx;if(i>prog){prog=i;progT=t}else if(t-progT>480)break;
     if(me.off>7&&!air||i>=N-3)break;
     if(t%2===0){
@@ -958,7 +1189,7 @@ function brainPlan(w){
 onmessage=async e=>{const m=e.data;
   try{
     if(m.type==='init'){await init(m);
-      const metas=lines.map(L=>({secs:L.S,length:L.R.length,geo:m.geo===false?null:{X:Array.from(L.R.X),Z:Array.from(L.R.Z),KIND:Array.from(L.R.KIND),H:Array.from(L.H)}}));
+      const metas=lines.map(L=>({secs:L.S,length:L.R.length,geo:m.geo===false?null:{X:Array.from(L.R.X),Z:Array.from(L.R.Z),KIND:Array.from(L.R.KIND),H:Array.from(L.H),PZ:L.R.PZ}}));
       postMessage({type:'ready',id:m.id,...metas[0],metas})}
     else if(m.type==='eval'){use(0);const out=m.plans.map(p=>episode(p,{until:m.until}));postMessage({type:'evals',id:m.id,out})}
     else if(m.type==='replay'){use(0);postMessage({type:'replay',id:m.id,r:episode(m.plan,{rec:true})})}
@@ -1075,8 +1306,14 @@ onmessage=async e=>{const m=e.data;
   // (in the end, all the way): before, a trick a ride did on an earlier jump made it count over rides that went further.
   // Once both get all the way, the game's own points for their jumps decide first (gamePoints): landing clean and keeping
   // the streak going is what the game counts, more than the AI's own guess at points.
+  // With the same game points, the faster ride all the way (its mean speed, vAvg) counts over the slower one.
+  // On a Training drill, getting more of what the drill asks for (r.goal) comes before everything else.
   const done = r => r.end === 'về đích' && typeof r.game === 'number';
-  const beats = (a, b) => !b || a.prog > b.prog || (a.prog === b.prog && (done(a) && done(b) && a.game !== b.game ? a.game > b.game : a.fit > b.fit + 0.01));
+  const goalN = r => (r.goal ? r.goal.n : 0);
+  const faster = (a, b) => (typeof a.vAvg === 'number' && typeof b.vAvg === 'number' && Math.abs(a.vAvg - b.vAvg) > 0.05 ? a.vAvg > b.vAvg : null);
+  const beats = (a, b) => !b || (goalN(a) !== goalN(b) ? goalN(a) > goalN(b) : a.prog > b.prog || (a.prog === b.prog && (done(a) && done(b) && a.game !== b.game ? a.game > b.game
+    : done(a) && done(b) && faster(a, b) !== null ? faster(a, b) : a.fit > b.fit + 0.01)));
+  const goalMet = r => !!(r && r.goal && r.goal.n >= r.goal.need);
 
   // ---------------------------------------------------------------- the trick book
   // What every trick try taught: how long the bike was in the air, the move tried, whether the bike landed it, and the
@@ -1117,6 +1354,18 @@ onmessage=async e=>{const m=e.data;
       const min = got[Math.floor(got.length * 0.1)], tries = rows.filter(r => r[0] >= min).length;
       return { name, n: got.length, min, tries };
     });
+  }
+  // The moves a trick drill of the game's Training tries on its jumps.
+  const DRILL_MOVES = { whip: [WHIP_L, WHIP_R], spin: [SPIN_L, SPIN_R], flip: [FLIP], tricks: [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R] };
+  // A first plan for a Training drill: the jumps of a trick drill taken fast (its kickers throw the bike up more than
+  // along: measured, about 13 m/s gets a backflip, a 360 or a whip round and onto the landing), and a manual on the
+  // Manual drill. The tricks themselves come once the drill is ridden to the end (see drillGoal). The drills without
+  // pedals pump through every dip, never braking.
+  function drillSeed(P, secs, D) {
+    if (DRILL_MOVES[D.kind]) secs.forEach((s, k) => { if (s.jump) P.v[k] = 13; });
+    if (D.kind === 'manual') secs.forEach((s, k) => { if (!s.jump) P.mv[k] = MANUAL; });
+    if (!D.pedals) { P.pz = 1; P.pu = P.pu.map(() => 1); P.v = P.v.map(() => 18); }
+    return P;
   }
   const clampV = v => Math.min(18, Math.max(2, v));
   // Changes the speed of section q by about sd: its one speed, or one or all of its parts once it has them. With
@@ -1224,6 +1473,12 @@ onmessage=async e=>{const m=e.data;
     p.v[k] = j.v; p.pt[k] = s.pt + j.dpt; p.pl[k] = j.pl; p.pu[k] = j.pu;
     if (p.vs) p.vs[k] = null;
   }
+  // which simulation scored a stored ride: one scored by other code (another goal, other judges) is not trusted
+  let simHash = null;
+  function simId() {
+    if (simHash === null) { let h = 2166136261; for (let i = 0; i < workerSrc.length; i++) h = Math.imul(h ^ workerSrc.charCodeAt(i), 16777619) >>> 0; simHash = h.toString(36); }
+    return simHash;
+  }
 
   class Trainer {
     constructor(ui) { this.ui = ui; this.running = false; this.pool = null; }
@@ -1263,14 +1518,15 @@ onmessage=async e=>{const m=e.data;
     }
     lesson() {
       // the line is kept with the memory: rebuilt later from whatever the game has loaded, it could come out shorter
-      const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour } = this.route;
+      const { start, X, Z, KIND, pieces, kinds, length, land, practice, tour, drill } = this.route;
       // numbers are kept exact: the ride is so sensitive that a route rounded to the centimetre rides differently
       const line = { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length };
       // the number of lines joined on after the line (see extendRoute)
       if (tour !== undefined) line.tour = tour;
-      // a practice line is laid on its own ground
+      // a practice line is laid on its own ground; a Training drill also keeps what the game asks for
       if (practice) Object.assign(line, { land, practice });
-      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+      if (drill) line.drill = drill;
+      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
     }
     // What the jumps this line's best ride got over teach other lines: each jump's shape and the plan used on it.
     jumpRecord() {
@@ -1288,7 +1544,7 @@ onmessage=async e=>{const m=e.data;
     takeStored(raw) {
       let m = null;
       try { m = JSON.parse(raw || localStorage.getItem(this.key()) || 'null'); } catch { m = null; }
-      if (!m || !this.best || !m.bestRun || !planFits(m.plan, this.secs) || JSON.stringify(m.setup) !== JSON.stringify(this.setup)) return false;
+      if (!m || !this.best || !m.bestRun || m.sim !== simId() || !planFits(m.plan, this.secs) || JSON.stringify(m.setup) !== JSON.stringify(this.setup)) return false;
       if (!beats(m.bestRun, this.best)) return false;
       this.plan = m.plan; this.best = m.bestRun; this.gen = Math.max(this.gen, m.gen || 0);
       return true;
@@ -1312,6 +1568,7 @@ onmessage=async e=>{const m=e.data;
       this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
       this.book = loadBook(this.setup.tricks); this.bookDirty = false;
       const mem = this.load();
+      if (!mem.fromTrack && route.drill) drillSeed(this.plan, this.secs, route.drill);
       this.best = (await this.pool.evalAll([this.plan]))[0];
       // jumps of this line that look like jumps learned on other lines (this.library is set by the panel)
       this.borrow = matchJumps(this.secs, this.library || [], route.start.id);
@@ -1433,11 +1690,81 @@ onmessage=async e=>{const m=e.data;
       const from = bare.length && Math.random() < 0.7 ? bare : passed;
       return { j: from[Math.floor(Math.random() * from.length)], land: false };
     }
-    // Tries for a better landing off the jump of section k: the angle held in the air, the speed the jump is taken at
-    // (and sometimes that of the section before, the run-up), and whether to pull up off the lip.
-    landCandidates(k, n) {
+    // On a Training drill, what its goal still lacks in the best ride: a trick drill tries its trick on a jump that has
+    // not landed one yet (or any jump), and a manual on the flats (Manual, Trick line); the others land the jumps better.
+    // Once the goal is met, the jumps are worked on for points as on any line. Null: just get further.
+    drillTarget(passed, finished) {
+      const D = this.route.drill, b = this.best;
+      if (goalMet(b)) return finished && passed.length ? this.pointsTarget(passed) : null;
+      if (D.kind === 'manual' || (D.kind === 'tricks' && Math.random() < 0.3)) return { manual: true };
+      if (!D.pedals) return { pump: true };
+      // a landing the drill does not count yet (not clean, or not on the landing's sweet part) is worked on first
+      const off = (b.jl || []).filter(e => e.a > 0.4 && (e.g > 2 || e.spot === false) && passed.includes(e.k));
+      // (mostly the first of them: the jumps are learned in order)
+      if (off.length && (D.kind === 'clean' || D.kind === 'boost' || D.kind === 'racer' || D.kind === 'finish')) return { j: off[Math.random() < 0.7 ? 0 : Math.floor(Math.random() * off.length)].k, land: true };
+      // a landing made better leaves more room for a trick on it (and for the jump after it)
+      if (DRILL_MOVES[D.kind] && finished && Math.random() < 0.25) return this.pointsTarget(passed);
+      if (DRILL_MOVES[D.kind]) {
+        // (on the Trick line, a jump whose trick an earlier jump already does is bare too)
+        let seen = 0;
+        const bare = passed.filter(j => {
+          const e = (b.jl || []).find(x => x.k === j && x.tr);
+          if (!e) return true;
+          const dup = D.kind === 'tricks' && (e.tr & seen) === e.tr;
+          seen |= e.tr;
+          return dup;
+        });
+        const from = bare.length ? bare : passed;
+        return from.length ? { j: from[Math.floor(Math.random() * from.length)], land: false } : null;
+      }
+      return finished && passed.length ? this.pointsTarget(passed) : null;
+    }
+    // Pump tries: pumping through the dips as the game teaches (pz), when in a dip to start and stop (pk) and how hard
+    // to pump in a few sections (0 for none).
+    pumpCandidates(n) {
       const S = this.secs, out = [];
       for (let i = 0; i < n; i++) {
+        const p = clonePlan(this.plan);
+        if (!p.pz && Math.random() < 0.6) { p.pz = 1; if (Math.random() < 0.5) p.pu = p.pu.map(() => 1); }
+        if (Math.random() < 0.5) { const q = p.pk || PUMP0; p.pk = [clamp(q[0] + gauss() * 0.3, -1, 1), clamp(q[1] + gauss() * 0.3, -1, 1)].map(v => +v.toFixed(2)); }
+        const m = 1 + Math.floor(Math.random() * 3);
+        for (let j = 0; j < m; j++) p.pu[Math.floor(Math.random() * S.length)] = [0, 0.5, 0.8, 1][Math.floor(Math.random() * 4)];
+        out.push(p);
+      }
+      return out;
+    }
+    // Manual tries: the manual on or off on a section off the jumps, and the speed there.
+    manualCandidates(n) {
+      const S = this.secs, flats = S.map((s, k) => (s.jump ? -1 : k)).filter(k => k >= 0), out = [];
+      for (let i = 0; i < n; i++) {
+        const p = clonePlan(this.plan), k = flats[Math.floor(Math.random() * flats.length)];
+        if (k === undefined) { out.push(p); continue; }
+        if (Math.random() < 0.6) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
+        if (Math.random() < 0.6) moveSpeed(p, S[k], k, 1.5, false);
+        out.push(p);
+      }
+      return out;
+    }
+    // Tries for a better landing off the jump of section k: the angle held in the air, the speed the jump is taken at
+    // (and sometimes that of the section before, the run-up), and whether to pull up off the lip.
+    // Every other round the jump is worked out instead of guessed: a grid of take-off speeds (from 1.2 m/s slower to
+    // 1.8 faster) by angles in the air (0.1 rad either way), the rest of the plan as it is. The take-off speed is the
+    // run-up's too (three times the change) when the jump's own section is too short to get to it (under 15 m: the
+    // speed at the lip is the one the bike came in at).
+    landCandidates(k, n) {
+      const S = this.secs, out = [];
+      const faster = (p, q, dv) => { const u = p.vs && p.vs[q]; if (u) { u[u.length - 1] = clampV(u[u.length - 1] + dv); p.v[q] = u[u.length - 1]; } else p.v[q] = clampV(p.v[q] + dv); };
+      if (this.gen % 2 === 0) {
+        const short = k > 0 && S[k].b - S[k].a < 15;
+        for (const dv of [-1.2, -0.6, 0, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
+          const p = clonePlan(this.plan);
+          faster(p, k, dv);
+          if (short) faster(p, k - 1, dv * 3);
+          p.pt[k] += da;
+          out.push(p);
+        }
+      }
+      for (let i = out.length; i < n; i++) {
         const p = clonePlan(this.plan);
         if (Math.random() < 0.8) p.pt[k] += gauss() * 0.12;
         if (Math.random() < 0.5) moveSpeed(p, S[k], k, 0.8, false);
@@ -1450,10 +1777,20 @@ onmessage=async e=>{const m=e.data;
     // Trick tries on jump section j: a move (mostly one the trick book says fits this much air), how high to let go of
     // it, and the landing angle.
     trickCandidates(j, n) {
-      const out = [], air = this.airOf(j);
+      const out = [], air = this.airOf(j), only = this.route.drill && DRILL_MOVES[this.route.drill.kind];
       for (let i = 0; i < n; i++) {
         const p = clonePlan(this.plan);
-        if (i < n * 0.75 || !p.mv[j]) p.mv[j] = air && Math.random() < 0.75 ? bookMove(this.book, air) : Math.floor(Math.random() * N_MOVES);
+        // a trick drill tries only its own tricks (the Trick line keeps the one a jump has, mostly)
+        if (only) {
+          // on the Trick line, mostly a trick that no other jump of the plan does
+          const kind = m => (m === FLIP ? 1 : m === SPIN_L || m === SPIN_R ? 2 : m === WHIP_L || m === WHIP_R ? 4 : 0);
+          let used = 0;
+          this.secs.forEach((s, k) => { if (k !== j && s.jump) used |= kind(p.mv[k]); });
+          const fresh = only.filter(m => !(used & kind(m))), from = fresh.length && Math.random() < 0.75 ? fresh : only;
+          if (!only.includes(p.mv[j]) || (used & kind(p.mv[j])) || Math.random() < 0.3) p.mv[j] = from[Math.floor(Math.random() * from.length)];
+        }
+        else if (i < n * 0.75 || !p.mv[j]) p.mv[j] = air && Math.random() < 0.75 ? bookMove(this.book, air) : Math.floor(Math.random() * N_MOVES);
+        if (p.mv[j] === FLIP && Math.random() < 0.5) p.pl[j] = 1 + Math.floor(Math.random() * 5);
         p.hr[j] = +(0.3 + Math.random() * 2.5).toFixed(2);
         if (Math.random() < 0.5) p.pt[j] += gauss() * 0.12;
         if (Math.random() < 0.3) {
@@ -1482,9 +1819,19 @@ onmessage=async e=>{const m=e.data;
         // round then goes to riding on from such a try (this.fix), as long as it keeps getting further, for up to 40 rounds
         if (this.fix && (!finished || this.fix.n >= 40)) this.fix = null;
         const fixing = !!this.fix && this.gen % 2 === 1;
-        const target = finished && passedJumps.length && !fixing ? this.pointsTarget(passedJumps) : null;
+        // a Training drill works on its goal (one round in four while it is not yet ridden to the end: the odd rounds
+        // between go to other ways of riding up to where it falls, below)
+        const D = this.route.drill;
+        // a line ridden to the end also works on its pumping, one round in five (faster for the same points)
+        const target = fixing ? null : D ? (finished || this.gen % 4 === 1 ? this.drillTarget(passedJumps, finished) : null)
+          : finished && this.gen % 5 === 2 ? { pump: true } : finished && passedJumps.length ? this.pointsTarget(passedJumps) : null;
         let cands, until, mode;
-        if (fixing) {
+        if (target && (target.manual || target.pump)) {
+          cands = target.pump ? this.pumpCandidates(LAMBDA) : this.manualCandidates(LAMBDA);
+          this.borrowed = new Set();
+          until = undefined;
+          mode = target.pump ? 'pump' : 'manual';
+        } else if (fixing) {
           const F = this.fix;
           cands = this.rideCandidates(Math.min(S.length - 1, F.best.crashSec), LAMBDA, 1.5, F.plan);
           this.borrowed = new Set();
@@ -1514,7 +1861,8 @@ onmessage=async e=>{const m=e.data;
           mode = 'ride';
         }
         const other = mode === 'other';
-        if (mode === 'fix') cands.unshift(clonePlan(this.fix.plan));
+        if (mode === 'manual' || mode === 'pump') cands.unshift(clonePlan(this.plan));
+        else if (mode === 'fix') cands.unshift(clonePlan(this.fix.plan));
         else if (!other) cands.unshift(clonePlan(this.plan));
         else if (this.alt) cands.unshift(clonePlan(this.alt.plan));
         const res = await this.pool.evalAll(cands, until);
@@ -2000,11 +2348,17 @@ onmessage=async e=>{const m=e.data;
           });
         }
         const up = what.length ? ` · ${what.slice(0, 4).join(', ')}` : '';
-        log(`Vòng ${gen}: kỷ lục mới ${run.prog} m (${pts}${prev && typeof prev.game === 'number' && run.end === 'về đích' && prev.end === 'về đích' ? `, trước ${prev.game}` : ''}, ${n} cú nhảy, ${run.end})${up}${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
+        // how fast, and what pumping gave (a good pump: in a dip, timed as the game's Training wants)
+        const kmh = v => (v * 3.6).toFixed(1);
+        const pace = typeof run.vAvg === 'number' ? ` · trung bình ${kmh(run.vAvg)} km/h${run.goodPumps ? `, ${run.goodPumps} cú pump đúng nhịp (+${kmh(run.pumpGain)} km/h)` : ''}` : '';
+        // a Training drill: how much of its goal the ride gets
+        const goal = run.goal ? ` · mục tiêu bài tập ${run.goal.n}/${run.goal.need}${goalMet(run) ? ' ✓' : ''}` : '';
+        if (goalMet(run) && !goalMet(prev)) log(`<b>Vòng ${gen}: AI đạt mục tiêu của bài tập trong mô phỏng.</b> Mở bài này trong Training rồi bấm “AI lái” để AI làm bài thật.`);
+        log(`Vòng ${gen}: kỷ lục mới ${run.prog} m (${pts}${prev && typeof prev.game === 'number' && run.end === 'về đích' && prev.end === 'về đích' ? `, trước ${prev.game}` : ''}, ${n} cú nhảy, ${run.end})${pace}${goal}${up}${borrowed ? ' · <b>nhờ kinh nghiệm từ đường khác</b>' : ''}`);
       },
       progress(p) {
         $('.k-gen').textContent = p.gen;
-        $('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : p.mode === 'land' ? 'tiếp đất đẹp hơn, giữ chuỗi nhân' : p.mode === 'fix' ? 'chạy tiếp sau cú tiếp đất đẹp hơn' : 'vượt hết đường';
+        $('.k-mode').textContent = p.mode === 'trick' ? 'trick trên các cú nhảy' : p.mode === 'land' ? 'tiếp đất đẹp hơn, giữ chuỗi nhân' : p.mode === 'fix' ? 'chạy tiếp sau cú tiếp đất đẹp hơn' : p.mode === 'manual' ? 'manual (bánh sau)' : p.mode === 'pump' ? 'pump qua các chỗ trũng (lấy tốc độ)' : 'vượt hết đường';
         showBest(p.best);
         $('.k-speed').textContent = `${(p.ms / 1000).toFixed(1)} s / vòng (${p.tries} lần thử, ${workers} luồng)`;
         showBorrow();
@@ -2051,7 +2405,7 @@ onmessage=async e=>{const m=e.data;
       $('.k-jumps').innerHTML = jumpReview(b);
       $('.k-book').innerHTML = bookText();
       $('.k-prog').textContent = `${b.prog} / ${trainer.N} m`;
-      $('.k-end').textContent = `${b.end}, ${b.jumps} cú nhảy`;
+      $('.k-end').textContent = `${b.end}, ${b.jumps} cú nhảy${b.goal ? ` · mục tiêu bài tập ${b.goal.n}/${b.goal.need}${goalMet(b) ? ' ✓' : ''}` : ''}`;
       $('.k-tricks').innerHTML = fmtTricks(b.tricks);
       $('.watch').disabled = $('.export').disabled = $('.share').disabled = false;
       showLine();
@@ -2105,15 +2459,26 @@ onmessage=async e=>{const m=e.data;
       const me = await whereAmI();
       if (!me) { say('Chưa biết bạn đang ở đâu. Hãy đạp xe một chút rồi thử lại.'); return; }
       const near = cap.starts.map(s => ({ s, d: Math.hypot(s.x - me.x, s.z - me.z) })).filter(o => o.d < 600).sort((a, b) => a.d - b.d).slice(0, 15);
-      choices = near;
+      // the Training drill open in the game comes first
+      const drills = await drillsNow();
+      choices = drills.map(r => ({ s: r.start, d: 0, drill: r })).concat(near);
       listLines();
-      $('.learn').disabled = $('.drive').disabled = !near.length;
+      $('.learn').disabled = $('.drive').disabled = !choices.length;
       showLine();
-      say(near.length ? `Tìm thấy ${near.length} điểm xuất phát gần ${me.how}. Chọn đường (gần nhất ở trên cùng) rồi bấm “Học lái” hoặc “AI lái”.` : 'Không có đường nào trong vòng 600 m. Hãy đến gần một đường rồi bấm ↻.');
+      if (drills.length) say(`Bạn đang mở bài tập “${drills.map(r => DRILL_GOALS[r.drill.goal].name).join(' / ')}” trong Training: nó ở đầu danh sách. Bấm “Học lái” để AI tập bài này trong mô phỏng, rồi “AI lái” để AI làm bài thật.`);
+      else say(near.length ? `Tìm thấy ${near.length} điểm xuất phát gần ${me.how}. Chọn đường (gần nhất ở trên cùng) rồi bấm “Học lái” hoặc “AI lái”.` : 'Không có đường nào trong vòng 600 m. Hãy đến gần một đường rồi bấm ↻.');
     }
+    // opening a drill in the game's Training (or leaving it) brings the list up to date, while the AI is not busy
+    let spawnSeen = live.spawn;
+    setInterval(async () => {
+      if (live.spawn === spawnSeen || busy || learning || live.drive || looping || starting) return;
+      spawnSeen = live.spawn;
+      const ds = await drillsNow();
+      if (ds.length ? !choices.some(o => o.drill && o.s.id === ds[0].start.id) : choices.some(o => o.drill)) findTracks();
+    }, 1500);
     function listLines() {
       const sel = $('.pick'), at = sel.value;
-      sel.innerHTML = choices.length ? choices.map((o, i) => `<option value="${i}">${i + 1}. ${esc(lineName(o.s.id))} · cách ${Math.round(o.d)} m${hasMemory(o.s.id) ? ' · đã học' : ''}</option>`).join('')
+      sel.innerHTML = choices.length ? choices.map((o, i) => `<option value="${i}">${i + 1}. ${esc(lineName(o.s.id))} · ${o.drill ? 'bài tập đang mở' : `cách ${Math.round(o.d)} m`}${hasMemory(o.s.id) ? ' · đã học' : ''}</option>`).join('')
         : '<option>Không thấy điểm xuất phát nào gần đây</option>';
       if (at && choices[+at]) sel.value = at;
     }
@@ -2154,7 +2519,8 @@ onmessage=async e=>{const m=e.data;
           say('Đang dò đường đi từ điểm xuất phát…');
           // the line comes from this browser's memory, else from the community repo, else from the pieces the game has loaded
           const shared = await communityLesson(o.s.id);
-          let route = routeCache.get(o.s.id) || savedLine(o.s.id);
+          // a Training drill is read from the game as it is now
+          let route = o.drill || routeCache.get(o.s.id) || savedLine(o.s.id);
           if (route && lineStale(route)) { log('Đường này đã được sửa trong game từ lần học trước, AI dò lại đường.'); route = null; }
           if (!route && shared && !lineStale(shared.line)) { route = shared.line; log('Lấy bản đồ đường này từ bài học cộng đồng trên GitHub.'); }
           if (!route) route = await buildRoute(o.s);
@@ -2193,7 +2559,8 @@ onmessage=async e=>{const m=e.data;
             if (mem.from === 'brain') log(`<b>Bắt đầu từ cách lái của bộ não chung:</b> bộ não đi được ${b.prog} m trên đường này. Chép cách lái đó thành bài học thì được ngay <b>${at(b.run)}</b> (học từ con số 0: ${at(mem.fresh)}${mem.seed ? `; mượn cú nhảy: ${at(mem.seed)}` : ''}).`);
             else log(`Bộ não chung đi được ${b.prog} m trên đường này. Chép cách lái đó thành bài học thì được ${at(b.run)}, chưa hơn cách bắt đầu đang có (${at(trainer.best)}), nên không dùng.`);
           }
-          if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, lần học sau AI sẽ tự tập trick.');
+          if (route.drill) log(`<b>Bài tập Training “${DRILL_GOALS[route.drill.goal].name}”:</b> AI tập trong mô phỏng cho tới khi đạt mục tiêu của bài${route.drill.pedals ? '' : ' (không được đạp, như trong game)'}.`);
+          else if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, lần học sau AI sẽ tự tập trick.');
           }
           if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }
           $('.k-gen').textContent = trainer.gen;
@@ -2512,9 +2879,10 @@ onmessage=async e=>{const m=e.data;
       aiDrive();
     }
     const cant = msg => { say(msg); looping = false; driveLabel(false); };
-    // still lying where the last run crashed: press the game's own "Ride again" (R) so its bail screen resets too
-    async function getUp() {
-      if (!(liveState()[13] > 0)) return;
+    // still lying where the last run crashed: press the game's own "Ride again" (R) so its bail screen resets too. In
+    // a Training drill always (restart): the game then starts the drill over, and judges the ride from its start.
+    async function getUp(always) {
+      if (!always && !(liveState()[13] > 0)) return;
       starting = true;
       for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: 'r', code: 'KeyR', bubbles: true }));
       await new Promise(r => setTimeout(r, 500));
@@ -2524,7 +2892,7 @@ onmessage=async e=>{const m=e.data;
     // way, see takeNewer), or else plan P saved for the line, on the line's own small simulation ctx.
     function driveLesson(ctx, P, expect) {
       const now = !P, geo = now ? trainer.geo : ctx.geo, secs = now ? trainer.secs : ctx.secs;
-      const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length };
+      const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length, PZ: geo.PZ };
       // the rider reads this plan on every step
       const plan = clonePlan(now ? trainer.plan : P);
       const rider = makeRider(R, geo.H, secs, plan);
@@ -2549,7 +2917,7 @@ onmessage=async e=>{const m=e.data;
       if (rideCtx && rideCtx.id === o.s.id && JSON.stringify(rideCtx.setup) === JSON.stringify(riderSetup())) return rideCtx;
       // a lesson learned on the line alone (before tours) drives that line as learned, and the brain rides on after it
       const L = savedLine(o.s.id), alone = L && L.tour === undefined && !L.practice && !lineStale(L) ? L : null;
-      const route = trainer.route && trainer.route.start.id === o.s.id ? trainer.route : alone || await lineFor(o.s, true);
+      const route = trainer.route && trainer.route.start.id === o.s.id ? trainer.route : o.drill || alone || await lineFor(o.s, true);
       if (!route) return null;
       if (rideCtx) rideCtx.pool.close();
       const pool = new Pool(1), setup = riderSetup();
@@ -2560,8 +2928,17 @@ onmessage=async e=>{const m=e.data;
     async function aiDrive() {
       if (starting) return;
       if (!live.ex || !live.g) return cant('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.');
-      const o = choices[+$('.pick').value];
+      let o = choices[+$('.pick').value];
       if (!o) return cant('Hãy chọn một đường trong danh sách trước đã.');
+      // Boost & racer asks for one way, then the other, and each restart moves it on: start the drill over first,
+      // then ride the lesson for the way the game shows it asks for now ("now: racer")
+      const styles = o.drill && (o.drill.drill.kind === 'boost' || o.drill.drill.kind === 'racer');
+      if (styles) {
+        await getUp(true);
+        const ask = ((document.body.innerText || '').match(/now:\s*(boost|racer)/i) || [])[1];
+        const i = ask ? choices.findIndex(c => c.drill && c.drill.drill.kind === ask.toLowerCase()) : -1;
+        if (i >= 0 && choices[i] !== o) { o = choices[i]; $('.pick').value = String(i); log(`Game đang hỏi kiểu <b>${ask}</b>: AI lái bài học “${esc(lineName(o.s.id))}”.`); }
+      }
       starting = true;
       let go = null;
       try {
@@ -2580,7 +2957,8 @@ onmessage=async e=>{const m=e.data;
           if (m && planFits(m.plan, ctx.secs) && JSON.stringify(m.setup) === setup) { P = m.plan; [ls] = await ctx.pool.evalAll([P]); }
         }
         const better = (a, b) => a.prog > b.prog || (a.prog === b.prog && a.fit >= b.fit);
-        const lesson = ls && better(ls, bs);
+        // on a Training drill the lesson always rides: the brain knows nothing of what the drill asks for
+        const lesson = ls && (!!ls.goal || better(ls, bs));
         log(ls ? `AI lái bằng <b>${lesson ? 'bài học của đường này' : 'bộ não chung'}</b>: trong mô phỏng bài học đi được ${ls.prog} m, bộ não ${bs.prog} m.`
           : `Đường này chưa có bài học, nên <b>bộ não chung</b> lái (trong mô phỏng đi được ${bs.prog} m). Bấm “Học lái” để AI học đường này.`);
         go = lesson ? () => driveLesson(ctx, P, ls.prog) : () => {
@@ -2591,7 +2969,8 @@ onmessage=async e=>{const m=e.data;
         cant('Lỗi: ' + (err && err.message || err)); console.error(err);
       } finally { starting = false; }
       if (!go || !looping) return;
-      await getUp();
+      if (o.drill && !(await drillsNow()).some(r => r.start.id === o.s.id)) return cant(`Hãy mở bài “${DRILL_GOALS[o.drill.drill.goal].name}” trong Training (bấm Ride) rồi bấm “AI lái”.`);
+      if (!styles) await getUp(!!o.drill);
       go();
     }
     // Past the end of the line (and of its tour, see extendRoute) the AI rides on into the next line ahead instead of
@@ -2610,15 +2989,19 @@ onmessage=async e=>{const m=e.data;
       d.runIn = Math.max(0, R.length - d.route.length);
       // metres ridden = d.base + the index on the line ridden now (lines ridden on into add up)
       d.base = -d.runIn; d.legs = 0;
-      live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
-      live.ex.trails_game_reset(live.g);
+      // a Training drill has been started over by the game itself (getUp), from its start and at its speed
+      const drill = d.route.drill;
+      if (!drill) {
+        live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
+        live.ex.trails_game_reset(live.g);
+      }
       let t = 0, seq = null, rider = d.rider, next = null;
       // the ground ridden in this run, so a line ahead that goes back over it is not taken
       const { mark, seen } = ground(), pools = [], w = brain.best.slice();
       // find the line after the one ridden now while riding it
       const lookAhead = () => {
         const h = next = { leg: null };
-        if (d.legs >= ONWARD_LEGS) return;
+        if (d.legs >= ONWARD_LEGS || d.route.practice) return;
         onwardLeg(R, seen).then(l => { if (!l) return; if (d.over) l.pool.close(); else h.leg = l; }).catch(err => console.error(err));
       };
       d.cleanup = () => { d.over = true; pools.forEach(p => p.close()); if (next && next.leg) next.leg.pool.close(); };
@@ -2639,7 +3022,9 @@ onmessage=async e=>{const m=e.data;
           }
         }
         if (d.takeNewer && t % 30 === 0) d.takeNewer();
-        const inp = rider.step(s, t++);
+        const inp = rider.step(s, t++).slice();
+        // the drills without pedals: the game takes the player's pedals away, the AI keeps off them itself
+        if (drill && !drill.pedals) inp[0] = 0;
         if (rider.idx >= R.length - 3) {
           const leg = next && next.leg;
           if (!leg) { setTimeout(() => stopDrive('về đích'), 0); return null; }
