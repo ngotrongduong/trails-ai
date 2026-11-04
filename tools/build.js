@@ -114,7 +114,8 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <ol>
 <li>Xe của bạn được đưa về điểm xuất phát và AI tự đạp, lái, nhảy qua từng cú nhảy. Phía trên màn hình hiện “AI đang lái · số mét đã đi”.</li>
 <li><b>Vừa lái vừa học:</b> nếu đang bật Học lái trên đường này, tìm ra cách tốt hơn cho những đoạn phía trước xe là AI dùng ngay trong lượt đang chạy (trên huy hiệu hiện “học thêm N lần”).</li>
-<li>Ngã hoặc về đích xong, AI tự lái lại từ đầu sau 3 giây với bài học mới nhất, cứ thế liên tục.</li>
+<li><b>Đi tiếp sang đường khác:</b> tới cuối đường, nếu có một đường khác bắt đầu trong vòng 35 m phía trước và đi cùng hướng, AI lái tiếp sang đường đó bằng bộ não chung (huy hiệu hiện “đường thứ N”). Không có đường nào gần như vậy thì AI dừng ở đó, nên nó không bao giờ lái ra chỗ không có đường. Đường đã đi trong lượt này thì không đi lại.</li>
+<li>Ngã hoặc hết đường để đi, AI tự lái lại từ đầu sau 3 giây với bài học mới nhất, cứ thế liên tục.</li>
 <li>Mỗi lượt lái thật, AI so chỗ ngã thật với dự đoán của mô phỏng và kiểm tra bản đồ trong mô phỏng với những gì game vừa tải dọc đường. Nếu đường đã bị sửa, AI báo để bạn cho nó dò lại đường.</li>
 <li>Muốn lấy lại tay lái: bấm <b>phím bất kỳ</b> hoặc bấm <b>Dừng AI lái</b>.</li>
 </ol>

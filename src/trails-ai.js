@@ -2119,10 +2119,12 @@ onmessage=async e=>{const m=e.data;
       const d = live.drive;
       live.drive = null;
       if (badge) { badge.remove(); badge = null; }
-      const m = Math.max(0, d.rider.idx - d.runIn), e = Math.max(0, d.expect - d.runIn);
-      const extra = (d.tricks ? `, ${d.tricks} trick` : '') + (d.swaps ? `, dùng ${d.swaps} cách mới học được giữa chừng` : '');
+      if (d.cleanup) d.cleanup();
+      const m = Math.max(0, d.base + d.rider.idx), e = Math.max(0, d.expect - d.runIn);
+      const extra = (d.legs ? `, đi tiếp sang ${d.legs} đường khác` : '') + (d.tricks ? `, ${d.tricks} trick` : '') + (d.swaps ? `, dùng ${d.swaps} cách mới học được giữa chừng` : '');
       log(`<b>${d.who} lái thật:</b> ${why} sau ${m} m${extra}.`);
-      if (!byPlayer) {
+      // the simulation only knew the first line
+      if (!byPlayer && !d.legs) {
         // what a real ride teaches: whether the simulation still matches the game (the game has now loaded the whole way ridden)
         if (lineStale(d.route)) log('<b>Bản đồ trong mô phỏng không còn khớp với game</b> (đường đã được sửa). Bấm “Quên đường này, học lại từ đầu” để AI dò lại đường.');
         else if (Math.abs(m - e) > 15) log(`Lượt thật lệch so với mô phỏng (dự đoán ${e} m), dù bản đồ vẫn khớp.`);
@@ -2219,15 +2221,73 @@ onmessage=async e=>{const m=e.data;
       await getUp();
       go();
     }
+    // At the end of the line the AI rides on into the next line ahead instead of stopping, when one starts at most
+    // ONWARD_GAP metres in front of the bike, going roughly the same way; the ground between is ridden as a straight
+    // run-in. With no line that near, the ride ends there as before: the bike never heads off where there is no track.
+    // Lines already ridden in this run are not taken again. The shared brain rides them (lessons are for one line).
+    const ONWARD_GAP = 35, ONWARD_LEGS = 30;
+    async function onwardLeg(R, seen) {
+      const N = R.length, ex = R.X[N - 1], ez = R.Z[N - 1], k = Math.max(0, N - 6);
+      const eh = Math.atan2(ez - R.Z[k], ex - R.X[k]);
+      const e = await engine(), cands = [];
+      for (const p of [...cap.chunks.values()].flat()) {
+        if (!PHYS_KINDS.includes(p.kind) || e.kidx[p.kind] === undefined || Math.hypot(p.x - ex, p.z - ez) > ONWARD_GAP + 30) continue;
+        let lay;
+        try { lay = e.layout(p); } catch { continue; }
+        if (!lay || !lay.path || lay.path.length < 2) continue;
+        // the first point of the piece ahead of the bike that goes the right way (a piece may start under the line's end)
+        let c = null;
+        for (let i = 1; i < lay.path.length; i++) {
+          const x = lay.path[i][1], z = lay.path[i][2], h = Math.atan2(z - lay.path[i - 1][2], x - lay.path[i - 1][1]);
+          const dx = x - ex, dz = z - ez, f = dx * Math.cos(eh) + dz * Math.sin(eh), lat = -dx * Math.sin(eh) + dz * Math.cos(eh), dh = Math.abs(wrapA(h - eh));
+          if (f < 1 || f > ONWARD_GAP || Math.abs(lat) > 3 + 0.4 * f || dh > 0.8) continue;
+          const sc = f + 2 * Math.abs(lat) + 8 * dh;
+          if (!c || sc < c.sc) c = { x, z, h, sc };
+        }
+        if (c) cands.push(c);
+      }
+      cands.sort((a, b) => a.sc - b.sc);
+      let best = null;
+      for (const c of cands.slice(0, 4)) {
+        const r = await buildRoute({ id: 'onward', x: c.x, z: c.z, heading: c.h });
+        if (!r || r.length < 25) continue;
+        let old = 0, n = 0;
+        for (let i = 0; i < r.length; i += 4, n++) if (seen(r.X[i], r.Z[i])) old++;
+        if (old > n * 0.3) continue;
+        if (!best || r.length > best.length) best = r;
+      }
+      if (!best) return null;
+      // start where the last line ended: the simulation lays the ground in between as the run-in
+      best.start = { id: 'onward', x: ex, z: ez, heading: eh };
+      const pool = new Pool(1), meta = await pool.init(best, riderSetup());
+      return { route: best, pool, geo: meta.geo };
+    }
     // Hands the bike to rider d.rider on line R: back to the start, then its controls replace yours on every step.
     function ride(d, R) {
       const st = d.route.start;
       // the training line starts with a straight run-in from the spawn; distances shown are along the real line
       d.runIn = Math.max(0, R.length - d.route.length);
+      // metres ridden = d.base + the index on the line ridden now (lines ridden on into add up)
+      d.base = -d.runIn; d.legs = 0;
       live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
       live.ex.trails_game_reset(live.g);
-      let t = 0, seq = null;
-      const rider = d.rider;
+      let t = 0, seq = null, rider = d.rider, next = null;
+      // the ground ridden in this run, in 3 m cells, so a line ahead that goes back over it is not taken
+      const cells = new Set(), pools = [], w = brain.best.slice();
+      const mark = L => { for (let i = 0; i < L.length; i += 2) cells.add(Math.round(L.X[i] / 3) + ',' + Math.round(L.Z[i] / 3)); };
+      const seen = (x, z) => {
+        const a = Math.round(x / 3), b = Math.round(z / 3);
+        for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) if (cells.has((a + i) + ',' + (b + j))) return true;
+        return false;
+      };
+      // find the line after the one ridden now while riding it
+      const lookAhead = () => {
+        const h = next = { leg: null };
+        if (d.legs >= ONWARD_LEGS) return;
+        onwardLeg(R, seen).then(l => { if (!l) return; if (d.over) l.pool.close(); else h.leg = l; }).catch(err => console.error(err));
+      };
+      d.cleanup = () => { d.over = true; pools.forEach(p => p.close()); if (next && next.leg) next.leg.pool.close(); };
+      mark(R); lookAhead();
       d.step = () => {
         const s = liveState();
         if (seq === null) seq = s[16];
@@ -2235,9 +2295,20 @@ onmessage=async e=>{const m=e.data;
         if (s[16] !== seq) { seq = s[16]; if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++; }
         if (d.takeNewer && t % 30 === 0) d.takeNewer();
         const inp = rider.step(s, t++);
-        if (rider.idx >= R.length - 3) { setTimeout(() => stopDrive('về đích'), 0); return null; }
+        if (rider.idx >= R.length - 3) {
+          const leg = next && next.leg;
+          if (!leg) { setTimeout(() => stopDrive('về đích'), 0); return null; }
+          // ride on: the brain takes the next line from the point of it nearest the bike
+          const g = leg.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length }, r2 = makeBrainRider(R2, g.H, w);
+          let bi = 0, bd = Infinity;
+          for (let i = 0; i < Math.min(R2.length, 60); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
+          r2.idx = bi;
+          d.base += rider.idx - bi; d.legs++; d.takeNewer = null; d.who = 'Bộ não';
+          pools.push(leg.pool); R = R2; rider = d.rider = r2;
+          mark(R); lookAhead();
+        }
         if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive('lạc khỏi đường'), 0); return null; }
-        if (badge && t % 15 === 0) badge.firstChild.textContent = `${d.who} đang lái · ${Math.max(0, rider.idx - d.runIn)} m${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
+        if (badge && t % 15 === 0) badge.firstChild.textContent = `${d.who} đang lái · ${Math.max(0, d.base + rider.idx)} m${d.legs ? ` · đường thứ ${d.legs + 1}` : ''}${d.swaps ? ` · học thêm ${d.swaps} lần` : ''}`;
         return inp;
       };
       live.drive = d;
