@@ -513,9 +513,12 @@
   // (tanh), then 4 outputs (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
   const BRAIN = { inp: 22, hid: 16, out: 4 };
   BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
-  // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.8 rad off the landing slope.
-  // (The first brains could only ask for 3 to 13 m/s and 0.4 rad, and a fifth of the jumps learned on lines need more.)
-  const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
+  // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.4 rad off the slope where the
+  // bike will touch down. (The first brains could only ask for 3 to 13 m/s, and a fifth of the jumps learned on lines
+  // need more. Air was 0.8 rad off the landing's own slope, which was often not where the bike came down: brains
+  // learned to throw the bike nose down at every jump. Aimed at the touchdown, 0.4 rides best, already for brains
+  // learned with 0.8: 58 % to 61 % of 62 lines for the same weights.)
+  const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.4;
   function makeBrainRider(R, H, w) {
     const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
     let nextTake = R.nextTake, nextLand = R.nextLand;
