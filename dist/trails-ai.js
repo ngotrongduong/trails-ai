@@ -414,18 +414,28 @@ return me.inp;
 };
 return me;
 }
-const BRAIN = { inp: 22, hid: 16, out: 4 };
+const BRAIN = { inp: 32, hid: 16, out: 4 };
 BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
 const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
 function makeBrainRider(R, H, w) {
-const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
+const N = R.length, NI = 32, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
 let nextTake = R.nextTake, nextLand = R.nextLand;
 if (!nextTake) {
 nextTake = new Int32Array(N).fill(-1); nextLand = new Int32Array(N).fill(-1);
 let a = -1, b = -1;
 for (let i = N - 1; i >= 0; i--) { if (R.KIND[i] === 'takeoff') a = i; if (R.KIND[i] === 'landing') b = i; nextTake[i] = a; nextLand[i] = b; }
 }
-const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, inp: [0, 0, 0, 0, 0, 0, 0] };
+const nextLip = new Int32Array(N).fill(-1), shapes = {};
+for (let i = N - 1, c = -1; i >= 0; i--) { if (R.KIND[i] === 'takeoff' && (i + 1 >= N || R.KIND[i + 1] !== 'takeoff')) c = i; nextLip[i] = c; }
+const at = k => H[clamp(k, 0, N - 1)];
+const shape = i => {
+if (shapes[i]) return shapes[i];
+let lo = H[i];
+for (let k = Math.max(0, i - 15); k < i; k++) lo = Math.min(lo, H[k]);
+const f = [Math.atan2(at(i) - at(i - 3), 3) / 0.6, (H[i] - lo) / 2].concat([3, 6, 9, 12, 16].map(d => (at(i + d) - H[i]) / 3), [(at(i - 5) - at(i - 25)) / 20 / 0.1]);
+return (shapes[i] = f.map(v => clamp(v, -3, 3)));
+};
+const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, lip: -1, inp: [0, 0, 0, 0, 0, 0, 0] };
 const x = new Float64Array(NI), h = new Float64Array(NH), o = new Float64Array(NO), W2 = NI * NH, B2 = W2 + NH * NO;
 const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
 const landSlope = i => { const nl = nextLand[i]; const j = nl >= 0 && nl - i < 45 ? nl : Math.min(N - 5, i + 12); return clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2); };
@@ -450,6 +460,10 @@ for (let k = 0; k < 10; k++) x[6 + k] = clamp((H[look(AHEAD[k])] - gy) / 3, -3, 
 x[16] = nt < 0 ? 1 : Math.min(1, (nt - idx) / 30);
 x[17] = air ? me.landPt : nt >= 0 ? landSlope(nt) : 0;
 x[18] = R.KIND[idx] === 'takeoff' ? 1 : 0; x[19] = R.KIND[idx] === 'landing' ? 1 : 0; x[20] = R.KIND[idx] === 'pump' ? 1 : 0; x[21] = 1;
+if (!air) { const nl = nextLip[idx]; me.lip = nl >= 0 && nl - idx <= 60 ? nl : -1; }
+const L = me.lip;
+x[22] = L >= 0 ? 1 : 0; x[23] = L >= 0 ? clamp((L - idx) / 30, -1, 2) : 2;
+for (let k = 0; k < 8; k++) x[24 + k] = L >= 0 ? shape(L)[k] : 0;
 if (!w) { me.prevP = s[4]; me.seen = true; return me.inp; }
 me.seen = false;
 for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
@@ -469,7 +483,7 @@ me.x = x; me.o = o;
 return me;
 }
 async function fitBrain(w, rows, epochs = 40) {
-const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = 28, n = rows.length / RW | 0;
+const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = NI + 6, n = rows.length / RW | 0;
 const at = v => Math.atanh(clamp(v, -0.95, 0.95));
 const T = new Float64Array(n * NO), M = new Float64Array(n * NO);
 let pulls = 0;
@@ -647,7 +661,7 @@ if(rider.off>7&&!(s[12]>0))break;
 l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
 if(s[13]>0){fell=true;break}
 }
-if(fell&&!me)rows.length=Math.max(0,rows.length-30*28);
+if(fell&&!me)rows.length=Math.max(0,rows.length-30*(eye.x.length+6));
 return {rows,prog};
 }
 function brainPlan(w){
@@ -1081,8 +1095,7 @@ this.running = false;
 }
 async bestRide() { return this.pool ? this.pool.replay(this.plan) : null; }
 }
-const BRAIN_KEY = 'trailsai.brain2';
-const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 2;
+const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 3, BRAIN_KEY = 'trailsai.brain' + BRAIN_VERSION;
 const BRAIN_URL = `https://raw.githubusercontent.com/${REPO}/main/brain/brain.json`;
 const BRAIN_CAP = 400;   // metres of each line a brain is scored on (a long line would hold every round up)
 const weightsOk = w => Array.isArray(w) && w.length === BRAIN.size && w.every(num);
@@ -1183,7 +1196,7 @@ return out;
 const info = { lines: teach.length, rows: 0, took: false, steps: [], plans: seen.map((r, k) => [plans[k].line, r.prog, mine(plans[k].line)]) };
 this.lastDistill = info;
 let rows = join();
-if (rows.length < 28 * 200) return info;
+if (rows.length < (BRAIN.inp + 6) * 200) return info;
 let w = await fitBrain(freshBrain(), rows, 60), bestW = null, bestR = null;
 for (let k = 0; ; k++) {
 const [r] = await this.rate([w], this.trainIdx);
@@ -1194,7 +1207,7 @@ for (const m of await this.pool.watchPlans(teach, BRAIN_CAP, w)) sets.push(m.row
 rows = join();
 w = await fitBrain(w, rows, 30);
 }
-Object.assign(info, { rows: rows.length / 28 | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
+Object.assign(info, { rows: rows.length / (BRAIN.inp + 6) | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
 return info;
 }
 nextLines(BATCH) {

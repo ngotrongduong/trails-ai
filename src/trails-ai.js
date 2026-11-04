@@ -509,22 +509,36 @@
   // The brain: a small neural network that rides any line from what it sees, instead of a plan learned for one line.
   // Every other step it looks at the bike (speed, pitch and how fast it turns, in the air or not, rising or falling,
   // height above the ground) and the ground 2 to 33 m ahead, and sets the speed to hold, whether to pull up, how hard
-  // to pump and the angle to hold in the air. Steering stays the fixed controller's. Weights w: 22 inputs to 16 hidden
-  // (tanh), then 4 outputs (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
-  const BRAIN = { inp: 22, hid: 16, out: 4 };
+  // to pump and the angle to hold in the air. It also sees the shape of the next jump as the jump library measures it
+  // (lip angle and height, the ground 3 to 16 m past the lip, the run-up) and how far its lip is; in the air, the jump
+  // it is flying. Steering stays the fixed controller's. Weights w: 32 inputs to 16 hidden (tanh), then 4 outputs
+  // (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
+  const BRAIN = { inp: 32, hid: 16, out: 4 };
   BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
   // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.8 rad off the landing slope.
   // (The first brains could only ask for 3 to 13 m/s and 0.4 rad, and a fifth of the jumps learned on lines need more.)
   const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
   function makeBrainRider(R, H, w) {
-    const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
+    const N = R.length, NI = 32, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
     let nextTake = R.nextTake, nextLand = R.nextLand;
     if (!nextTake) {
       nextTake = new Int32Array(N).fill(-1); nextLand = new Int32Array(N).fill(-1);
       let a = -1, b = -1;
       for (let i = N - 1; i >= 0; i--) { if (R.KIND[i] === 'takeoff') a = i; if (R.KIND[i] === 'landing') b = i; nextTake[i] = a; nextLand[i] = b; }
     }
-    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, inp: [0, 0, 0, 0, 0, 0, 0] };
+    // the next lip (the last point of a takeoff) at or after each point, and the shape of the jump there, measured as
+    // sections() measures it for the jump library, each number divided by a size it usually has
+    const nextLip = new Int32Array(N).fill(-1), shapes = {};
+    for (let i = N - 1, c = -1; i >= 0; i--) { if (R.KIND[i] === 'takeoff' && (i + 1 >= N || R.KIND[i + 1] !== 'takeoff')) c = i; nextLip[i] = c; }
+    const at = k => H[clamp(k, 0, N - 1)];
+    const shape = i => {
+      if (shapes[i]) return shapes[i];
+      let lo = H[i];
+      for (let k = Math.max(0, i - 15); k < i; k++) lo = Math.min(lo, H[k]);
+      const f = [Math.atan2(at(i) - at(i - 3), 3) / 0.6, (H[i] - lo) / 2].concat([3, 6, 9, 12, 16].map(d => (at(i + d) - H[i]) / 3), [(at(i - 5) - at(i - 25)) / 20 / 0.1]);
+      return (shapes[i] = f.map(v => clamp(v, -3, 3)));
+    };
+    const me = { idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, prevY: null, vy: 0, landPt: 0, lip: -1, inp: [0, 0, 0, 0, 0, 0, 0] };
     const x = new Float64Array(NI), h = new Float64Array(NH), o = new Float64Array(NO), W2 = NI * NH, B2 = W2 + NH * NO;
     const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
     // the slope to land on for a jump whose lip is at i
@@ -551,6 +565,11 @@
         x[16] = nt < 0 ? 1 : Math.min(1, (nt - idx) / 30);
         x[17] = air ? me.landPt : nt >= 0 ? landSlope(nt) : 0;
         x[18] = R.KIND[idx] === 'takeoff' ? 1 : 0; x[19] = R.KIND[idx] === 'landing' ? 1 : 0; x[20] = R.KIND[idx] === 'pump' ? 1 : 0; x[21] = 1;
+        // the jump ahead (within 60 m), or in the air the one being flown
+        if (!air) { const nl = nextLip[idx]; me.lip = nl >= 0 && nl - idx <= 60 ? nl : -1; }
+        const L = me.lip;
+        x[22] = L >= 0 ? 1 : 0; x[23] = L >= 0 ? clamp((L - idx) / 30, -1, 2) : 2;
+        for (let k = 0; k < 8; k++) x[24 + k] = L >= 0 ? shape(L)[k] : 0;
         // without weights the brain only watches (while a lesson's plan rides, to learn from it)
         if (!w) { me.prevP = s[4]; me.seen = true; return me.inp; }
         me.seen = false;
@@ -570,11 +589,11 @@
     me.x = x; me.o = o;
     return me;
   }
-  // Teach brain w to do what the plans did (rows from watchPlan: 22 seen, 5 asked for, landing slope). Each output is
+  // Teach brain w to do what the plans did (rows from watchPlan: BRAIN.inp seen, 5 asked for, landing slope). Each output is
   // fitted before its tanh, only where it means something: speed, pull and pump on the ground, the air angle in the
   // air. Pull is rare, so its rows count more. Returns new weights; w is not changed.
   async function fitBrain(w, rows, epochs = 40) {
-    const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = 28, n = rows.length / RW | 0;
+    const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = NI + 6, n = rows.length / RW | 0;
     const at = v => Math.atanh(clamp(v, -0.95, 0.95));
     const T = new Float64Array(n * NO), M = new Float64Array(n * NO);
     let pulls = 0;
@@ -751,7 +770,7 @@ function episode(P,opt){
   if(rec)res.trace={tr,ev,H:Array.from(H,h=>+h.toFixed(2))};
   return res;
 }
-// A lesson's plan rides the line while a brain without weights watches. Every other step: what the brain sees (22),
+// A lesson's plan rides the line while a brain without weights watches. Every other step: what the brain sees (32),
 // what the plan asks for (speed, pull, pump, angle in the air, in the air) and the slope the brain would land on.
 // The last second before a fall is left out: that is no example to follow.
 // With brain w, the brain rides instead and the plan only says what it would do: so the brain also learns what to do
@@ -774,7 +793,7 @@ function watchPlan(P,until,w){
     l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
     if(s[13]>0){fell=true;break}
   }
-  if(fell&&!me)rows.length=Math.max(0,rows.length-30*28);
+  if(fell&&!me)rows.length=Math.max(0,rows.length-30*(eye.x.length+6));
   return {rows,prog};
 }
 // The brain w rides the line and its riding is written down as a plan, section by section: the speed it held (as it
@@ -1291,8 +1310,8 @@ onmessage=async e=>{const m=e.data;
   // that rode better. The line chosen in the list is kept aside and never learned on: how far the brain rides it shows
   // whether it can ride a line it has never seen. The best brain so far on all its lines is the one kept and used.
   // version 2: wider speed and air outputs (brainSpeed), so the numbers of a version 1 brain mean something else
-  const BRAIN_KEY = 'trailsai.brain2';
-  const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 2;
+  // version 3: 10 more inputs (the shape of the jump ahead), so 580 weights
+  const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 3, BRAIN_KEY = 'trailsai.brain' + BRAIN_VERSION;
   const BRAIN_URL = `https://raw.githubusercontent.com/${REPO}/main/brain/brain.json`;
   const BRAIN_CAP = 400;   // metres of each line a brain is scored on (a long line would hold every round up)
   const weightsOk = w => Array.isArray(w) && w.length === BRAIN.size && w.every(num);
@@ -1407,7 +1426,7 @@ onmessage=async e=>{const m=e.data;
       const info = { lines: teach.length, rows: 0, took: false, steps: [], plans: seen.map((r, k) => [plans[k].line, r.prog, mine(plans[k].line)]) };
       this.lastDistill = info;
       let rows = join();
-      if (rows.length < 28 * 200) return info;
+      if (rows.length < (BRAIN.inp + 6) * 200) return info;
       let w = await fitBrain(freshBrain(), rows, 60), bestW = null, bestR = null;
       for (let k = 0; ; k++) {
         const [r] = await this.rate([w], this.trainIdx);
@@ -1418,7 +1437,7 @@ onmessage=async e=>{const m=e.data;
         rows = join();
         w = await fitBrain(w, rows, 30);
       }
-      Object.assign(info, { rows: rows.length / 28 | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
+      Object.assign(info, { rows: rows.length / (BRAIN.inp + 6) | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
       return info;
     }
     // The next BATCH training lines, taken in turn from a shuffled queue: with many lines a round costs the same, and
