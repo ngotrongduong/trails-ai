@@ -29,7 +29,7 @@ Hai lỗi đã sửa:
 
 Trên đường đó, AI còn kẹt ở 124 m qua hàng nghìn vòng. Lý do: cú nhảy ở mét 95 bay quá ngắn, xe rơi xuống khoảng trống rồi đâm vào mặt dốc đáp, nên không còn tốc độ cho dốc nhảy step-up ở mét 124. Với ba cách trên, AI tìm ra cách bay qua khoảng trống và **về đích cả đường (272 m) trong chưa đầy 1 phút**.
 
-Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng giữa học đường đang chọn và luyện bộ não chung, xem bên dưới) và **AI lái**. Mọi thứ khác nằm trong mục **Chi tiết, xem lại và chia sẻ** thu gọn ở cuối bảng.
+Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng: học đường đang chọn, tập một bài tập kiểu Training, luyện bộ não chung, xem bên dưới) và **AI lái**. Mọi thứ khác nằm trong mục **Chi tiết, xem lại và chia sẻ** thu gọn ở cuối bảng.
 
 Vật lý của game cho kết quả giống hệt nhau mỗi lần chạy, nên những gì AI làm được trong mô phỏng thì ngoài game nó cũng làm được y như vậy. Đã kiểm tra: mô phỏng ngã ở mét 1096 thì AI lái thật ngã ở mét 1094.
 
@@ -48,6 +48,19 @@ Kế hoạch của AI gắn với từng đoạn của một đường, nên t�
 
 Đo lần đầu trên 4 đường mới, mỗi đường 25 vòng: có mượn thì điểm cao hơn ở 3/4 đường, nhưng chỉ một lần cải thiện là do cách mượn trực tiếp, nên chưa thể nói nó giúp nhiều. Kho hiện mới có 16 cú nhảy từ một đường. Kho càng lớn thì càng dễ tìm được cú giống.
 
+### Tập bài tập kiểu Training
+
+Trong **Học lái**, mỗi khi đường đang chọn 3 phút không tiến thêm, AI dành khoảng 3 phút tập các **bài tập kiểu Training** do nó tự tạo mới (cách tạo xem phần bộ não bên dưới). Mỗi bài được học giống như học một đường thật. Bài nào về đích thì AI sang bài tiếp theo ngay.
+
+- **Khó dần:** về đích một bài thì các bài sau khó hơn 10 %. Hết giờ mà chưa đi được nửa bài thì dễ đi 10 %. Bài khó hơn có mép nhảy dốc và dài hơn, khoảng hở tới 12 m, step-up cao tới 1,7 m, và tới 5 cú nhảy liên tiếp. Độ khó được lưu trong trình duyệt.
+- **Cái AI giữ lại:** mỗi cú nhảy vượt được vào kho kinh nghiệm, nên đường mới mượn được. Bài học của bài tập cũng thành bài cho bộ não chung bắt chước. Trình duyệt giữ 24 bài tập mới nhất (mỗi bài khoảng 20 KB).
+
+Đo trên máy 16 luồng:
+
+- Bài tập dễ (đợt đầu) thì AI về đích sau 3–4 giây, nên dạy được rất ít. Vì thế mới có độ khó tăng dần. Sau 90 giây, ở độ khó 60 % AI đi được 171/287 m, ở độ khó 100 % được 243/334 m.
+- Học từ đầu đường thật cuarkplp1p (305 m) trong 75 giây, 3 lần mỗi kiểu: không có kinh nghiệm từ bài tập thì đi được 150, 151, 186 m. Có kinh nghiệm từ 4–7 bài tập thì đi được 319, 186, 319 m (319 m là về đích). Có bài tập thì lần nào cũng có 1–4 lần cải thiện nhờ cú nhảy mượn được, không có thì chưa lần nào. Trên 3 đường thật khác (102, 182, 250 m) thì kết quả như nhau, có và không có bài tập đều vậy.
+- Bộ não chung luyện 6 phút có bài tập hay không có bài tập đều chưa khá lên. Nó học quá chậm nên đo trong vài phút không thấy được, cần đo khi luyện hàng giờ.
+
 ### Bộ não chung (mạng nơ-ron)
 
 Kế hoạch của từng đường chỉ dùng được trên đường đó. **Bộ não** thì khác: nó là một mạng nơ-ron nhỏ, không nhớ đường nào cả mà **nhìn** rồi quyết định, nên lái được cả những đường nó chưa từng thấy.
@@ -55,6 +68,7 @@ Kế hoạch của từng đường chỉ dùng được trên đường đó. *
 - **Nó thấy gì** (22 con số, cứ 2 khung hình một lần): tốc độ, góc xe và góc đang xoay nhanh cỡ nào, đang bay hay chạm đất, đang lên hay xuống, cao hơn mặt đất bao nhiêu, mặt đất ở 2, 4, 6, 8, 11, 14, 18, 22, 27 và 33 m phía trước, còn bao xa tới mép nhảy kế tiếp, dốc của chỗ tiếp đất, và xe đang ở trên mép nhảy, mặt tiếp đất hay mô pump.
 - **Nó quyết định gì** (4 con số): tốc độ cần giữ, có nhấc xe không, pump mạnh bao nhiêu, và góc xe khi bay. Phần bẻ lái theo đường vẫn do bộ điều khiển cố định làm. Mạng có 22 đầu vào, 16 nơ-ron ẩn và 4 đầu ra (420 trọng số).
 - **Cách luyện:** bộ não luyện trong lúc **Học lái** đang bật, mỗi khi đường đang chọn 3 phút không tiến thêm (khoảng 5 phút mỗi lượt, rồi AI quay lại đường). AI gom các đường đã học trong trình duyệt và các đường gần bạn (tối đa 12). Mỗi luồng CPU giữ một đường, và mỗi đường được chấm trên 400 m đầu. Mỗi vòng AI thử 20 bộ não hơi khác nhau trên tất cả các đường cùng lúc, rồi nhích bộ não về phía những bộ đi xa hơn. Cách này gọi là chiến lược tiến hóa (evolution strategies). Cứ 5 vòng, bộ não được giữ lại nếu nó đi giỏi hơn bộ tốt nhất trước đó.
+- **Bài tập kiểu Training:** mỗi lượt luyện, ít nhất 4 đường là bài tập (một nửa là bài AI đã tập xong ở bước tập bài tập, có bài học để bắt chước; nửa kia tạo mới, từ dễ tới khó bằng bài AI đang tập), giống các bài Training của game: dốc xuất phát, rồi table, double, step-up, step-down, ba cú liên tiếp, mô pump và cua nghiêng, kích thước ngẫu nhiên. Chúng nằm trên con dốc Training của game (dốc 6 % từ x = 9100), và được xếp như game xếp bài Training: chi tiết sau bắt đầu ở chỗ chi tiết trước kết thúc, và dốc đáp dài vừa đủ để đỉnh cao hơn (step-up) hay thấp hơn (step-down) mép nhảy. Như vậy bộ não tập đủ kiểu cú nhảy thay vì chỉ học thuộc vài đường gần bạn, và vẫn luyện được khi quanh bạn có ít đường.
 - **Đường đang chọn được để riêng:** bộ não không bao giờ luyện trên nó. Con số trên đường đó cho biết bộ não lái giỏi cỡ nào trên một đường lạ.
 - **Bắt chước bài học:** trước khi tự luyện, bộ não xem các bài học đã có trên máy chạy đường của chúng và học làm giống vậy. Sau đó nó tự chạy, còn bài học chỉ cho nó nên làm gì ở những chỗ nó đến. Kết quả chỉ được giữ nếu giỏi hơn.
 - **Bộ não lái:** khi bấm **AI lái**, bộ não lái nếu nó đi xa hơn bài học của đường đó trong mô phỏng, hoặc nếu đường chưa có bài học.

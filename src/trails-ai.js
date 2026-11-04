@@ -195,8 +195,9 @@
     const wp = l.trails_world_flat(g, 1);
     const fmt = new Float64Array(l.memory.buffer, wp, 1)[0];
     const kidx = Object.fromEntries(K.map((k, i) => [k.key, i]));
-    const flat = fs => {
-      const arr = [fmt, 2, 0, 0, 0];
+    // land: the game's terrain ([2, 0, 0, 0]), or another ground such as the flat one practice lines are laid out on
+    const flat = (fs, land = [2, 0, 0, 0]) => {
+      const arr = [fmt, ...land];
       fs.forEach((f, i) => {
         const ki = kidx[f.kind];
         const p = K[ki].params.map(q => { const v = f.params && f.params[q.key]; return Math.min(q.max, Math.max(q.min, v !== undefined ? v : q.default)); });
@@ -205,8 +206,8 @@
       });
       return arr;
     };
-    const layout = f => {
-      const a2 = flat([f]);
+    const layout = (f, land) => {
+      const a2 = flat([f], land);
       const h = a2.length * 8 + 8, c = l.trails_alloc(h), d = c + 7 & -8;
       new Float64Array(l.memory.buffer, d, a2.length).set(a2);
       const n = l.trails_layout_alone(g, d, a2.length);
@@ -248,6 +249,23 @@
 
   // ---------------------------------------------------------------- route
   const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
+  // points [x, z, kind] along a line, from point k0 on, as one point every metre
+  function resample(raw, k0) {
+    const X = [], Z = [], KIND = [];
+    let px = raw[k0][0], pz = raw[k0][1];
+    X.push(px); Z.push(pz); KIND.push(raw[k0][2]);
+    for (let i = k0 + 1; i < raw.length; i++) {
+      const [qx, qz, kd] = raw[i];
+      let d = Math.hypot(qx - px, qz - pz);
+      if (d < 1e-6) continue;
+      while (d >= 1) {
+        px += (qx - px) / d; pz += (qz - pz) / d;
+        X.push(px); Z.push(pz); KIND.push(kd);
+        d = Math.hypot(qx - px, qz - pz);
+      }
+    }
+    return { X, Z, KIND };
+  }
 
   async function buildRoute(start) {
     const e = await engine();
@@ -311,19 +329,7 @@
     });
     let k0 = 0, d0 = Infinity;
     raw.forEach((q, i) => { const d = Math.hypot(q[0] - start.x, q[1] - start.z); if (d < d0) { d0 = d; k0 = i; } });
-    const X = [], Z = [], KIND = [];
-    let px = raw[k0][0], pz = raw[k0][1];
-    X.push(px); Z.push(pz); KIND.push(raw[k0][2]);
-    for (let i = k0 + 1; i < raw.length; i++) {
-      const [qx, qz, kd] = raw[i];
-      let d = Math.hypot(qx - px, qz - pz);
-      if (d < 1e-6) continue;
-      while (d >= 1) {
-        px += (qx - px) / d; pz += (qz - pz) / d;
-        X.push(px); Z.push(pz); KIND.push(kd);
-        d = Math.hypot(qx - px, qz - pz);
-      }
-    }
+    const { X, Z, KIND } = resample(raw, k0);
     if (X.length < 20) return null;
     // pieces the physics needs: everything close to the route
     const cell = 32, grid = new Map();
@@ -345,6 +351,102 @@
     return {
       start: { id: start.id, x: start.x, z: start.z, heading: start.heading },
       X, Z, KIND, length: X.length, pieces, kinds,
+    };
+  }
+
+  // ---------------------------------------------------------------- practice lines
+  // Lines like the game's Training drills, made up anew from a seed: a start hill, then tables, doubles, step-ups and
+  // step-downs of many sizes, three in a row, rollers and berms. They lie where the game puts its own drills, on its
+  // training hill (6 % down from x = 9100 for 400 m), and are laid out as the game lays out its drills: each piece starts
+  // where the one before ends (after its gap), and a landing is made just long enough for its top to sit `step` above
+  // the line (a step-up) or below it (a step-down). Heights are above the ground: a line steps down the hill as it goes.
+  // hard (0 to 1) makes the jumps kickier, higher, longer and more of them in a row.
+  const PRACTICE_LAND = [1, 0.06, 9100, 9500], FLAT_LAND = [1, 0, 0, 0], PRACTICE_PIECES = 26;
+  function practicePieces(rnd, hard = 0) {
+    const R = (a, b) => a + rnd() * (b - a), I = (a, b) => Math.floor(R(a, b + 1));
+    const out = [{ kind: 'start', p: { height: R(3.6, 5), deck: 4, back: 8, width: 3.2 } }, { kind: 'flat', p: { len: R(6, 10), width: 2.8 } }];
+    // turn: degrees turned so far; a berm after a berm turns back, so the line keeps going down the hill
+    let level = 0, turn = 0;
+    const takeoff = () => ({ kind: 'takeoff', p: { radius: R(6.5 - 2.5 * hard, 11 - 3 * hard), length: R(3.4, 4.6 + 2 * hard), width: 2.4, base: 3.2, height: level } });
+    // the game's pieces sit at most 4 m below the ground
+    const landing = (drop, o = {}) => { drop = Math.min(drop, 4 + level); const p = { kind: 'landing', p: { radius: R(18, 25), width: 4, height: level - drop }, carry: true, ...o }; level -= drop; return p; };
+    const inRow = 3 + Math.round(2 * hard);
+    // back to the ground with a pump down to it, then a few metres of flat
+    const back = () => {
+      if (level < -0.1) out.push({ kind: 'pump', p: { len: R(12, 16), start: level, peak: level / 2, end: 0, width: 2.8 } });
+      level = 0;
+      out.push({ kind: 'flat', p: { len: R(3, 8), width: 2.8 } });
+    };
+    while (out.length < PRACTICE_PIECES) {
+      const pick = rnd(), jumps = 0.65 + 0.15 * hard;
+      // too deep for another drop: back to the ground first
+      if (pick < jumps && level < -2.5) back();
+      if (pick < 0.25) out.push(takeoff(), { kind: 'flat', p: { len: R(3, 6), width: 2.4 }, carry: true }, landing(R(0.6, 2.2)));
+      else if (pick < jumps) {
+        const u = rnd(), step = u < 0.35 ? R(0.3, 0.8 + 0.9 * hard) : u < 0.65 ? -R(0.4, 1) : 0;
+        out.push(takeoff(), landing(R(1.5, 3.5), { gap: R(3, 7 + 5 * hard), step }));
+      } else if (pick < jumps + (1 - jumps) / 2) {
+        back();
+        for (let k = I(3, 6); k > 0; k--) out.push({ kind: 'pump', p: { len: R(4, 7), peak: R(0.25, 0.5), width: 3 } });
+        out.push({ kind: 'flat', p: { len: 3, width: 3 } });
+      } else {
+        back();
+        const t = turn ? -turn : (rnd() < 0.5 ? 1 : -1) * I(50, 90);
+        turn += t;
+        out.push({ kind: 'berm', p: { radius: R(6, 8), turn: t, wall: R(1.4, 1.9), inside: 1.2, angle: 55 } }, { kind: 'flat', p: { len: 3, width: 3 } });
+      }
+      // a jump straight after a jump: inRow in a row at most, then back to the ground
+      if (out.length > 3 && out.slice(-2 * inRow).filter(p => p.kind === 'landing').length >= inRow) back();
+    }
+    back();
+    out.push({ kind: 'flat', p: { len: 15, width: 2.8 } });
+    return out;
+  }
+  // Practice line number lane of the set made from seed, as a line the AI can ride (null if a piece would not lay out).
+  async function practiceLine(seed, lane, hard = 0) {
+    const e = await engine();
+    let s = (seed * 7919 + lane * 104729) % 2147483648 || 1;
+    const rnd = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const spec = practicePieces(rnd, hard);
+    let r = { x: PRACTICE_LAND[2], z: 9000 + lane * 40, heading: 0, height: 0 };
+    const pieces = [], raw = [], kinds = {};
+    let spawn = null, n0 = 0;
+    for (const h of spec) {
+      const K = e.K[e.kidx[h.kind]], u = h.gap || 0;
+      if (!K) return null;
+      const f = { kind: h.kind, x: r.x + u * Math.cos(r.heading), z: r.z + u * Math.sin(r.heading), heading: r.heading, params: {} };
+      for (const q of K.params) f.params[q.key] = h.p[q.key] !== undefined ? h.p[q.key] : q.default;
+      if (h.carry && h.kind === 'flat') f.params.height = r.height;
+      if (h.carry && h.kind === 'pump') f.params.start = r.height;
+      if (h.carry && h.kind === 'landing') {
+        const q = K.params.find(q => q.key === 'length');
+        let a = q.min, b = q.max;
+        for (let i = 0; i < 40; i++) {
+          f.params.length = (a + b) / 2;
+          const L = e.layout(f, FLAT_LAND), top = L && L.points && L.points[0] ? L.points[0][1] : 0;
+          if (top - r.height - (h.step || 0) < 0) a = f.params.length; else b = f.params.length;
+        }
+        f.params.length = (a + b) / 2;
+      }
+      const lay = e.layout(f, FLAT_LAND);
+      if (!lay || !lay.exit || !lay.path || lay.path.length < 2) return null;
+      if (!spawn) spawn = lay.spawn || { x: lay.path[0][1], z: lay.path[0][2], heading: r.heading };
+      // the end of a takeoff before a gap is in the air, as on the game's lines
+      if (u > 0 && raw.length) raw[raw.length - 1][2] = 'air';
+      for (const q of lay.path) raw.push([q[1], q[2], h.kind]);
+      raw.push([lay.exit[0], lay.exit[1], h.kind]);
+      if (!n0) n0 = raw.length;
+      pieces.push(f); kinds[h.kind] = (kinds[h.kind] || 0) + 1;
+      r = { x: lay.exit[0], z: lay.exit[1], heading: lay.exit[2], height: lay.exit[3] };
+    }
+    // the line starts where the bike stands on the start hill (its back is behind it)
+    const ahead = q => (q[0] - spawn.x) * Math.cos(spawn.heading) + (q[1] - spawn.z) * Math.sin(spawn.heading) > 0.5;
+    let k0 = 0;
+    while (k0 < n0 && !ahead(raw[k0])) k0++;
+    const { X, Z, KIND } = resample([[spawn.x, spawn.z, 'start']].concat(raw.slice(k0)), 0);
+    return {
+      start: { id: `practice-${seed}-${lane}`, x: spawn.x, z: spawn.z, heading: spawn.heading },
+      X, Z, KIND, length: X.length, pieces, kinds, land: PRACTICE_LAND, practice: true,
     };
   }
 
@@ -551,7 +653,8 @@ function addLine(route,setup){
   {const d=Math.hypot(R.X[0]-R.start.x,R.Z[0]-R.start.z),n=Math.floor(d);
     if(n>=2){const X=[],Z=[],KI=[];for(let i=0;i<n;i++){const f=i/d;X.push(R.start.x+(R.X[0]-R.start.x)*f);Z.push(R.start.z+(R.Z[0]-R.start.z)*f);KI.push('start')}
       R.X=X.concat(Array.from(R.X));R.Z=Z.concat(Array.from(R.Z));R.KIND=KI.concat(Array.from(R.KIND));R.length=R.X.length}}
-  const arr=[fmt,2,0,0,0];let n=0;
+  // the game's terrain, or the ground of a practice line (R.land)
+  const arr=[fmt,...(R.land||[2,0,0,0])];let n=0;
   for(const f of R.pieces){const ki=kidx[f.kind];if(ki===undefined)continue;n++;
     const p=K[ki].params.map(q=>{const v=f.params&&f.params[q.key];return Math.min(q.max,Math.max(q.min,v!==undefined?v:q.default))});
     arr.push(n,ki,f.x,f.z,f.heading);for(let h=0;h<FF-5;h++)arr.push(h<p.length?p[h]:0)}
@@ -859,6 +962,7 @@ onmessage=async e=>{const m=e.data;
     if (!Array.isArray(L.KIND) || L.KIND.length !== n || !L.KIND.every(k => typeof k === 'string')) return null;
     if (!Array.isArray(L.pieces) || L.pieces.length > 20000) return null;
     if (!L.pieces.every(p => p && typeof p.kind === 'string' && num(p.x) && num(p.z) && num(p.heading) && (!p.params || Object.values(p.params).every(num)))) return null;
+    if (L.land !== undefined && !(Array.isArray(L.land) && L.land.length === 4 && L.land.every(num))) return null;
     if (!Array.isArray(P.v) || !PLAN_KEYS.every(k => Array.isArray(P[k]) && P[k].length === P.v.length && P[k].every(num)) || !partsOk(P, P.v.length)) return null;
     L.length = n;
     if (!L.kinds || typeof L.kinds !== 'object') L.kinds = {};
@@ -866,6 +970,8 @@ onmessage=async e=>{const m=e.data;
   }
   // A saved line is out of date when the game now holds the chunk one of its pieces sits in, and the piece is gone.
   function lineStale(line) {
+    // practice lines are not in the game's world
+    if (line.practice) return false;
     for (const p of line.pieces) {
       const got = cap.chunks.get(Math.floor(p.x / 256) + ',' + Math.floor(p.z / 256));
       if (got && !got.some(q => q.kind === p.kind && Math.abs(q.x - p.x) < 0.05 && Math.abs(q.z - p.z) < 0.05)) return true;
@@ -949,9 +1055,12 @@ onmessage=async e=>{const m=e.data;
     }
     lesson() {
       // the line is kept with the memory: rebuilt later from whatever the game has loaded, it could come out shorter
-      const { start, X, Z, KIND, pieces, kinds, length } = this.route;
+      const { start, X, Z, KIND, pieces, kinds, length, land, practice } = this.route;
       // numbers are kept exact: the ride is so sensitive that a route rounded to the centimetre rides differently
-      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line: { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length }, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
+      const line = { start, X: Array.from(X), Z: Array.from(Z), KIND, pieces, kinds, length };
+      // a practice line is laid on its own ground
+      if (practice) Object.assign(line, { land, practice });
+      return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
     }
     // What the jumps this line's best ride got over teach other lines: each jump's shape and the plan used on it.
     jumpRecord() {
@@ -1232,7 +1341,7 @@ onmessage=async e=>{const m=e.data;
       this.trainIdx = train.map((_, i) => i);
       this.testIdx = test ? train.length : -1;
       this.testId = test ? test.start.id : null;
-      for (const r of train) if (!this.seen.includes(r.start.id)) this.seen.push(r.start.id);
+      for (const r of train) if (!r.practice && !this.seen.includes(r.start.id)) this.seen.push(r.start.id);
       // the kept brain and a new one, on all the lines: where the brain stands, and where it started from
       const all = this.trainIdx.concat(test ? [this.testIdx] : []);
       const [b, f] = await this.rate([this.best, freshBrain()], all);
@@ -1651,8 +1760,8 @@ onmessage=async e=>{const m=e.data;
       if (busy || !o) return false;
       busy = true;
       try {
-        // one learner at a time: the brain gives its workers back
-        releaseBrain();
+        // one learner at a time: the brain and the practice give their workers back
+        releaseBrain(); releaseDrill();
         // a new line, the rider changed bike or tricks in the game since training started, or the workers were given away
         const setupChanged = trainer.setup && JSON.stringify(trainer.setup) !== JSON.stringify(riderSetup());
         if (!trainer.route || trainer.route.start.id !== o.s.id || setupChanged || !trainer.pool) {
@@ -1733,26 +1842,39 @@ onmessage=async e=>{const m=e.data;
       return route;
     }
     // Lines for the brain: every line learned in this browser, then the lines near you, up to one per worker (and at most
-    // 12) with one more worker for the chosen line, which is kept aside.
+    // 12) with one more worker for the chosen line, which is kept aside. At least PRACTICE of them are practice lines,
+    // more when there are few lines around: drills of every kind and size, so the brain learns to ride jumps in general
+    // instead of the few lines near you by heart. Half of them are drills the AI has learned (their lessons show the
+    // brain how to ride them), the others new each time.
+    const PRACTICE = 4;
     async function brainLines() {
       const o = choices[+$('.pick').value];
-      const most = Math.min(12, Math.max(3, workers - 1));
-      const testId = o ? o.s.id : null, got = new Map();
+      const most = Math.min(12, Math.max(3, workers - 1)), real = most - PRACTICE;
+      const testId = o ? o.s.id : null, got = new Map(), drills = [];
       try {
         for (let i = 0; i < localStorage.length; i++) {
           const key = localStorage.key(i);
           if (!key || !key.startsWith(STORE)) continue;
           const id = key.slice(STORE.length), L = savedLine(id);
-          if (L && id !== testId && !lineStale(L)) got.set(id, L);
+          if (L && L.practice) drills.push(L);
+          else if (L && id !== testId && !lineStale(L)) got.set(id, L);
         }
       } catch { /* storage blocked */ }
       for (const c of choices) {
-        if (got.size >= most) break;
+        if (got.size >= real) break;
         if (c.s.id === testId || got.has(c.s.id)) continue;
         const r = await lineFor(c.s);
         if (r && r.length >= 40) got.set(c.s.id, r);
       }
-      return { train: [...got.values()].slice(0, most), test: o ? await lineFor(o.s) : null };
+      const train = [...got.values()].slice(0, real), seed = Math.floor(Math.random() * 1e6);
+      drills.sort(() => Math.random() - 0.5);
+      train.push(...drills.slice(0, PRACTICE / 2));
+      for (let lane = 0; train.length < most && lane < most * 2; lane++) {
+        // easy to as hard as the drills the AI practises now
+        const r = await practiceLine(seed, lane, drillLevel() * (lane % 4) / 3);
+        if (r && r.length >= 40) train.push(r);
+      }
+      return { train, test: o ? await lineFor(o.s) : null };
     }
     // one learner at a time: CPU threads go to the line or to the brain
     function releaseBrain() {
@@ -1769,7 +1891,7 @@ onmessage=async e=>{const m=e.data;
       if (busy) return false;
       busy = true;
       try {
-        releaseLine();
+        releaseLine(); releaseDrill();
         const o = choices[+$('.pick').value];
         if (!brain.pool || brain.testId !== (o ? o.s.id : null) || JSON.stringify(brain.setup) !== JSON.stringify(riderSetup())) {
           say('Đang gom các đường để luyện bộ não chung…');
@@ -1778,7 +1900,8 @@ onmessage=async e=>{const m=e.data;
           say(`Đang nạp ${train.length + (test ? 1 : 0)} đường vào ${workers} luồng cho bộ não chung (có thể mất một phút)…`);
           const t0 = performance.now();
           await brain.prepare(train, test, workers);
-          if (!brainTold) log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường (${train.map(r => r.length + ' m').join(', ')}), mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
+          const np = train.filter(r => r.practice).length;
+          if (!brainTold) log(`<b>Bộ não chung:</b> luyện trên ${train.length} đường (${train.map(r => r.length + ' m').join(', ')}), trong đó ${np} bài tập kiểu Training AI tự tạo mới, mỗi đường chấm ${BRAIN_CAP} m đầu${test ? `. Đường đang chọn (${test.length} m) được để riêng, bộ não không bao giờ luyện trên nó` : ''}. Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
           brainTold = true;
           const shared = await communityBrain();
           if (shared) {
@@ -1814,14 +1937,96 @@ onmessage=async e=>{const m=e.data;
       return true;
     }
 
+    // ---- practice: new practice lines learned for a few minutes the way the chosen line is, one after another. Every
+    // jump of them the AI gets over goes into the jumps new lines borrow from, and their lessons into what the shared
+    // brain imitates. A drill ridden to the end makes the next ones harder; one not ridden halfway, easier. (Easy drills
+    // were ridden to the end in a few seconds, so they taught little.)
+    const DRILL_TIME = 3 * 60e3, DRILLS_KEPT = 24, DRILL_KEY = 'trailsai.drill';
+    let drillT0 = 0;
+    const drill = new Trainer({
+      record() {},
+      // a round that ends after "Dừng học" does not write over the status
+      progress(p) { if (learning && phase === 'drill') $('.k-now').textContent = `tập bài tập kiểu Training: ${p.best.prog} / ${drill.N} m`; },
+    });
+    // how hard the drills are: read, or set to v
+    function drillLevel(v) {
+      if (v === undefined) {
+        let s = null;
+        try { s = localStorage.getItem(DRILL_KEY); } catch { /* storage blocked */ }
+        return s !== null && num(+s) ? clamp(+s, 0, 1) : 0.3;
+      }
+      v = +clamp(v, 0, 1).toFixed(2);
+      try { localStorage.setItem(DRILL_KEY, String(v)); } catch { /* storage blocked */ }
+      return v;
+    }
+    function releaseDrill() {
+      if (drill.running) drill.stop();
+      if (drill.pool) { drill.pool.close(); drill.pool = null; }
+    }
+    // only the newest drills are kept, so they never fill the browser's storage
+    function dropOldDrills() {
+      const all = [];
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const key = localStorage.key(i);
+          if (!key || !key.startsWith(STORE + 'practice-')) continue;
+          let at = 0;
+          try { at = JSON.parse(localStorage.getItem(key)).savedAt || 0; } catch { /* unreadable: goes first */ }
+          all.push([at, key]);
+        }
+        all.sort((a, b) => b[0] - a[0]).slice(DRILLS_KEPT).forEach(([, key]) => localStorage.removeItem(key));
+      } catch { /* storage blocked */ }
+    }
+    async function drillStart() {
+      if (busy) return false;
+      busy = true;
+      try {
+        releaseLine(); releaseBrain();
+        say('AI đang tập các bài tập kiểu Training, vài phút nữa sẽ quay lại đường này… Bạn có thể tiếp tục chơi.');
+        const level0 = drillLevel();
+        let n = 0, done = 0, jumps = 0, level = level0;
+        drillT0 = Date.now();
+        while (learning && !cancel && Date.now() - drillT0 < DRILL_TIME) {
+          let route = null;
+          for (let i = 0; i < 5 && !route; i++) {
+            const r = await practiceLine(Math.floor(Math.random() * 1e6), 0, level);
+            if (r && r.length >= 60) route = r;
+          }
+          if (!route) break;
+          drill.library = await gatherJumps();
+          drill.brainW = brain.gen ? brain.best.slice() : null;
+          await drill.prepare(route, workers);
+          if (!learning || cancel) break;
+          busy = false;
+          await drill.run();
+          busy = true;
+          n++; jumps += drill.jumpRecord().list.length;
+          const end = drill.best.end === 'về đích';
+          if (end) done++;
+          // only a drill that had its time counts as not ridden
+          if (end || Date.now() - drillT0 >= DRILL_TIME) level = drillLevel(end ? level + 0.1 : drill.best.prog < drill.N / 2 ? level - 0.1 : level);
+          dropOldDrills();
+        }
+        if (n) log(`<b>Tập ${n} bài tập kiểu Training</b> (độ khó ${Math.round(level0 * 100)}%${level !== level0 ? ` → ${Math.round(level * 100)}%` : ''}): về đích ${done}/${n} bài, ${jumps} cú nhảy vượt được đã vào kho kinh nghiệm.`);
+      } catch (err) {
+        say('Lỗi: ' + (err && err.message || err));
+        console.error(err);
+      } finally {
+        busy = false;
+        releaseDrill();
+      }
+      return true;
+    }
+
     // ---- "Học lái": one button for all the learning. The chosen line learns until it has not got better for a few
-    // minutes, then the shared brain learns on all the lines near you for a few minutes, then back to the line, and so
-    // on. One learner at a time has every CPU thread. Each helps the other: lessons give the brain lines to learn on
-    // and plans to imitate, and the brain gives new lines a start.
+    // minutes, then a new practice line for a few minutes, then the shared brain on all the lines near you and some
+    // practice lines, then back to the line, and so on. One learner at a time has every CPU thread. Each helps the
+    // others: lessons give the brain lines to learn on and plans to imitate, practice gives jumps to borrow from, and the
+    // brain gives new lines a start.
     const LINE_MIN = 2 * 60e3, LINE_STALL = 3 * 60e3, BRAIN_TIME = 5 * 60e3;
     let learning = false, cancel = false, phase = null, phaseT0 = 0, gainT = 0, gainRun = null, brainT0 = 0, brainRestUntil = 0, loopId = 0;
     function showNow() {
-      $('.k-now').textContent = !learning ? 'nghỉ' : phase === 'brain' ? 'luyện bộ não chung' : 'học đường này';
+      $('.k-now').textContent = !learning ? 'nghỉ' : phase === 'brain' ? 'luyện bộ não chung' : phase === 'drill' ? 'tập bài tập kiểu Training' : 'học đường này';
       const b = $('.learn');
       b.textContent = learning ? 'Dừng học' : 'Học lái';
       b.classList.toggle('on', learning);
@@ -1831,8 +2036,11 @@ onmessage=async e=>{const m=e.data;
         cancel = false; phase = 'line'; phaseT0 = gainT = Date.now(); gainRun = null; showNow();
         if (!(await start())) { learning = false; break; }
         if (!learning || my !== loopId || cancel || Date.now() < brainRestUntil) continue;
+        cancel = false; phase = 'drill'; drillT0 = Date.now(); showNow();
+        log(`Đường này ${Math.round(LINE_STALL / 60e3)} phút chưa tiến thêm: AI tập một bài tập kiểu Training, luyện bộ não chung vài phút rồi quay lại.`);
+        await drillStart();
+        if (!learning || my !== loopId || cancel) continue;
         cancel = false; phase = 'brain'; brainT0 = 0; showNow();
-        log(`Đường này ${Math.round(LINE_STALL / 60e3)} phút chưa tiến thêm: AI luyện bộ não chung vài phút rồi quay lại.`);
         // not enough lines for the brain: keep to the line for a while
         if (!(await brainStart())) brainRestUntil = Date.now() + 15 * 60e3;
       }
@@ -1844,6 +2052,9 @@ onmessage=async e=>{const m=e.data;
       if (phase === 'line' && trainer.running) {
         if (trainer.best && beats(trainer.best, gainRun)) { gainRun = trainer.best; gainT = now; }
         if (now - phaseT0 > LINE_MIN && now - gainT > LINE_STALL && now >= brainRestUntil) trainer.stop();
+      } else if (phase === 'drill' && drill.running) {
+        // a drill ridden to the end has nothing more to teach about jumps: on to the next one
+        if (now - drillT0 > DRILL_TIME || (drill.best && drill.best.end === 'về đích')) drill.stop();
       } else if (phase === 'brain' && brain.running) {
         if (!brainT0) brainT0 = now;
         else if (now - brainT0 > BRAIN_TIME) brain.stop();
@@ -1851,7 +2062,7 @@ onmessage=async e=>{const m=e.data;
     }, 2000);
     async function learnButton() {
       if (learning) {
-        learning = false; cancel = true; loopId++; trainer.stop(); brain.stop(); phase = null; showNow();
+        learning = false; cancel = true; loopId++; trainer.stop(); brain.stop(); drill.stop(); phase = null; showNow();
         say('Đã dừng học. Những gì AI học được đã được lưu, bấm “Học lái” để học tiếp.');
         return;
       }
@@ -1865,7 +2076,7 @@ onmessage=async e=>{const m=e.data;
     function lineChanged() {
       showLine();
       if (!learning) return;
-      cancel = true; trainer.stop(); brain.stop();
+      cancel = true; trainer.stop(); brain.stop(); drill.stop();
     }
 
     // "AI lái": the AI rides your bike in the game on the line chosen in the list: back to the start of the line, then
@@ -2128,7 +2339,7 @@ onmessage=async e=>{const m=e.data;
       open() { el.style.display = ''; },
       // the extension found a newer AI on GitHub and kept it for the next page load
       newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
-      cap, trainer, brain, buildRoute, findTracks, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
+      cap, trainer, brain, drill, buildRoute, practiceLine, findTracks, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
     };
     if (window.__taiNewer) window.TrailsAI.newer();
     setTimeout(findTracks, 1500);

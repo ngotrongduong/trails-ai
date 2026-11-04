@@ -89,7 +89,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <li>Bấm <b>Học lái</b> rồi cứ để đó, càng lâu càng giỏi. AI tự lo phần còn lại:
 <ul>
 <li>Học đường đang chọn: mỗi vòng thử vài chục cách chạy trong mô phỏng (dùng gần hết các luồng CPU) và giữ cách tốt nhất. Nó tập vượt hết đường trước, về đích được rồi mới tập trick để thêm điểm.</li>
-<li>Khi đường này 3 phút không tiến thêm, AI luyện <b>bộ não chung</b> trên các đường quanh bạn khoảng 5 phút, rồi quay lại đường.</li>
+<li>Khi đường này 3 phút không tiến thêm, AI tập một <b>bài tập kiểu Training</b> nó tự tạo mới khoảng 3 phút (mỗi cú nhảy vượt được vào kho kinh nghiệm cho đường mới mượn), rồi luyện <b>bộ não chung</b> trên các đường quanh bạn khoảng 5 phút, rồi quay lại đường.</li>
 <li>Đường mới bắt đầu từ cách tốt nhất trong ba cách: học từ con số 0, mượn cú nhảy giống ở đường khác, hoặc chép cách lái của bộ não chung.</li>
 </ul></li>
 <li>Bấm <b>AI lái</b> để AI lái xe thật của bạn trên đường đang chọn (bạn phải đang <b>ngồi trên xe</b>, không đi bộ, không mở menu). AI chạy thử cả bài học của đường này lẫn bộ não chung trong mô phỏng, rồi để cái nào đi xa hơn lái. Đường chưa học thì bộ não chung lái.</li>
@@ -105,7 +105,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <li><b>Bài học</b> của một đường là kế hoạch cho từng đoạn: tốc độ (có thể khác nhau ở từng phần khoảng 8 m của đoạn), chỗ nhấc xe trước mép nhảy, pump, góc xe khi bay. Nó chỉ dùng được trên đúng đường đó.</li>
 <li><b>Khi bị kẹt</b>, AI đổi tốc độ từng phần nhỏ của đoạn, và cứ mỗi vòng thứ hai lại thử hẳn những cách khác cho mấy đoạn trước chỗ ngã: có khi cách đang dùng chỉ vừa đủ qua chỗ phía trước, nên sửa nhỏ quanh chỗ ngã không bao giờ tới được. Lượt nào đi xa hơn là tốt hơn; trick chỉ tập sau khi đã về đích.</li>
 <li><b>Mượn kinh nghiệm:</b> mỗi cú nhảy AI vượt qua được ghi lại cùng hình dạng của nó (mép nhảy, khoảng hở, chỗ tiếp đất). Ở đường mới, AI tìm những cú giống nhất ở các đường đã học, trên máy bạn và của mọi người trên GitHub, và thử cách đã thành công ở đó.</li>
-<li><b>Bộ não chung</b> là một mạng nơ-ron nhỏ: nhìn xe và mặt đất 2–33 m phía trước rồi tự quyết tốc độ, lúc nhấc xe, lúc pump và góc xe khi bay, nên lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra, bộ não không luyện trên nó. Bộ não học chậm hơn bài học của một đường, cần luyện hàng giờ.</li>
+<li><b>Bộ não chung</b> là một mạng nơ-ron nhỏ: nhìn xe và mặt đất 2–33 m phía trước rồi tự quyết tốc độ, lúc nhấc xe, lúc pump và góc xe khi bay, nên lái được cả đường chưa từng thấy. Ngoài các đường quanh bạn, mỗi lượt nó tập trên ít nhất 4 bài tập AI tự tạo mới giống các bài Training của game (table, double, step-up, step-down, ba cú liên tiếp, mô pump, cua nghiêng, đủ cỡ). Đường đang chọn được để riêng làm bài kiểm tra, bộ não không luyện trên nó. Bộ não học chậm hơn bài học của một đường, cần luyện hàng giờ.</li>
 </ul>
 </div>
 
