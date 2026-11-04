@@ -826,7 +826,8 @@ onmessage=async e=>{const m=e.data;
     // brains: each task is [brain, line]; only what the learning needs comes back
     else if(m.type==='watch'){use(m.line);postMessage({type:'watch',id:m.id,...watchPlan(m.plan,m.until,m.brain)})}
     else if(m.type==='brainplan'){use(0);postMessage({type:'brainplan',id:m.id,...brainPlan(m.w)})}
-    else if(m.type==='brains'){const out=m.tasks.map(([b,i])=>{use(i);const r=episode(null,{brain:m.brains[b],until:m.until});return {fit:r.fit,prog:r.prog,end:r.end,jumps:r.jumps}});postMessage({type:'brains',id:m.id,out})}
+    // with rec the whole ride comes back, recorded (to look at how a brain rides)
+    else if(m.type==='brains'){const out=m.tasks.map(([b,i])=>{use(i);const r=episode(null,{brain:m.brains[b],until:m.until,rec:m.rec});return m.rec?r:{fit:r.fit,prog:r.prog,end:r.end,jumps:r.jumps}});postMessage({type:'brains',id:m.id,out})}
   }catch(err){postMessage({type:'error',id:m.id,error:String(err&&err.stack||err)})}
 };`;
 
