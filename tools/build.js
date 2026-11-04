@@ -85,7 +85,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <div class="card">
 <h2>Hai nút: Học lái và AI lái</h2>
 <ol>
-<li>Đạp xe vài giây để AI biết bạn đang ở đâu. Danh sách đường xếp theo khoảng cách, gần nhất ở trên cùng; bấm <b>↻</b> để tìm lại. Chọn một đường.</li>
+<li>Đạp xe vài giây để AI biết bạn đang ở đâu. Danh sách đường xếp theo khoảng cách, gần nhất ở trên cùng; bấm <b>↻</b> để tìm lại. Mỗi đường có một tên riêng (như “Đồi Thông 37”), giống nhau trên mọi máy; bấm <b>✎</b> để tự đặt tên khác. Chọn một đường.</li>
 <li>Bấm <b>Học lái</b> rồi cứ để đó, càng lâu càng giỏi. AI tự lo phần còn lại:
 <ul>
 <li>Học đường đang chọn: mỗi vòng thử vài chục cách chạy trong mô phỏng (dùng gần hết các luồng CPU) và giữ cách tốt nhất. Nó tập vượt hết đường trước, về đích được rồi mới tập trick để thêm điểm.</li>

@@ -34,6 +34,25 @@ tick();
 const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
 const N_MOVES = 16;          // trick moves the worker knows (index 0 = none)
 const STORE = 'trailsai.v2.';
+const NAMES = 'trailsai.names';
+const NAME_PLACE = ['Đồi', 'Dốc', 'Suối', 'Rừng', 'Đèo', 'Bãi', 'Cồn', 'Gò', 'Núi', 'Lũng', 'Ghềnh', 'Bờ', 'Trảng', 'Truông', 'Động', 'Mỏm'];
+const NAME_WHAT = ['Thông', 'Gió', 'Mây', 'Sương', 'Nắng', 'Trăng', 'Cát', 'Rêu', 'Sỏi', 'Lau', 'Tre', 'Đá', 'Hoa', 'Sao', 'Mưa', 'Sóc'];
+const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
+const givenNames = () => { try { return JSON.parse(localStorage.getItem(NAMES) || '{}') || {}; } catch { return {}; } };
+function lineName(id) {
+const given = givenNames()[id];
+if (given) return given;
+const drill = /^practice-(\d+)-(\d+)$/.exec(id);
+if (drill) return `Đường tập ${drill[1]}${+drill[2] ? '-' + drill[2] : ''}`;
+let h = 2166136261;
+for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
+return `${NAME_PLACE[h & 15]} ${NAME_WHAT[(h >>> 4) & 15]} ${10 + ((h >>> 8) % 90)}`;
+}
+function setLineName(id, name) {
+const all = givenNames(), n = String(name).trim().slice(0, 40);
+if (n) all[id] = n; else delete all[id];
+try { localStorage.setItem(NAMES, JSON.stringify(all)); } catch { /* storage blocked */ }
+}
 const REPO = 'ngotrongduong/trails-ai';
 const LESSONS_URL = `https://raw.githubusercontent.com/${REPO}/main/lessons/`;
 const LESSON_FORMAT = 'trails-ai-lesson';
@@ -1470,7 +1489,7 @@ const el = document.createElement('div'); el.id = 'tai';
 el.innerHTML = `
 <h3>AI tự học Trails <button class="x" title="Ẩn">×</button></h3>
 <div class="st">Đang chuẩn bị…</div>
-<div class="row pk"><select class="pick"><option>Đang tìm đường gần bạn…</option></select><button class="b g refresh" title="Tìm lại đường gần tôi">↻</button></div>
+<div class="row pk"><select class="pick"><option>Đang tìm đường gần bạn…</option></select><button class="b g rename" title="Đặt tên cho đường này">✎</button><button class="b g refresh" title="Tìm lại đường gần tôi">↻</button></div>
 <div class="row big"><button class="b learn" disabled>Học lái</button><button class="b drive" disabled>AI lái</button></div>
 <div class="kv">
 <span>Đang làm</span><b class="k-now">–</b>
@@ -1602,12 +1621,25 @@ const me = await whereAmI();
 if (!me) { say('Chưa biết bạn đang ở đâu. Hãy đạp xe một chút rồi thử lại.'); return; }
 const near = cap.starts.map(s => ({ s, d: Math.hypot(s.x - me.x, s.z - me.z) })).filter(o => o.d < 600).sort((a, b) => a.d - b.d).slice(0, 15);
 choices = near;
-const sel = $('.pick');
-sel.innerHTML = near.length ? near.map((o, i) => `<option value="${i}">${i + 1}. Điểm xuất phát cách ${Math.round(o.d)} m${hasMemory(o.s.id) ? ' · đã học' : ''}</option>`).join('')
-: '<option>Không thấy điểm xuất phát nào gần đây</option>';
+listLines();
 $('.learn').disabled = $('.drive').disabled = !near.length;
 showLine();
 say(near.length ? `Tìm thấy ${near.length} điểm xuất phát gần ${me.how}. Chọn đường (gần nhất ở trên cùng) rồi bấm “Học lái” hoặc “AI lái”.` : 'Không có đường nào trong vòng 600 m. Hãy đến gần một đường rồi bấm ↻.');
+}
+function listLines() {
+const sel = $('.pick'), at = sel.value;
+sel.innerHTML = choices.length ? choices.map((o, i) => `<option value="${i}">${i + 1}. ${esc(lineName(o.s.id))} · cách ${Math.round(o.d)} m${hasMemory(o.s.id) ? ' · đã học' : ''}</option>`).join('')
+: '<option>Không thấy điểm xuất phát nào gần đây</option>';
+if (at && choices[+at]) sel.value = at;
+}
+function renameLine() {
+const o = choices[+$('.pick').value];
+if (!o) return;
+const got = prompt('Tên cho đường này (để trống thì dùng lại tên AI đặt):', lineName(o.s.id));
+if (got === null) return;
+setLineName(o.s.id, got);
+listLines();
+say(`Đường này giờ tên là “${lineName(o.s.id)}”.`);
 }
 const hasMemory = id => { try { return !!localStorage.getItem(STORE + id); } catch { return false; } };
 const savedLine = id => { try { const m = JSON.parse(localStorage.getItem(STORE + id) || 'null'); return m && m.line && m.line.X ? m.line : null; } catch { return null; } };
@@ -1648,7 +1680,7 @@ const took = mem.from !== 'fresh';
 if (mem.fromTrack && introduced.has(o.s.id)) log(`Quay lại học đường này (vòng ${trainer.gen}, đang đi được ${trainer.best.prog} m).`);
 else {
 introduced.add(o.s.id);
-log(`Đường mới: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
+log(`Đường mới <b>${esc(lineName(o.s.id))}</b>: ${route.length} m (${kinds}). Nạp xong sau ${((performance.now() - t0) / 1000).toFixed(0)} s.`);
 log(mem.kept ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này (${mem.kept} đoạn đầu), học tiếp các đường nối thêm.` : mem.fromTrack ? `Nhớ lại ${trainer.gen} vòng đã học trên đường này.` :`${took ? 'Bắt đầu học' : 'Bắt đầu học từ con số 0'} (đường chia thành ${trainer.secs.length} đoạn, ${mem.jumps} cú nhảy).`);
 if (!mem.fromTrack) log('Nếu đường thật dài hơn thế, hãy đạp dọc theo đường cho game tải hết, rồi bấm “Quên đường này, học lại từ đầu” (trong mục Chi tiết).');
 if (!trainer.library.length) log('Chưa có kinh nghiệm cú nhảy từ đường nào khác. Học xong đường này thì những đường sau sẽ mượn được.');
@@ -2071,6 +2103,7 @@ window.addEventListener('keydown', e => { if ((live.drive || looping) && e.isTru
 el.addEventListener('click', e => { if (e.target.tagName === 'BUTTON') e.target.blur(); });
 $('.x').onclick = () => { el.style.display = 'none'; };
 $('.refresh').onclick = () => findTracks();
+$('.rename').onclick = () => renameLine();
 $('.learn').onclick = () => learnButton();
 $('.drive').onclick = () => driveButton();
 $('.watch').onclick = () => watch();
