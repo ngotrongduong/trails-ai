@@ -166,8 +166,13 @@ tricks). New:
   most a minute), then one learned, then more jumps, then the nearest; a copy of
   that line is learned with the aim as its goal, the way a drill is. Once the simulation
   meets it (or, for one added up over runs, makes some), the bike rides it, learning on in
-  the background; 6 minutes with no progress from the server and the way of a whip is
-  turned (the game does not say which is "the other way"), or the challenge is set aside.
+  the background; 6 minutes with no progress from the server and the line is set aside, as
+  is one that cannot be laid out from where the bike is or that no try rides 30 m along
+  in a minute (a 📍 line saved before its start was fixed stuck every try at 3 m). "Your
+  other way" is guessed until the server's stats say which way the player whips (it did
+  after the first few whips, all left); then it is learned again the other way. Measured
+  on the live account: Manual 100 m, Land 31 whips and the other way's whips were all
+  counted by the server as the simulation rode them.
   Tricks count on the trails only once the account has unlocked them, and tricks in the
   Training drills do not count for challenges; with tricks locked, the AI asks the player
   to open the Trick line drill and learns and rides that, but never presses the game's

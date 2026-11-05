@@ -68,9 +68,14 @@ Bấm **🏆 Làm thử thách của game** thì AI tự làm các thử thách 
 - **Thứ tự:** thử thách sắp hết hạn trước, cùng hạn thì cái nhiều XP trước. Thử thách xây đường (creator) và "chơi N ngày" thì AI bỏ qua, vì cái đó bạn tự làm.
 - **Chọn đoạn đường:** với mỗi thử thách, AI lấy bài học đã có của từng đường gần đó và đếm xem một lượt chạy theo bài đó làm được bao nhiêu phần của thử thách (với thử thách cộng dồn thì tính theo mỗi phút chạy). Đường làm được nhiều nhất thắng. Bằng nhau thì ưu tiên đường đã học, rồi đường nhiều cú nhảy hơn, rồi đường gần hơn. Thử thách "N cú đáp liên tiếp" thì bỏ qua đường có ít hơn N cú nhảy.
 - **Học riêng cho thử thách:** AI học một bản riêng của đường đó, với điểm chấm là chính thử thách (ví dụ "20 cú đáp sạch"), giống cách nó học bài Training. Khi mô phỏng đã làm được (hoặc đã có tiến độ, với thử thách cộng dồn), AI lái thật và vẫn học tiếp ở nền.
-- **Theo dõi:** AI xem tiến độ server báo. Có tiến độ thì báo bạn, xong thì sang thử thách kế. 6 phút không thêm được gì thì AI đổi cách (ví dụ đổi chiều whip, vì game không nói rõ chiều nào là "chiều kia") hoặc bỏ thử thách đó và sang cái khác.
+- **Theo dõi:** AI xem tiến độ server báo. Có tiến độ thì báo bạn, xong thì sang thử thách kế. 6 phút không thêm được gì thì AI bỏ đường đó và chọn đường khác. Đường không dò được từ chỗ đứng (game chưa tải hết), hoặc học 1 phút mà chưa lượt thử nào đi được 30 m, cũng bị bỏ ngay.
+- **Whip "chiều kia" (your other way):** lúc đầu game chưa biết bạn hay whip về phía nào, nên AI đoán. Sau vài cú whip, game ghi lại chiều của bạn, và AI học lại ngay để whip theo chiều ngược lại.
 - **Trick chưa mở khóa:** game chỉ đếm trick trên đường thật khi tài khoản đã mở khóa trick; trick làm trong Training không được tính cho thử thách. Nếu thử thách cần trick mà chưa mở khóa, AI nhờ bạn mở bài **Training → Trick line** rồi AI tự học và làm bài đó. Game có thể hiện nút **"Unlock tricks"**: AI không bao giờ bấm nút này, bạn tự quyết định.
 - **Đo trên tài khoản thử:** với một thử thách giả "đáp sạch 20 cú", AI chọn Trảng Sương 29 (bài học cũ đáp sạch 9 cú mỗi lượt), học bản riêng trong khoảng 2500 vòng tới 10/20 cú mỗi lượt trong mô phỏng, rồi tự lái thật. Bài Trick line thì AI mới làm được 4/5 trick (chưa đáp được cú 360).
+- **Đo trên thử thách thật** (sau khi mở khóa trick): server tính đúng những gì AI làm.
+  - "Manual 100 m in all": 0 lên xong trong vài lượt trên Bãi Sao 33, khoảng 30 m manual mỗi lượt.
+  - "Land 31 whips": 0 lên 31/31 trên Rừng Sương 91, 4 đến 6 whip mỗi lượt.
+  - "50 whips your other way": game ghi chiều của bạn là trái sau những cú whip đầu, AI chuyển sang whip phải, và server bắt đầu đếm (8/50 sau vài phút).
 
 ### Mượn kinh nghiệm giữa các đường
 

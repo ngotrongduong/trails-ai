@@ -3535,7 +3535,7 @@ onmessage=async e=>{const m=e.data;
       const id = baseId(o.s.id), m = lessonOf(`${id}~${aimKey(A)}`) || lessonOf(id), b = m && m.bestRun;
       const L = o.drill || routeCache.get(id) || savedLine(id) || (m && m.line) || null;
       const g = b ? aimGoal(A, { jl: b.jl || [], crashT: b.crash ? b.ticks : -1, manOk: (b.tricks && b.tricks.manual) || 0, manLong: 0, moving: (b.ticks || 0) / 60 }) : null;
-      return { o, got: g ? g.n : 0, sec: b ? (b.ticks || 0) / 60 + 5 : 0, jumps: L && L.kinds ? (L.kinds.takeoff || 0) : 0, learned: !!b };
+      return { o, got: g ? g.n : 0, sec: b ? (b.ticks || 0) / 60 + 5 : 0, jumps: L && L.kinds ? (L.kinds.takeoff || 0) : 0, learned: !!(b && b.prog >= 50) };
     }
     // The best line for aim A of the lines in the list (cands): a feat, the one whose ride gets most of it; a count, the
     // one that gets most of it a minute; then a learned one, then more jumps, then the nearest. A line with fewer jumps
@@ -3650,9 +3650,23 @@ onmessage=async e=>{const m=e.data;
       while (on() && Date.now() - t0 < learnFor) {
         const b = mine();
         if (b && b.goal && (goalMet(b) || (!p.unlock && !A.feat && b.goal.n > 0 && Date.now() - t0 > 45e3))) break;
+        // (learning stopped by itself: the line could not be laid out from here, the game has not loaded it all)
+        if (!learning && Date.now() - t0 > 5e3) break;
+        // (a line no try gets 30 m along in a minute: its start is bad, as a 📍 line saved before its start was fixed)
+        if (!p.unlock && b && b.prog < 30 && Date.now() - t0 > 60e3) break;
         await sleep(2000);
       }
       if (!on()) return;
+      if (!p.unlock && mine() && mine().prog < 30 && Date.now() - t0 > 60e3) {
+        log(`Đường <b>${esc(lineName(baseId(base.s.id)))}</b>: sau 1 phút học, chưa lượt thử nào đi được 30 m (${mine().prog} m, ${esc(mine().end || '')}): AI chọn đường khác.`);
+        chBad.add(`${c0.id}|${baseId(base.s.id)}`);
+        return;
+      }
+      if (!learning && learnFor && !mine()) {
+        log(`Không dò được đường <b>${esc(lineName(baseId(base.s.id)))}</b> từ chỗ này (game chưa tải hết): AI chọn đường khác.`);
+        chBad.add(p.unlock ? 'tricks|*' : `${c0.id}|${baseId(base.s.id)}`);
+        return;
+      }
       const b = mine();
       if (p.unlock && !ok(b)) log(`Trong mô phỏng AI chưa làm đủ Trick line (${b && b.goal ? b.goal.n : 0}/${b && b.goal ? b.goal.need : 5}, thường thiếu cú 360): AI vẫn lái thật để tập, và học tiếp ở nền.`);
       else if (learnFor && !ok(b)) {
@@ -3705,6 +3719,12 @@ onmessage=async e=>{const m=e.data;
         const c = chNow(c0.id);
         if (!c || c.done) { log(`<b>✓ Xong thử thách “${esc(ch.text)}”</b> (+${c0.xp} XP).`); say(`Xong “${ch.text}”! AI chuyển sang thử thách tiếp theo.`); return; }
         if (c.have > have) { have = c.have; tGain = Date.now(); say(`Thử thách “${ch.text}”: ${c.have}/${c.need}.`); }
+        // the game has just said which way you whip (after the first whips): "the other way" is now known
+        const side = A.guess && cap.levels && cap.levels.stats && cap.levels.stats.whipSide;
+        if (side) {
+          log(`Game giờ đã biết bạn hay whip về phía ${side === 'left' ? 'trái' : 'phải'}, nên “${esc(ch.text)}” là whip về phía <b>${side === 'left' ? 'phải' : 'trái'}</b>: AI học lại theo chiều đó.`);
+          return;
+        }
         // (the counts come with every run sent; ask now and then in case one was missed)
         if (Date.now() - asked > 120e3 && askLevels()) asked = Date.now();
         if (Date.now() - tGain > 6 * 60e3) {
