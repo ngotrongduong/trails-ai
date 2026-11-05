@@ -4059,7 +4059,30 @@ onmessage=async e=>{const m=e.data;
       await useLesson(m, 'cộng đồng trên GitHub', true);
     }, 10 * 60 * 1000);
 
+    // Learning away from the game (tools/cloud-learn.js, which a GitHub workflow runs): lesson raw is learned on for ms
+    // milliseconds on n threads, with the rider it was learned with. Gives back the lesson now, the ride it started
+    // from in this simulation, the best ride now and whether that beats it.
+    async function learnLesson(raw, ms, n) {
+      const m = readLesson(raw);
+      if (!m) throw new Error('not a lesson');
+      const su = m.setup || {};
+      live.tricks = num(su.tricks) ? su.tricks : 0; live.bike = su.bike || 0; live.tunes = { ...(su.tunes || {}) };
+      // the lesson is the line's memory here, so learning goes on from its plan
+      localStorage.setItem(STORE + m.line.start.id, JSON.stringify(m));
+      trainer.library = await gatherJumps();
+      trainer.brainW = null;
+      await trainer.prepare(m.line, n || workers);
+      const before = trainer.best, gen0 = trainer.gen;
+      const timer = setTimeout(() => trainer.stop(), ms);
+      try { await trainer.run(); } finally { clearTimeout(timer); }
+      const after = trainer.best, lesson = trainer.lesson();
+      trainer.pool.close();
+      const sum = r => r && { prog: r.prog, end: r.end, game: r.game, goal: r.goal || null, grades: (r.jl || []).map(e => e.g) };
+      return { lesson, before: sum(before), after: sum(after), improved: beats(after, before), sweeps: trainer.gen - gen0 };
+    }
+
     window.TrailsAI = {
+      learnLesson,
       open() { el.style.display = ''; },
       // the extension found a newer AI on GitHub and kept it for the next page load
       newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },

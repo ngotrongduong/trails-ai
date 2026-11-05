@@ -230,6 +230,20 @@ Chưa qua: **Trick line**. Cú nhảy thứ ba là cú nhảy xuống dốc (ste
 - **Nhiều máy mới thật sự nhanh hơn.** Bài học giỏi nhất của mỗi đường được chia sẻ trong thư mục [`lessons/`](lessons/). Khi bắt đầu học một đường, AI tự tải bài học cộng đồng, **chạy lại bằng vật lý trên máy mình** và chỉ dùng nếu nó thật sự giỏi hơn. Trong lúc học, cứ 10 phút AI lại xem có bài mới không.
 - Vì AI luôn tự kiểm tra lại, một bài học sai hay điểm khai gian không làm AI của ai tệ đi.
 
+### Học trên máy chủ GitHub (miễn phí)
+
+Ngoài máy của bạn, các bài học trong [`lessons/`](lessons/) còn được học tiếp trên máy chủ của GitHub, kể cả khi máy bạn tắt (workflow [`cloud-learn`](.github/workflows/cloud-learn.yml)).
+
+- **Cách làm:** mỗi ngày hai lần, GitHub chạy 4 máy cùng lúc, mỗi máy học tiếp một đường trong 40 phút, lần lượt hết các đường. Công cụ [`tools/cloud-learn.js`](tools/cloud-learn.js) mở AI trong một trình duyệt không có cửa sổ, với đúng vật lý của game. Bài nào đi xa hơn hoặc nhiều điểm hơn thì được lưu lại vào `lessons/`. AI trong game của bạn tự tải bài đó, chạy lại trên máy bạn, và chỉ dùng nếu nó thật sự giỏi hơn.
+- **Luật của game:** game không có điều khoản cấm. Việc học chỉ cần 5 file công khai của game: vật lý (WebAssembly) và địa hình, khoảng 8 MB. Mỗi máy tải chúng một lần như khi trình duyệt mở trang game. Không cần tài khoản, không kết nối máy chủ của game. Các file đó chỉ nằm trong thư mục tạm của máy chủ: không bao giờ được đưa vào repo hay tải lên đâu cả.
+- **Luật của GitHub:** Actions là để phát triển và kiểm thử dự án, và không được tạo tải nặng không tương xứng. Học bài cho thư mục `lessons/` của chính dự án này nằm trong phạm vi đó, nên workflow chỉ chạy ở mức vừa phải.
+- **Đường nào được học:** các đường có bài học trong `lessons/`. Muốn thêm đường, bấm **Chia sẻ GitHub** như ở phần Góp sức.
+- **Đo trên máy với 4 luồng** (bằng một máy chủ GitHub):
+  - đường `ra436prczm` từ 690 lên 840 điểm game trong 6 phút (2 vòng dò);
+  - đường dài `u45ttcre6s` (2237 m) cần 12 phút cho một vòng dò.
+
+  Mỗi máy chủ GitHub chỉ có 4 luồng, ít hơn máy 16 luồng của bạn, nên lợi ích chính là học thêm cả khi máy bạn tắt, và học nhiều đường cùng lúc.
+
 ## Góp sức
 
 - **Góp bài học:** bấm **Chia sẻ GitHub** trong bảng AI, kéo file vào trang vừa mở, bấm **Propose changes**. Xem [`lessons/README.md`](lessons/README.md).
@@ -253,6 +267,7 @@ brain/brain.json           bộ não chung của cộng đồng (mạng nơ-ron,
 tools/build.js             dựng dist/ và docs/
 tools/check-lessons.js     kiểm tra các file bài học và bộ não
 tools/gather-experience.js gom kinh nghiệm cú nhảy vào experience/
+tools/cloud-learn.js       học tiếp các bài học không cần mở game (workflow cloud-learn chạy trên GitHub)
 ```
 
 ## Quy tắc chơi đẹp

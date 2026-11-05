@@ -1,0 +1,103 @@
+# Learns the shared lessons in lessons/ further on GitHub's computers (tools/cloud-learn.js), a few lines a run,
+# and commits each lesson that rides better afterwards. The AI in the game takes a shared lesson only when it rides
+# better in the player's own simulation too.
+#
+# Kept modest on purpose (GitHub's runners are for building and testing projects, and the game's files are downloaded
+# once per job): 4 lines a run, 4 at once, 40 minutes each, twice a day. The game's files are only ever in the runner's
+# temporary folder: never committed, never uploaded.
+name: cloud-learn
+on:
+  schedule:
+    - cron: '23 2,14 * * *'
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: 'Minutes of learning per line'
+        default: '40'
+      lines:
+        description: 'Line ids to learn, separated by spaces (empty: the next few in turn)'
+        default: ''
+permissions:
+  contents: write
+concurrency:
+  group: cloud-learn
+  cancel-in-progress: false
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    outputs:
+      ids: ${{ steps.pick.outputs.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: pick
+        name: Lines for this run
+        env:
+          LINES: ${{ github.event.inputs.lines }}
+          RUN: ${{ github.run_number }}
+        run: |
+          node -e '
+            const fs = require("fs");
+            let ids = (process.env.LINES || "").split(/\s+/).filter(Boolean);
+            if (!ids.length) {
+              const all = fs.readdirSync("lessons").filter(f => f.endsWith(".json")).map(f => f.slice(0, -5)).sort();
+              const at = (+process.env.RUN * 4) % all.length;
+              ids = all.concat(all).slice(at, at + Math.min(4, all.length));
+            }
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, "ids=" + JSON.stringify(ids) + "\n");
+            console.log(ids);
+          '
+  learn:
+    needs: pick
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        id: ${{ fromJSON(needs.pick.outputs.ids) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Browser with no window
+        run: |
+          npm install --no-save playwright@1.50.1
+          npx playwright install --with-deps chromium
+      - name: Learn
+        run: node tools/cloud-learn.js --minutes "${{ github.event.inputs.minutes || '40' }}" "${{ matrix.id }}"
+      - name: Keep the lesson if it got better
+        id: got
+        run: |
+          if git diff --quiet -- "lessons/${{ matrix.id }}.json"; then echo "better=0" >> "$GITHUB_OUTPUT"; else echo "better=1" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.got.outputs.better == '1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lesson-${{ matrix.id }}
+          path: lessons/${{ matrix.id }}.json
+          retention-days: 3
+  commit:
+    needs: learn
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: lesson-*
+          path: got
+          merge-multiple: true
+      - name: Commit the better lessons
+        run: |
+          if [ ! -d got ] || [ -z "$(ls got)" ]; then echo "no lesson got better"; exit 0; fi
+          cp got/*.json lessons/
+          node tools/check-lessons.js
+          node tools/gather-experience.js
+          git add lessons experience
+          if git diff --cached --quiet; then echo "no change"; exit 0; fi
+          git -c user.name="github-actions[bot]" -c user.email="41898099+github-actions[bot]@users.noreply.github.com" commit -m "Lessons learned further on GitHub: $(ls got | sed 's/\.json$//' | tr '\n' ' ')"
+          for i in 1 2 3; do git pull --rebase -q && git push && exit 0; sleep 5; done
+          exit 1

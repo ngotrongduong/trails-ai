@@ -1,3 +1,6 @@
 node_modules/
+# the game's own files are never part of this repo
+*.wasm
+*.bin
 *.log
 .DS_Store

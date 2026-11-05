@@ -3343,7 +3343,25 @@ if (!m || sharedSeen.get(id) === m.savedAt) return;
 sharedSeen.set(id, m.savedAt);
 await useLesson(m, 'cộng đồng trên GitHub', true);
 }, 10 * 60 * 1000);
+async function learnLesson(raw, ms, n) {
+const m = readLesson(raw);
+if (!m) throw new Error('not a lesson');
+const su = m.setup || {};
+live.tricks = num(su.tricks) ? su.tricks : 0; live.bike = su.bike || 0; live.tunes = { ...(su.tunes || {}) };
+localStorage.setItem(STORE + m.line.start.id, JSON.stringify(m));
+trainer.library = await gatherJumps();
+trainer.brainW = null;
+await trainer.prepare(m.line, n || workers);
+const before = trainer.best, gen0 = trainer.gen;
+const timer = setTimeout(() => trainer.stop(), ms);
+try { await trainer.run(); } finally { clearTimeout(timer); }
+const after = trainer.best, lesson = trainer.lesson();
+trainer.pool.close();
+const sum = r => r && { prog: r.prog, end: r.end, game: r.game, goal: r.goal || null, grades: (r.jl || []).map(e => e.g) };
+return { lesson, before: sum(before), after: sum(after), improved: beats(after, before), sweeps: trainer.gen - gen0 };
+}
 window.TrailsAI = {
+learnLesson,
 open() { el.style.display = ''; },
 newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
 cap, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,

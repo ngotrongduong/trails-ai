@@ -102,6 +102,22 @@ This replaces all the v2 modes: the first sweep gets through the line, the next 
 make the landings and tricks better, and pumping and manuals are values of the sections
 like the rest.
 
+## Learning on GitHub's computers
+
+The shared lessons (lessons/) are learned on further by the workflow cloud-learn, twice a
+day: 4 lines a run, 4 runners at once, 40 minutes each, in turn through every lesson.
+tools/cloud-learn.js finds the game's physics (its WebAssembly) and the four terrain files
+from the game's home page and the scripts it loads, as a browser does, and downloads them
+into the runner's temporary folder (never into the repo: .gitignore keeps *.wasm and *.bin
+out too). A local page holds them under the same names, so the AI finds them among the
+files the page loaded as it does in the game, and runs as it does there, in Chromium with
+no window (Playwright), with window.__taiDirect set. TrailsAI.learnLesson takes the lesson
+as the line's memory, learns on from its plan for the minutes given on every thread of the
+runner, and gives back the lesson and whether its best ride now beats the one it started
+from (both ridden in this simulation). The lessons that got better are committed together
+by one last job, which also gathers the jumps (experience/). A player's AI takes a shared
+lesson only when it rides better in their own simulation too.
+
 ## Driving: on and on
 
 The rider follows the plan as before (steering, speed, the angle in the air, pumps,
