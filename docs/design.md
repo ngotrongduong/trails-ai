@@ -131,16 +131,28 @@ tricks). New:
   while the bike rides it, a better plan is taken on the way when it rides the part
   already passed the same way, and the ways on from it are looked for.
 - **No way on.** With none taken, the bike comes down from the last jump and, after half
-  a second on the ground, brakes to a stop; then it keeps the brakes on until the player
-  takes the bike back, and says whether it saw no line, or saw some that all fell in the
-  simulation. It brakes only going forwards, and hard only where it is level: braking
+  a second on the ground, brakes to a stop, says whether it saw no line or saw some that
+  all fell in the simulation, holds the brakes 3 s and rides the line again from its
+  start (as after a fall). Only the "Dừng AI lái" button ends driving; the player's keys
+  do not. It brakes only going forwards, and hard only where it is level: braking
   while it rolls back tips it over backwards. Two real rides flipped so, one held on the
   brakes on the way up a ramp, one braking gently rolling back at 4 m/s. The simulation
   rides every line's end the same way, and a ride counts as finished only once the bike
   has stopped where it is level and stayed up a second on the brakes. Before, it stopped
   counting at the line's end, and a lesson that "finished" crashed right after it in the
-  game (it pedalled on up the back of a landing, rolled back and fell). The ride goes on
-  until a fall, or until there is no way on.
+  game (it pedalled on up the back of a landing, rolled back and fell). A ride goes on
+  until a fall, or until there is no way on; then the next one starts.
+- **Stuck.** A bike nosed gently into a wall of earth does not fall: it stays there, the
+  wheel pushing on, for ever. A ride with no metre more along the line in 3 s (in the air
+  aside) is over, in the game (and ridden again from the start) as in the simulation
+  (before, 8 s there, and nothing in the game), so learning drops such tries at once and
+  counts them as falls. Past the end, a bike that never gets level (its nose up a wall)
+  counts as stopped after 7 s, as the simulation's 420 steps.
+- **The line where the player is (📍).** The piece nearest the player (within 20 m), the
+  way they face, starts a line of its own, saved with the lines found. It starts up to
+  40 m back along it so the bike has speed by there, never back over a jump; back to a
+  start hill, it starts on its deck, at the game's own start there. The first try went
+  back over a start hill and set the bike down behind it: every try stuck 3 m up its back.
 - **Later: correcting on the way.** If the real ride comes into a section much slower or
   faster than the plan expected, the rest of the line could be planned again from there
   (from a saved state made from the real bike's). Not done yet: the game and the
