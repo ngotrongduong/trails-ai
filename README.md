@@ -60,6 +60,18 @@ Ngoài các đường có sẵn trong danh sách, bạn có thể đạp xe tớ
 
 Mỗi lượt lái thật cũng là một lần kiểm tra mô phỏng: AI so chỗ ngã thật với chỗ mô phỏng dự đoán, và so bản đồ trong mô phỏng với những chi tiết game vừa tải dọc đường. Lệch là dấu hiệu đường đã bị sửa và AI cần dò lại đường.
 
+### Thử thách của game (🏆)
+
+Bấm **🏆 Làm thử thách của game** thì AI tự làm các thử thách ngày, tuần và sự kiện của game, cho tới khi xong hoặc bạn bấm nút lần nữa.
+
+- **Đọc thử thách:** AI hỏi server danh sách thử thách giống hệt lúc bạn mở trang Challenges của game (mỗi phút nhiều nhất một lần), và đọc luật của từng thử thách ngay trong file của game: đếm cái gì (cú đáp, cú đáp sạch, whip, 360, backflip, mét manual...), cần bao nhiêu, có phải trong một lượt hay cộng dồn. Sau mỗi lượt game tính, server gửi tiến độ mới và AI cập nhật theo.
+- **Thứ tự:** thử thách sắp hết hạn trước, cùng hạn thì cái nhiều XP trước. Thử thách xây đường (creator) và "chơi N ngày" thì AI bỏ qua, vì cái đó bạn tự làm.
+- **Chọn đoạn đường:** với mỗi thử thách, AI lấy bài học đã có của từng đường gần đó và đếm xem một lượt chạy theo bài đó làm được bao nhiêu phần của thử thách (với thử thách cộng dồn thì tính theo mỗi phút chạy). Đường làm được nhiều nhất thắng. Bằng nhau thì ưu tiên đường đã học, rồi đường nhiều cú nhảy hơn, rồi đường gần hơn. Thử thách "N cú đáp liên tiếp" thì bỏ qua đường có ít hơn N cú nhảy.
+- **Học riêng cho thử thách:** AI học một bản riêng của đường đó, với điểm chấm là chính thử thách (ví dụ "20 cú đáp sạch"), giống cách nó học bài Training. Khi mô phỏng đã làm được (hoặc đã có tiến độ, với thử thách cộng dồn), AI lái thật và vẫn học tiếp ở nền.
+- **Theo dõi:** AI xem tiến độ server báo. Có tiến độ thì báo bạn, xong thì sang thử thách kế. 6 phút không thêm được gì thì AI đổi cách (ví dụ đổi chiều whip, vì game không nói rõ chiều nào là "chiều kia") hoặc bỏ thử thách đó và sang cái khác.
+- **Trick chưa mở khóa:** game chỉ đếm trick trên đường thật khi tài khoản đã mở khóa trick; trick làm trong Training không được tính cho thử thách. Nếu thử thách cần trick mà chưa mở khóa, AI nhờ bạn mở bài **Training → Trick line** rồi AI tự học và làm bài đó. Game có thể hiện nút **"Unlock tricks"**: AI không bao giờ bấm nút này, bạn tự quyết định.
+- **Đo trên tài khoản thử:** với một thử thách giả "đáp sạch 20 cú", AI chọn Trảng Sương 29 (bài học cũ đáp sạch 9 cú mỗi lượt), học bản riêng trong khoảng 2500 vòng tới 10/20 cú mỗi lượt trong mô phỏng, rồi tự lái thật. Bài Trick line thì AI mới làm được 4/5 trick (chưa đáp được cú 360).
+
 ### Mượn kinh nghiệm giữa các đường
 
 Kế hoạch của AI gắn với từng đoạn của một đường, nên tự nó không dùng được ở đường khác. Vì vậy AI ghi lại **hình dạng** của mỗi cú nhảy nó đã vượt qua: góc mép nhảy, độ cao mép, mặt đất sau mép ở 3/6/9/12/16 m (khoảng hở và chỗ tiếp đất), độ dốc đoạn lấy đà. Kèm theo đó là cách đã dùng: tốc độ, góc xe khi bay, có nhấc xe hay pump không.
@@ -241,6 +253,7 @@ tools/gather-experience.js gom kinh nghiệm cú nhảy vào experience/
 - Không đưa file của game (WebAssembly, bản đồ, hình ảnh) vào repo. AI dùng đúng các file game đã tải trong trình duyệt của bạn.
 - Không đưa mật khẩu, token hay bất kỳ bí mật nào vào repo. Nút AI chỉ đọc từ GitHub, không bao giờ cần đăng nhập.
 - Khi AI lái thật, người chơi khác thấy xe bạn chạy như thường. Hãy chơi vui, đừng dùng AI để giành bảng xếp hạng hay làm phiền người khác.
+- AI chỉ gửi tới server những gì game của bạn vẫn gửi (ví dụ hỏi danh sách thử thách), và không bấm thay bạn những nút như "Unlock tricks" hay "Reset map".
 - Dự án không liên quan tới nhà phát triển Trails.
 
 ## English

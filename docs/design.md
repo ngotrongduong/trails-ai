@@ -153,6 +153,25 @@ tricks). New:
   40 m back along it so the bike has speed by there, never back over a jump; back to a
   start hill, it starts on its deck, at the game's own start there. The first try went
   back over a start hill and set the bike down behind it: every try stuck 3 m up its back.
+- **The game's challenges (🏆).** The client asks for `{t:'levels'}` as the game's
+  Challenges page does (at most once a minute) and reads the open challenges (day, week,
+  event: id, have, need, done) from the reply, and their progress from each `moved` the
+  server sends after a run it counts. Each challenge's rule (what it counts, how many, in
+  one run or added up) is read from the game's own scripts. Challenges about building
+  lines or days played are left to the player. The rest become an aim (landings, clean or
+  buttery landings, whips one way or the other, 360s, backflips, manual metres, a row of
+  landings each with a trick...), which the simulation counts the way the game does (a
+  landing after 0.5 s up, a whip from 45°, a 360 from 300°, a backflip from 270°, a
+  manual held 1 s). The line for it is the one nearby whose lesson does most of it in a ride (one added up:
+  most a minute), then one learned, then more jumps, then the nearest; a copy of
+  that line is learned with the aim as its goal, the way a drill is. Once the simulation
+  meets it (or, for one added up over runs, makes some), the bike rides it, learning on in
+  the background; 6 minutes with no progress from the server and the way of a whip is
+  turned (the game does not say which is "the other way"), or the challenge is set aside.
+  Tricks count on the trails only once the account has unlocked them, and tricks in the
+  Training drills do not count for challenges; with tricks locked, the AI asks the player
+  to open the Trick line drill and learns and rides that, but never presses the game's
+  "Unlock tricks".
 - **Later: correcting on the way.** If the real ride comes into a section much slower or
   faster than the plan expected, the rest of the line could be planned again from there
   (from a saved state made from the real bike's). Not done yet: the game and the

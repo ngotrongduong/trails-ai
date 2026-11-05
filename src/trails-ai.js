@@ -98,9 +98,12 @@
   const NAME_WHAT = ['Thông', 'Gió', 'Mây', 'Sương', 'Nắng', 'Trăng', 'Cát', 'Rêu', 'Sỏi', 'Lau', 'Tre', 'Đá', 'Hoa', 'Sao', 'Mưa', 'Sóc'];
   const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`);
   const givenNames = () => { try { return JSON.parse(localStorage.getItem(NAMES) || '{}') || {}; } catch { return {}; } };
+  // a line learned for a challenge of the game is the line's id, '~' and the challenge (see aimOf): its own lesson
+  const baseId = id => String(id).split('~')[0];
   function lineName(id) {
     const given = givenNames()[id];
     if (given) return given;
+    if (String(id).includes('~')) return `${lineName(baseId(id))} · thử thách`;
     const drill = /^practice-(\d+)-(\d+)$/.exec(id);
     if (drill) return `Đường tập ${drill[1]}${+drill[2] ? '-' + drill[2] : ''}`;
     const tr = /^training-(\w+)$/.exec(id);
@@ -158,7 +161,7 @@
   const riderSetup = () => ({ tricks: live.tricks === null ? 511 : live.tricks, bike: live.bike, tunes: { ...live.tunes } });
 
   // ---------------------------------------------------------------- capture
-  const cap = { chunks: new Map(), held: new Set(), starts: [], ws: null, pose: null, poseAt: 0 };
+  const cap = { chunks: new Map(), held: new Set(), starts: [], ws: null, pose: null, poseAt: 0, levels: null, levelsAt: 0, askedAt: 0 };
   const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
   const WRAPPED = Symbol('trailsai');
 
@@ -176,8 +179,100 @@
       for (const id of r.gone || []) m.delete(id);
       for (const s of r.put || []) m.set(s.id, s);
       cap.starts = [...m.values()];
+    } else if (r.t === 'levels') {
+      // the player's progress as the game's server keeps it, the challenges of the day, week and event among it
+      cap.levels = r; cap.levelsAt = Date.now();
+    } else if (r.t === 'moved' && cap.levels && cap.levels.challenges && Array.isArray(r.challenges)) {
+      // (what a run just counted towards them)
+      const list = cap.levels.challenges.list || [];
+      for (const c of r.challenges) {
+        const o = c && list.find(q => q.id === c.id);
+        if (o) Object.assign(o, { have: c.have, need: c.need === undefined ? o.need : c.need, done: !!(c.done || o.done) });
+      }
     }
   }
+  // Asks the server for the player's progress, as the game does when its Challenges page opens (at most once a minute).
+  function askLevels() {
+    const ws = cap.ws;
+    if (!ws || ws.readyState !== 1 || Date.now() - (cap.askedAt || 0) < 60e3) return false;
+    cap.askedAt = Date.now();
+    ws.send(JSON.stringify({ t: 'levels' }));
+    return true;
+  }
+
+  // ---------------------------------------------------------------- the game's challenges
+  // What each challenge asks for (its rule) is in the game's own code, by the id the server gives it (pool): read from
+  // there ({id:"d.tricks.manual100",...,rule:{count:"tricks.manual_m",need:100}}), so new ones are understood too.
+  const chDefs = {};
+  function objectAt(t, head) {
+    const i = t.indexOf(head);
+    if (i < 0) return null;
+    let depth = 0, j = i, q = false;
+    for (; j < t.length; j++) {
+      const c = t[j];
+      if (q) { if (c === '\\') j++; else if (c === '"') q = false; continue; }
+      if (c === '"') q = true; else if (c === '{') depth++; else if (c === '}' && --depth === 0) break;
+    }
+    try { return JSON.parse(t.slice(i, j + 1).replace(/([{,])([A-Za-z_$][\w$]*):/g, '$1"$2":').replace(/:!0\b/g, ':true').replace(/:!1\b/g, ':false')); } catch { return null; }
+  }
+  async function challengeDefs(pools) {
+    const miss = pools.filter(p => !(p in chDefs));
+    if (!miss.length) return chDefs;
+    const urls = [...new Set(performance.getEntriesByType('resource').map(e => e.name).filter(n => /^https:\/\/trailsthegame\.com\/assets\/[^/?]+\.js$/.test(n)))];
+    for (const u of urls) {
+      if (miss.every(p => chDefs[p])) break;
+      let t = '';
+      try { t = await (await fetch(u)).text(); } catch { continue; }
+      for (const p of miss) if (!chDefs[p]) { const d = objectAt(t, `{id:"${p}"`); if (d && d.rule) chDefs[p] = d; }
+    }
+    for (const p of miss) if (!chDefs[p]) chDefs[p] = null;
+    return chDefs;
+  }
+  // The unlock bits of the tricks (as the game's trails_set_tricks takes them, and its Training drills set them).
+  const TRICK_BIT = { whip: 1, spin: 2, flip: 4, manual: 8 };
+  const TRICK_WORD = { whip: 'whip', spin: '360', flip: 'backflip', manual: 'manual' };
+  // What the AI is to get for a challenge (aim, judged by aimGoal), from its rule and how much of it is left; or why
+  // it cannot (skip). kind: what is counted; mk: the moves to try (see movesFor); tricks: the tricks it needs; feat:
+  // it must come in one run (the game's run: until a fall or a restart). way: whips one way (1: right), for "your
+  // other way": the other of the side the game knows you whip (whipSide), else wayGuess (tried, and turned round when
+  // the game does not count it).
+  function aimOf(rule, left, stats, wayGuess) {
+    const r = rule || {}, f = r.feat && typeof r.feat === 'object' ? r.feat : null;
+    let count = typeof r.count === 'string' ? r.count : null, bike = null;
+    const b = count && /^bike\.([a-z0-9]+)\.(.+)$/.exec(count);
+    if (b) { bike = b[1]; count = b[2]; }
+    const need = Math.max(1, left);
+    let A = null;
+    if (count) {
+      if (/^creator\.|^builder\./.test(count)) return { skip: 'cần bạn tự làm (chia sẻ, đặt tên replay hay xây đường là việc của bạn)' };
+      if (count === 'og.days') return { skip: 'chỉ cần vào game đạp xe ở những ngày khác nhau, AI không làm nhanh hơn được' };
+      const side = r.way === 'other' ? (stats && stats.whipSide === 'right' ? -1 : stats && stats.whipSide === 'left' ? 1 : wayGuess || -1) : 0;
+      A = {
+        'og.moving_s': { kind: 'ride' }, 'og.jumps': { kind: 'landed' }, 'flow.landed': { kind: 'landed' },
+        'flow.clean': { kind: 'clean' }, 'flow.buttery': { kind: 'buttery' },
+        'tricks.whip': { kind: 'whip', mk: 'whip', tricks: ['whip'], way: side }, 'tricks.spin': { kind: 'spin', mk: 'spin', tricks: ['spin'] },
+        'tricks.flip': { kind: 'flip', mk: 'flip', tricks: ['flip'] }, 'tricks.manual_m': { kind: 'manual', mk: 'manual', tricks: ['manual'] },
+      }[count] || null;
+      if (A) A = { ...A, need, guess: r.way === 'other' && !(stats && stats.whipSide) };
+    } else if (f && f.in === 'manual') A = { kind: 'manual1', mk: 'manual', tricks: ['manual'], need: f.min || 1, feat: true };
+    else if (f && f.in === 'landing') A = { kind: f.trick || 'spin', mk: f.trick || 'spin', tricks: [f.trick || 'spin'], min: f.min, need: 1, feat: true };
+    else if (f && f.in === 'line') {
+      if (f.trick) A = { kind: f.trick, mk: f.trick, tricks: [f.trick], min: f.min, need: f.n || 1, feat: true };
+      else if (f.kinds) A = { kind: 'kinds', mk: 'tricks', tricks: ['whip', 'spin', 'flip'], any: f.kinds, need: f.kinds, feat: true };
+      else if (f.all) A = { kind: 'all', mk: 'tricks', all: f.all, tricks: f.all.slice(), need: f.all.length, feat: true };
+      else if (f.every) A = { kind: 'row', mk: f.every === 'any' ? 'tricks' : f.every, every: f.every === 'any' ? 'whip' : f.every, tricks: [f.every === 'any' ? 'whip' : f.every], need: f.landings || 1, feat: true };
+      else A = { kind: 'row', need: f.landings || 1, feat: true };
+    }
+    if (!A) return { skip: 'AI chưa hiểu thử thách này' };
+    if (bike) A.bike = bike;
+    return { aim: A };
+  }
+  // the tricks aim A needs that the setup (unlock bits) lacks
+  const tricksLacking = (A, mask) => {
+    const miss = (A.tricks || []).filter(k => !(mask & TRICK_BIT[k]));
+    return A.any ? ((A.tricks.length - miss.length) >= A.any ? [] : miss) : miss;
+  };
+  const aimKey = A => `${A.kind}${A.every || ''}${A.min || ''}${A.way ? (A.way > 0 ? 'R' : 'L') : ''}${A.feat ? A.need : ''}`;
   const wrap = fn => {
     if (!fn || fn[WRAPPED]) return fn;
     const w = function (ev) { try { take(ev.data); } catch { /* never break the game */ } return fn.call(this, ev); };
@@ -840,6 +935,31 @@
     if (tr & 4) p += 100;
     return { p: p * m, m, streak: run, tr, turn };
   }
+  // How much of what a challenge of the game asks for (A, see aimOf) one ride gets, counted as the game counts it: a
+  // landing counts once the bike has stayed up half a second after it (so none in the half second before a fall), a
+  // whip from 45° (w > 0: to the right), a 360 from 300°, a backflip from 270°, a manual held a second or more (its
+  // metres). x: the ride's landings (jl: grade g, whip wv, spin sv, flip fv, step t; older rides only the tricks tr),
+  // the step it fell at (crashT, -1), the metres of its manuals (manOk) and its longest (manLong), its seconds moving.
+  // n is per ride (a count adds up over rides, a feat must come in one), up to need.
+  function aimGoal(A, x) {
+    const L = (x.jl || []).filter(e => !(x.crashT >= 0 && typeof e.t === 'number' && e.t > x.crashT - 30));
+    const way = e => !A.way || (A.way > 0 ? e.wv > 0 : e.wv < 0);
+    const has = (e, k) => (e.wv === undefined ? !A.way && !!(e.tr & (k === 'whip' ? 4 : k === 'spin' ? 2 : 1))
+      : k === 'whip' ? Math.abs(e.wv) >= 45 && way(e) : k === 'spin' ? Math.abs(e.sv) >= Math.max(300, A.min || 0) : Math.abs(e.fv) >= Math.max(270, A.min || 0));
+    let n = 0;
+    if (A.kind === 'whip' || A.kind === 'spin' || A.kind === 'flip') n = L.filter(e => has(e, A.kind)).length;
+    else if (A.kind === 'row') {
+      if (A.every) { let r = 0; for (const e of L) { r = has(e, A.every) ? r + 1 : 0; n = Math.max(n, r); } } else n = L.length;
+    } else if (A.kind === 'kinds') n = ['whip', 'spin', 'flip'].filter(k => L.some(e => has(e, k))).length;
+    else if (A.kind === 'all') n = A.all.filter(k => L.some(e => has(e, k))).length;
+    else if (A.kind === 'manual') n = x.manOk || 0;
+    else if (A.kind === 'manual1') n = x.manLong || 0;
+    else if (A.kind === 'ride') n = x.moving || 0;
+    else if (A.kind === 'clean') n = L.filter(e => e.g === 1 || e.g === 2).length;
+    else if (A.kind === 'buttery') n = L.filter(e => e.g === 1).length;
+    else n = L.length;
+    return { n: +Math.min(A.need, n).toFixed(2), need: A.need };
+  }
   const GRADE_NAMES = ['', 'Buttery', 'Clean', 'Sketchy', 'Flat', 'Cased'];
   // landings counted by grade (c[grade]), in words
   const gradeCount = c => c.map((n, g) => (g && n ? `${n} ${GRADE_NAMES[g]}` : '')).filter(Boolean).join(', ') || 'chưa có cú nhảy nào';
@@ -1138,6 +1258,7 @@ const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
 ${gamePoints.toString()}
+${aimGoal.toString()}
 // Cut the line into sections: one ends at every takeoff lip, the others every 40 m.
 // A jump section also gets the jump's shape (f), so what was learned on a similar jump of another line can be borrowed:
 // lip angle, ramp height, the ground 3, 6, 9, 12 and 16 m past the lip (gap and landing) and the slope of the run-up.
@@ -1254,6 +1375,9 @@ function Ep(P,opt){
   const E={P,N,until:opt.until||1e9,t:0,idx:0,prog:0,pts:0,seq:s[16],stall:0,crash:0,end:'hết giờ',done:null,
     maxT:Math.min(120000,Math.round(N/2.5*60)+600),vr:new Float32Array(N),tricks:{},pending:null,manualM:0,landT:-1e9,jumps:0,landAt:-1,lastJ:-1,
     progAt:0,progT:0,jl:[],game:0,streak:0,airP:0,tail:-1,calm:0,halt:0,held:-1,vTail:0,manRun:0,manBest:0,push:null,goodPumps:0,pumpGain:0,seenPump:c0?c0[0]:0,
+    // (for a challenge, see aimGoal: the step of the fall, the manual going on now (steps, metres), the metres of
+    // the manuals held a second or more and the longest, steps moving)
+    crashT:-1,mc:0,mm:0,manOk:0,manLong:0,mov:0,
     tr:opt.rec?[]:null,ev:opt.rec?[]:null};
   E.rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
   return E;
@@ -1301,7 +1425,9 @@ function go(E,stop){
     if(rec&&t%2===0){const j=Math.min(N-2,idx),dx=R.X[j+1]-R.X[j],dz=R.Z[j+1]-R.Z[j];
       const f=clamp(((s[0]-R.X[j])*dx+(s[2]-R.Z[j])*dz)/(dx*dx+dz*dz||1),-0.5,1.5);
       E.tr.push(+(j+f).toFixed(2),+s[1].toFixed(2),+s[4].toFixed(3),s[12]>0?1:0,+Math.abs(s[8]).toFixed(1))}
-    if(s[13]>0){E.crash=s[13];E.end='ngã';E.pts-=25;E.pending=null;if(rec)E.ev.push({t,crash:E.crash});return fin(E,s)}
+    if(s[13]>0){E.crash=s[13];E.crashT=t;E.end='ngã';E.pts-=25;E.pending=null;if(rec)E.ev.push({t,crash:E.crash});return fin(E,s)}
+    if(s[46]>0){E.mc++;E.mm+=Math.abs(s[8])/60}else{if(E.mc>=60){E.manOk+=E.mm;E.manLong=Math.max(E.manLong,E.mm)}E.mc=0;E.mm=0}
+    if(Math.abs(s[8])>1)E.mov++;
     if(s[12]>0)E.airP=s[4];
     if(s[16]!==E.seq){E.seq=s[16];
       const got={};const fl=Math.abs(s[44]||0),spn=Math.abs(s[43]||0),wh=Math.abs(s[41]||0),tb=s[56]||0;
@@ -1320,7 +1446,8 @@ function go(E,stop){
         // (the wheels about half a metre either side of the bike; a metre to spare at the knuckle: real rides came down
         // up to a metre shorter than the simulation's, 0.3 m at the bottom)
         const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7),P=rider.P;
-        E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0});
+        E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
+          t,wv:Math.round(s[41]||0),sv:Math.round(s[43]||0),fv:Math.round(s[44]||0)});
         if(rec)E.ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
     }
     const pd=E.pending;
@@ -1345,7 +1472,9 @@ function summary(E,s,final){
   // the mean speed along the line (m/s)
   const vEnd=E.tail>=0?E.vTail:+Math.abs(s[8]).toFixed(2),vAvg=+(prog/Math.max(1,t)*60).toFixed(2);
   const res={fit:prog+E.pts+pace,prog,pts:Math.round(E.pts),crash:E.crash,end:final?E.end:'đang đi',tricks,ticks:t,sec,crashSec,jumps:E.jumps,game:E.game,streak:E.streak,jl:E.jl.slice(),vEnd,vAvg,goodPumps:E.goodPumps,pumpGain:+E.pumpGain.toFixed(2)};
-  if(R.drill)res.goal=drillGoal(R.drill,final?E.end:'về đích',Math.abs(s[8]),E.jl,E.manBest,E.goodPumps,R.lands&&R.drill.kind==='clean'?R.lands.length:0);
+  // (a challenge of the game, R.aim, comes before what the drill it is done on asks for)
+  if(R.aim){const on=E.mc>=60?E.mm:0;res.goal=aimGoal(R.aim,{jl:E.jl,crashT:E.crashT,manOk:E.manOk+on,manLong:Math.max(E.manLong,on),moving:E.mov/60})}
+  else if(R.drill)res.goal=drillGoal(R.drill,final?E.end:'về đích',Math.abs(s[8]),E.jl,E.manBest,E.goodPumps,R.lands&&R.drill.kind==='clean'?R.lands.length:0);
   return res;
 }
 function fin(E,s){
@@ -1914,7 +2043,8 @@ onmessage=async e=>{const m=e.data;
     load() {
       let mine = null;
       // (temp: a line found while driving, learned for that ride only)
-      try { mine = this.temp ? null : JSON.parse(localStorage.getItem(this.key()) || 'null'); } catch { mine = null; }
+      // (a line learned for a challenge starts from the line's own lesson)
+      try { mine = this.temp ? null : JSON.parse(localStorage.getItem(this.key()) || (this.route.aim && localStorage.getItem(STORE + baseId(this.route.start.id))) || 'null'); } catch { mine = null; }
       this.kept = 0;
       const plan = this.planOf(mine), ok = !!plan;
       this.plan = ok ? clonePlan(plan) : freshPlan(this.secs);
@@ -1935,6 +2065,7 @@ onmessage=async e=>{const m=e.data;
       if (practice) Object.assign(line, { land, practice });
       // (and where its landings are, which its goal is judged by: see drillGoal)
       if (drill) { line.drill = drill; if (lands) line.lands = lands; }
+      if (this.route.aim) line.aim = this.route.aim;
       return { format: LESSON_FORMAT, version: 1, plan: this.plan, gen: this.gen, hist: this.hist.slice(-400), found: this.found, bestRun: this.best, sim: simId(), route: start, line, setup: this.setup, jumps: this.jumpRecord(), savedAt: Date.now() };
     }
     // What the jumps this line's best ride got over teach other lines: each jump's shape and the plan used on it.
@@ -2050,7 +2181,8 @@ onmessage=async e=>{const m=e.data;
     // The moves a try may throw off jump section k: a trick drill's own, else the trick book's for this much air when
     // the account has tricks; none (the plan's move kept, or none) without.
     movesFor(k, n) {
-      const D = this.route.drill, only = D && DRILL_MOVES[D.kind];
+      // (a challenge's moves: mk, see aimOf)
+      const D = this.route.aim || this.route.drill, only = D && DRILL_MOVES[D.mk || D.kind];
       if (only) return Array.from({ length: n }, () => only[Math.floor(Math.random() * only.length)]);
       const air = this.airOf(k);
       return this.setup.tricks && air ? bookMoves(this.book, air, n) : null;
@@ -2058,7 +2190,7 @@ onmessage=async e=>{const m=e.data;
     // Section k of base changed about as much as wide says: its speed (one, or by parts), the angle held in the air,
     // the pull, the pump, the move off a jump and its timing, a manual on the flat (on a drill that asks for one).
     secTry(base, k, wide, move) {
-      const s = this.secs[k], p = clonePlan(base), D = this.route.drill;
+      const s = this.secs[k], p = clonePlan(base), D = this.route.aim || this.route.drill, dk = D && (D.mk || D.kind);
       if (!p.vs) p.vs = p.v.map(() => null);
       const sd = 1.0 * wide, u = p.vs[k];
       if (u && u.length) {
@@ -2078,7 +2210,7 @@ onmessage=async e=>{const m=e.data;
         if (move === FLIP && Math.random() < 0.5) p.pl[k] = 1 + Math.floor(Math.random() * 5);
       }
       if (s.jump && (p.mv[k] | 0) && Math.random() < 0.6) p.hr[k] = +clamp(p.hr[k] + gauss() * 0.5 * wide, 0.3, 2.8).toFixed(2);
-      if (!s.jump && D && (D.kind === 'manual' || D.kind === 'tricks') && Math.random() < 0.3) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
+      if (!s.jump && (dk === 'manual' || dk === 'tricks') && Math.random() < 0.3) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
       return p;
     }
     // Section k drawn anew, whatever the plan had: speeds anywhere from 3 to 18 m/s (often by parts), any angle in the
@@ -2614,6 +2746,7 @@ onmessage=async e=>{const m=e.data;
       <div class="st">Đang chuẩn bị…</div>
       <div class="row pk"><select class="pick"><option>Đang tìm đường gần bạn…</option></select><button class="b g here" title="Đường chỗ tôi đứng: thêm con đường dưới bánh xe, từ chỗ này, theo hướng tôi đang quay mặt">📍</button><button class="b g rename" title="Đặt tên cho đường này">✎</button><button class="b g refresh" title="Tìm lại đường gần tôi">↻</button></div>
       <div class="row big"><button class="b learn" disabled>Học lái</button><button class="b drive" disabled>AI lái</button></div>
+      <div class="row"><button class="b g chal" title="AI đọc các thử thách đang mở trong game (Challenges), chọn đường hợp nhất cho từng cái, học rồi lái cho tới khi game tính xong">🏆 Làm thử thách của game</button></div>
       <div class="kv">
         <span>Đang làm</span><b class="k-now">–</b>
         <span>Đường này</span><b class="k-line">chưa học</b>
@@ -2877,7 +3010,9 @@ onmessage=async e=>{const m=e.data;
           // the line comes from this browser's memory, else from the community repo, else from the pieces the game has loaded
           const shared = await communityLesson(o.s.id);
           // a Training drill is read from the game as it is now
-          let route = o.drill || routeCache.get(o.s.id) || savedLine(o.s.id);
+          // (a line learned for a challenge is the line, under its own id, with the challenge: aim)
+          const bid = baseId(o.s.id);
+          let route = o.drill || routeCache.get(o.s.id) || savedLine(o.s.id) || routeCache.get(bid) || savedLine(bid);
           if (route && lineStale(route)) { log('Đường này đã được sửa trong game từ lần học trước, AI dò lại đường.'); route = null; }
           if (!route && shared && !lineStale(shared.line)) { route = shared.line; log('Lấy bản đồ đường này từ bài học cộng đồng trên GitHub.'); }
           if (!route) route = await buildRoute(o.s, undefined, undefined, o.s.back);
@@ -2885,6 +3020,7 @@ onmessage=async e=>{const m=e.data;
           // learned as a tour, with the lines that go on from its end
           const len0 = route.tour === undefined ? route.length : 0;
           route = await extendRoute(route);
+          if (o.s.aim) route = { ...route, start: { ...route.start, id: o.s.id }, aim: o.s.aim };
           routeCache.set(o.s.id, route);
           if (len0 && route.tour) log(`Nối thêm <b>${route.tour} đường đi tiếp</b> sau đường này (${len0} m thành ${route.length} m): AI học cả tuyến, để lúc lái thật nó đi tiếp bằng bài học.`);
           say(`Đường dài ${route.length} m, ${route.pieces.length} chi tiết. Đang nạp vật lý vào ${workers} luồng (có thể mất vài chục giây)…`);
@@ -3245,8 +3381,9 @@ onmessage=async e=>{const m=e.data;
       }
     }
     function driveButton() {
-      // (the only way the AI stops driving for good, also while it holds the brakes before riding again)
-      if (live.drive || looping) { stopDrive('bạn đã dừng AI', true); return; }
+      // (the only way the AI stops driving for good, also while it holds the brakes before riding again; it ends the
+      // challenges too)
+      if (live.drive || looping) { if (chOn) chStop(); stopDrive('bạn đã dừng AI', true); return; }
       looping = true; ridden = false; driveLabel(true);
       aiDrive();
     }
@@ -3358,9 +3495,226 @@ onmessage=async e=>{const m=e.data;
         cant('Lỗi: ' + (err && err.message || err)); console.error(err);
       } finally { starting = false; }
       if (!go || !looping) return;
-      if (o.drill && !(await drillsNow()).some(r => r.start.id === o.s.id)) return cant(`Hãy mở bài “${DRILL_GOALS[o.drill.drill.goal].name}” trong Training (bấm Ride) rồi bấm “AI lái”.`);
+      if (o.drill && !(await drillsNow()).some(r => r.start.id === baseId(o.s.id))) return cant(`Hãy mở bài “${DRILL_GOALS[o.drill.drill.goal].name}” trong Training (bấm Ride) rồi bấm “AI lái”.`);
       if (!styles) await getUp(!!o.drill);
       go();
+    }
+    // ---- "🏆": the game's challenges (Challenges page: of the day, the week, an event), one after another until the
+    // game counts each done. For each, what it asks for (aimOf) is judged in the simulation as the game counts it
+    // (aimGoal); the line around you that gets most of it (or, for one that must come in one run, all of it) is
+    // learned for it (a lesson of its own, starting from the line's), then driven over and over, learning on, until the
+    // server says it is done. A challenge with tricks the account has not unlocked on the trails waits for them: the
+    // AI rides the Training's Trick line (the four tricks in one run unlock them), as tricks done in Training are not
+    // counted for challenges. Those the AI cannot do (share a replay, ride on other days) are left to you. Stopped by
+    // 🏆 or by "Dừng AI lái".
+    let chOn = false, chRun = 0, chWay = -1;
+    // (a challenge and line that did not work: not chosen again this time)
+    const chBad = new Set();
+    const sleep = ms => new Promise(r => setTimeout(r, ms));
+    const chLabel = () => { const b = $('.chal'); if (b) { b.textContent = chOn ? 'Dừng làm thử thách' : '🏆 Làm thử thách của game'; b.classList.toggle('on', chOn); } };
+    function chStop(why) {
+      if (!chOn) return;
+      chOn = false; chRun++; chLabel();
+      if (why) say(why);
+    }
+    const lessonOf = id => { try { return JSON.parse(localStorage.getItem(STORE + id) || 'null'); } catch { return null; } };
+    const PERIOD_WORD = { day: 'hôm nay', week: 'tuần này', event: 'sự kiện' };
+    // the challenges not done yet, soonest to end first, with what each asks for
+    async function chList() {
+      const L = cap.levels && cap.levels.challenges;
+      if (!L || !Array.isArray(L.list)) return [];
+      const defs = await challengeDefs(L.list.map(c => c.pool));
+      const ends = c => (c.period === 'day' ? L.dayEnds : c.period === 'week' ? L.weekEnds : (L.event && L.event.ends) || Infinity);
+      return L.list.filter(c => !c.done && ends(c) > Date.now()).map(c => {
+        const d = defs[c.pool];
+        return { c, text: d ? d.text : c.pool, ...(d ? aimOf(d.rule, c.need - c.have, cap.levels.stats, chWay) : { skip: 'AI chưa hiểu thử thách này' }), ends: ends(c) };
+      }).sort((a, b) => a.ends - b.ends || b.c.xp - a.c.xp);
+    }
+    // How a line would do for aim A, from what its lessons' best rides got (the challenge's own lesson, else the line's)
+    function chScore(A, o) {
+      const id = baseId(o.s.id), m = lessonOf(`${id}~${aimKey(A)}`) || lessonOf(id), b = m && m.bestRun;
+      const L = o.drill || routeCache.get(id) || savedLine(id) || (m && m.line) || null;
+      const g = b ? aimGoal(A, { jl: b.jl || [], crashT: b.crash ? b.ticks : -1, manOk: (b.tricks && b.tricks.manual) || 0, manLong: 0, moving: (b.ticks || 0) / 60 }) : null;
+      return { o, got: g ? g.n : 0, sec: b ? (b.ticks || 0) / 60 + 5 : 0, jumps: L && L.kinds ? (L.kinds.takeoff || 0) : 0, learned: !!b };
+    }
+    // The best line for aim A of the lines in the list (cands): a feat, the one whose ride gets most of it; a count, the
+    // one that gets most of it a minute; then a learned one, then more jumps, then the nearest. A line with fewer jumps
+    // than landings in a row asked for is left out.
+    function chPickLine(c, A, cands) {
+      const S = cands.map(o => chScore(A, o)).filter(x => !chBad.has(`${c.id}|${baseId(x.o.s.id)}`) && !(A.kind === 'row' && x.jumps && x.jumps < A.need));
+      const rate = x => (A.feat ? Math.min(x.got, A.need) : x.got / Math.max(1, x.sec));
+      S.sort((a, b) => rate(b) - rate(a) || (b.learned - a.learned) || (b.jumps - a.jumps) || (a.o.d - b.o.d));
+      return S[0] || null;
+    }
+    // The tricks unlocked on the trails (in a Training drill the game gives the drill's own instead): kept from the
+    // last time the bike was on the trails.
+    const WORLD_TRICKS = 'trailsai.worldtricks';
+    const worldTricks = v => {
+      try { if (v !== undefined) localStorage.setItem(WORLD_TRICKS, String(v)); return +(localStorage.getItem(WORLD_TRICKS) || 0) || 0; } catch { return v || 0; }
+    };
+    // the game's "Back to riding" (from Training to the trails), as you would press it
+    function backToRiding() {
+      const b = [...document.querySelectorAll('button')].find(e => /^Back to riding/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width > 0);
+      if (b) b.click();
+      return !!b;
+    }
+    // What to do next: { ch, A, o } to learn and drive (unlock: the Trick line, as the drill asks, to unlock the
+    // tricks), { wait } for you, or null when there is nothing the AI can do. A challenge with tricks not unlocked on
+    // the trails is done in Training: first the Trick line (the four tricks in one run unlock them on the trails for
+    // good), else that trick's own drill, if it is open.
+    async function chPlan() {
+      const list = await chList(), ds = await drillsNow(), training = ds.length > 0;
+      const world = training ? worldTricks() : worldTricks(live.tricks || 0);
+      for (const ch of list) {
+        if (ch.skip) continue;
+        const A = ch.aim;
+        if (chBad.has(`${ch.c.id}|*`)) continue;
+        const lack = tricksLacking(A, world);
+        if (!lack.length) {
+          if (training) return { ch, back: true };
+          const cands = choices.filter(o => !String(o.s.id).includes('~') && !o.drill);
+          const got = chPickLine(ch.c, A, cands);
+          if (got) return { ch, A, o: got.o, score: got };
+          continue;
+        }
+        // (a trick done in a Training drill is not counted for a challenge: the game sent nothing for it)
+        const tl = ds.find(r => r.drill && r.drill.goal === 'tricks');
+        if (tl && !chBad.has('tricks|*')) return { ch, A, o: { s: tl.start, d: 0, drill: tl }, unlock: true };
+        return { ch, wait: `“${ch.text}” cần ${lack.map(k => TRICK_WORD[k]).join(', ')}, mà tài khoản của bạn chưa mở khóa trick ngoài đường. Hãy mở <b>Training → Trick line</b> và bấm Ride it, rồi Ride: AI làm bài này (backflip, 360, whip rồi manual trong một lượt) để game mở khóa trick, rồi tự làm thử thách ngoài đường.` };
+      }
+      return null;
+    }
+    // the challenge as the server last told it
+    const chNow = id => ((cap.levels && cap.levels.challenges && cap.levels.challenges.list) || []).find(q => q.id === id);
+    async function challengeButton() {
+      if (chOn) { chStop('Đã dừng làm thử thách. AI vẫn học/lái nếu đang bật; bấm “Dừng AI lái” để lấy lại tay lái.'); return; }
+      if (!live.ex || !live.g) { say('AI chưa gắn được vào game. Hãy tải lại trang game rồi bấm nút AI lại.'); return; }
+      chOn = true; chLabel(); chBad.clear();
+      const my = ++chRun;
+      try { await chLoop(my); } catch (err) { console.error(err); say('Lỗi: ' + (err && err.message || err)); }
+      if (my === chRun) chStop();
+    }
+    async function chLoop(my) {
+      const on = () => chOn && my === chRun;
+      say('Đang đọc thử thách của bạn từ game…');
+      if (!cap.levels || Date.now() - cap.levelsAt > 60e3) {
+        askLevels();
+        for (let i = 0; i < 20 && on() && !(cap.levels && Date.now() - cap.levelsAt < 60e3); i++) await sleep(500);
+      }
+      if (!cap.levels) { say('Chưa đọc được thử thách từ game. Hãy mở trang Challenges trong game một lần rồi bấm 🏆 lại.'); return; }
+      if (!choices.some(o => !o.drill)) await findTracks();
+      const list = await chList();
+      if (!list.length) { say('Bạn đã làm xong mọi thử thách đang mở 🎉'); return; }
+      log(`<b>Thử thách đang mở (${list.length}):</b> ${list.map(x => `${esc(x.text)} (${x.c.have}/${x.c.need}, ${PERIOD_WORD[x.c.period] || x.c.period})${x.skip ? ` · ${x.skip}` : tricksLacking(x.aim, live.tricks || 0).length ? ' · chưa mở khóa trick, làm trong Training' : ''}`).join(' · ')}`);
+      let waitSaid = '';
+      while (on()) {
+        const p = await chPlan();
+        if (!on()) return;
+        if (!p) { say('Không còn thử thách nào AI tự làm được lúc này (những cái còn lại cần bạn tự làm, xem nhật ký).'); return; }
+        if (p.wait) {
+          if (waitSaid !== p.wait) { say(p.wait.replace(/<[^>]+>/g, '')); log(p.wait); waitSaid = p.wait; }
+          // (the drill opened in the game turns up in drillsNow)
+          await sleep(3000); continue;
+        }
+        waitSaid = '';
+        if (p.back) {
+          // in Training, with the tricks unlocked on the trails: back to them, and the lines around
+          if (live.drive || looping) stopDrive('quay lại đường', true);
+          log('Trick đã mở khóa ngoài đường: AI bấm “Back to riding” để làm thử thách trên đường thật.');
+          if (!backToRiding()) { say('Hãy bấm “Back to riding” trong game để AI làm thử thách trên đường thật.'); await sleep(3000); continue; }
+          await sleep(4000);
+          await findTracks();
+          continue;
+        }
+        await chDo(p, on);
+      }
+    }
+    // One challenge on one line: learn it there, drive it until the server counts it done; a line that does not get
+    // it (in the simulation within 3 minutes, or in the game within 6 minutes of driving) is left for another.
+    async function chDo(p, on) {
+      const { ch, A } = p, c0 = ch.c, plain = A.kind === 'ride' || !!p.unlock;
+      const base = p.o, id = plain ? base.s.id : `${baseId(base.s.id)}~${aimKey(A)}`;
+      const o = plain ? base : { s: { ...base.s, id, aim: A }, d: base.d };
+      if (base.drill && !plain) o.drill = { ...base.drill, start: { ...base.drill.start, id }, aim: A };
+      if (p.unlock) log(`<b>Trick line</b>: để làm “${esc(ch.text)}” ngoài đường, AI làm bài này trước (backflip, 360, whip rồi manual, cả bốn trong một lượt không ngã) để game mở khóa trick cho tài khoản.`);
+      else log(`<b>Thử thách “${esc(ch.text)}”</b> (${c0.have}/${c0.need}): AI chọn ${base.drill ? 'bài tập Training đang mở' : `đường <b>${esc(lineName(baseId(base.s.id)))}</b> (cách ${Math.round(base.d)} m${p.score && p.score.got ? `, bài học cũ ở đó đã được ${p.score.got} mỗi lượt` : ''})`}${A.way ? `, whip về phía ${A.way > 0 ? 'phải' : 'trái'}` : ''}.`);
+      // the line in the list, chosen
+      choices = [o].concat(choices.filter(q => q.s.id !== id));
+      listLines(); $('.pick').value = '0'; $('.learn').disabled = $('.drive').disabled = false; showLine();
+      // driving another line: off it first
+      if ((live.drive || looping) && !(live.drive && live.drive.route && live.drive.route.start && live.drive.route.start.id === id)) stopDrive('chuyển sang thử thách mới', true);
+      if (!learning) await learnButton(); else lineChanged();
+      // learn until the simulation gets it (a feat or the Trick line: all of it, a count: some of it, after 45 s at least)
+      const t0 = Date.now(), mine = () => trainer.route && trainer.route.start.id === id ? trainer.best : null;
+      const learnFor = A.kind === 'ride' ? 0 : p.unlock ? 300e3 : 180e3, ok = b => !!(b && b.goal && (p.unlock ? goalMet(b) : b.goal.n > 0));
+      while (on() && Date.now() - t0 < learnFor) {
+        const b = mine();
+        if (b && b.goal && (goalMet(b) || (!p.unlock && !A.feat && b.goal.n > 0 && Date.now() - t0 > 45e3))) break;
+        await sleep(2000);
+      }
+      if (!on()) return;
+      const b = mine();
+      if (p.unlock && !ok(b)) log(`Trong mô phỏng AI chưa làm đủ Trick line (${b && b.goal ? b.goal.n : 0}/${b && b.goal ? b.goal.need : 5}, thường thiếu cú 360): AI vẫn lái thật để tập, và học tiếp ở nền.`);
+      else if (learnFor && !ok(b)) {
+        log(`Sau ${Math.round(learnFor / 60e3)} phút trong mô phỏng, ${p.unlock ? 'AI chưa làm được Trick line' : `đường này chưa làm được “${esc(ch.text)}” (${b && b.goal ? b.goal.n : 0}/${A.need})`}: AI thử cách khác.`);
+        chBad.add(p.unlock ? 'tricks|*' : `${c0.id}|${baseId(base.s.id)}`);
+        if (base.drill && !p.unlock) chBad.add(`${c0.id}|*`);
+        return;
+      }
+      if (p.unlock && ok(b)) log('Trong mô phỏng AI đã làm được Trick line: AI làm bài thật, vẫn học tiếp ở nền.');
+      else if (learnFor) log(`Trong mô phỏng mỗi lượt được <b>${b.goal.n}/${A.need}</b>${A.feat ? '' : ' (cộng dồn qua các lượt)'}: AI lái thật, vẫn học tiếp ở nền.`);
+      if (!looping) driveButton();
+      if (p.unlock) {
+        // until the game takes the Trick line as done (it moves on from it), then back to the trails. After some goes
+        // the game offers to unlock the tricks at once ("Unlock tricks" / "Keep going"): that is yours to choose, the AI
+        // presses neither and says so (tricks done in Training are not counted for challenges: only on the trails).
+        let tU = Date.now(), told = false;
+        while (on()) {
+          await sleep(4000);
+          const offer = [...document.querySelectorAll('button')].some(e => /^Unlock tricks$/.test((e.innerText || '').trim()) && e.getBoundingClientRect().width > 0);
+          if (offer) {
+            tU = Date.now();
+            if (!told) {
+              told = true;
+              const m = 'Game đề nghị mở khóa trick ngay (nút “Unlock tricks”) hoặc tập tiếp (“Keep going”). Đây là lựa chọn của bạn, AI không tự bấm. Bấm <b>Unlock tricks</b> để AI làm ngay các thử thách trick ngoài đường (trick làm trong Training không được tính cho thử thách); bấm <b>Keep going</b> để AI tập tiếp cho tới khi tự làm được cả bốn trick.';
+              say(m.replace(/<[^>]+>/g, '')); log(m);
+            }
+            continue;
+          }
+          told = false;
+          if (!looping) { chStop(); return; }
+          if (!(await drillsNow()).some(r => r.drill && r.drill.goal === 'tricks')) {
+            log('<b>✓ Xong Trick line</b>: game đã chuyển khỏi bài này, trick được mở khóa ngoài đường. AI quay lại đường thật để làm thử thách.');
+            stopDrive('xong Trick line', true);
+            if (learning) await learnButton();
+            await sleep(2000);
+            backToRiding();
+            await sleep(4000);
+            await findTracks();
+            return;
+          }
+          if (Date.now() - tU > 20 * 60e3) { log('Lái Trick line 20 phút chưa xong: AI dừng cách này.'); chBad.add('tricks|*'); stopDrive('chưa xong Trick line', true); return; }
+        }
+        return;
+      }
+      // drive until the server counts it done
+      let have = (chNow(c0.id) || c0).have, tGain = Date.now(), asked = Date.now();
+      while (on()) {
+        await sleep(4000);
+        if (!looping) { chStop(); return; }
+        const c = chNow(c0.id);
+        if (!c || c.done) { log(`<b>✓ Xong thử thách “${esc(ch.text)}”</b> (+${c0.xp} XP).`); say(`Xong “${ch.text}”! AI chuyển sang thử thách tiếp theo.`); return; }
+        if (c.have > have) { have = c.have; tGain = Date.now(); say(`Thử thách “${ch.text}”: ${c.have}/${c.need}.`); }
+        // (the counts come with every run sent; ask now and then in case one was missed)
+        if (Date.now() - asked > 120e3 && askLevels()) asked = Date.now();
+        if (Date.now() - tGain > 6 * 60e3) {
+          log(`Lái 6 phút mà game chưa tính thêm cho “${esc(ch.text)}”${base.drill ? ' (có thể game không tính trick làm trong Training cho thử thách này)' : ''}: AI thử cách khác.`);
+          // "your other way" not known to the game yet: the whips go the other way round next
+          if (A.guess) chWay = -chWay;
+          else { chBad.add(`${c0.id}|${baseId(base.s.id)}`); if (base.drill) chBad.add(`${c0.id}|*`); }
+          return;
+        }
+      }
     }
     // Past the end of the line (and of its tour, see extendRoute) the AI rides on, for as long as it sees a way on.
     // While the bike rides a line, every 2 s it looks for the ways on (onwardChoices: any line near its end, or crossing
@@ -3576,6 +3930,7 @@ onmessage=async e=>{const m=e.data;
     $('.here').onclick = () => addHere().catch(err => { say('Lỗi: ' + (err && err.message || err)); console.error(err); });
     $('.learn').onclick = () => learnButton();
     $('.drive').onclick = () => driveButton();
+    $('.chal').onclick = () => challengeButton();
     $('.watch').onclick = () => watch();
     $('.pick').onchange = () => lineChanged();
     showNow();
