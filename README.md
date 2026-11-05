@@ -177,6 +177,8 @@ Game chấm mỗi cú tiếp đất bằng một chữ: **Buttery**, **Clean**, 
 | Whip | +100 |
 | Chuỗi nhân | ×1 đến ×5: tăng 1 sau mỗi cú không Flat, không Cased; Flat hay Cased đưa về ×1 |
 
+**Cased bị trừ điểm:** game cho cú Cased 50 điểm (chỉ mất chuỗi nhân), nên khi chưa tìm được tốc độ đủ để bay tới dốc đáp, AI dễ chọn cách an toàn là đi chậm, rơi xuống mặt bằng của bục nhảy. Vì thế khi AI tự so các lượt thử, mỗi cú Cased bị trừ thêm 200, tức là thành −150 thay vì +50. Điểm game hiển thị vẫn đúng như game tính. Đo trên Trảng Sương 29: chỉ sau 2 vòng học với luật mới, cú thứ 5 đổi từ Cased thành Buttery, điểm cả đường từ 5690 lên 8100, và không còn cú Cased nào.
+
 Vì chuỗi nhân, một cú tiếp đất xấu ở đầu đường làm mất điểm của mọi cú sau nó. Từ bản 3, mỗi lượt dò chọn ở từng đoạn những cách đi được nhiều điểm game nhất tới đó (cùng chuỗi nhân), nên tiếp đất đẹp, giữ chuỗi và trick được học ngay trong lúc vượt đường. Những cách dưới đây là của bản 2 (từng chế độ riêng), giữ lại để biết AI đã đi tới đây thế nào. Sổ tay trick và phần xem lại vẫn dùng như cũ.
 
 - **Xem lại lượt tốt nhất:** mỗi cú nhảy có thời gian bay, độ cao, độ xa, chữ game chấm, trick, điểm và hệ số nhân, kèm lời khuyên. Ví dụ "chúc đầu 32° so với dốc đáp: giữ đầu xe ngẩng hơn", "bay hụt: cần lấy đà nhanh hơn", hoặc "bay đủ lâu cho Backflip". Tất cả có trong mục **Xem lại từng cú nhảy** (phần Chi tiết). Góc lệch lúc chạm đất phân biệt rõ các chữ: Clean lệch khoảng 3°, Sketchy khoảng 32°.

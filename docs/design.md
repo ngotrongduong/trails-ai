@@ -77,7 +77,11 @@ the bike has been on the ground 0.75 s in the next section (a jump's landing and
 rides away decide whether the jump was right), so it costs about a section, not the line.
 
 Tries are compared at that point: first the drill's goal, then whether the bike is still
-riding, then (riding) the game's points so far, or (fallen) how far it got.
+riding, then (riding) the game's points so far, or (fallen) how far it got. In these
+points a cased landing counts 200 less than the game's 50 for it (the game only ends the
+streak): without that, a jump the search found no speed for was cased, the bike riding
+slow over the flat of the table, and kept so. On Trảng Sương 29, two sweeps after the
+change, its fifth jump went from cased to buttery and the line from 5690 to 8100 points.
 
 The best tries become the beam at section k+1, kept different from each other (a fast and
 a slow way in to a jump are both kept). When no try of any partial ride gets through

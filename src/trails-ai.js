@@ -1834,7 +1834,12 @@ onmessage=async e=>{const m=e.data;
   const goalN = r => (r.goal ? r.goal.n : 0);
   const far = r => (done(r) ? Infinity : r.prog);
   const faster = (a, b) => (typeof a.vAvg === 'number' && typeof b.vAvg === 'number' && Math.abs(a.vAvg - b.vAvg) > 0.05 ? a.vAvg > b.vAvg : null);
-  const beats = (a, b) => !b || (goalN(a) !== goalN(b) ? goalN(a) > goalN(b) : far(a) > far(b) || (far(a) === far(b) && (done(a) && done(b) && a.game !== b.game ? a.game > b.game
+  // The game's points as the AI judges them: a cased landing (short, on the flat before the landing) counts
+  // CASED_COST less than the game's 50 for it, so -150. The game ends only the streak for it, and a search that
+  // could not find the speed for a jump settled for casing it, riding slow over the flat of every table.
+  const CASED_COST = 200;
+  const judged = r => (r.game || 0) - CASED_COST * (r.jl || []).filter(e => e.g === 5).length;
+  const beats = (a, b) => !b || (goalN(a) !== goalN(b) ? goalN(a) > goalN(b) : far(a) > far(b) || (far(a) === far(b) && (done(a) && done(b) && judged(a) !== judged(b) ? judged(a) > judged(b)
     : done(a) && done(b) && faster(a, b) !== null ? faster(a, b) : a.fit > b.fit + 0.01)));
   const goalMet = r => !!(r && r.goal && r.goal.n >= r.goal.need);
   // The search (Trainer.sweep): partial rides kept at each section, tries per section in its first round (spread over
@@ -2175,7 +2180,8 @@ onmessage=async e=>{const m=e.data;
       const la = aliveAt(a), lb = aliveAt(b);
       if (la !== lb) return la ? 1 : -1;
       if (!la) return a.prog !== b.prog ? a.prog - b.prog : a.fit - b.fit;
-      if (a.game !== b.game) return a.game - b.game;
+      const ja = judged(a), jb = judged(b);
+      if (ja !== jb) return ja - jb;
       return a.fit - b.fit;
     }
     // The moves a try may throw off jump section k: a trick drill's own, else the trick book's for this much air when
