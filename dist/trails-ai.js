@@ -1792,7 +1792,7 @@ const o = { v: +clampV(vs[n - 1]).toFixed(2), vs: n > 1 ? vs.map(v => +clampV(v)
 for (let u = a; u <= b; u++) if (rec.pull[u - rec.from] && G.KIND && G.KIND[u + runIn] === 'takeoff') { o.pl = clamp(b - u, 1, 10); break; }
 if (G.PZ) { const pu = mean(rec.pump, a, b, u => G.PZ.some(z => u + runIn >= z[0] && u + runIn <= z[1])); if (pu !== null) o.pu = pu < 0.15 ? 0 : +Math.min(1, pu).toFixed(2); }
 if (j) {
-if (j.pt !== null) o.pt = j.pt;
+if (j.pt !== null && Math.abs(j.fv) < 90) o.pt = j.pt;
 if (this.setup.tricks) {
 o.mv = playerMove(j);
 if (o.mv === SPIN_L || o.mv === SPIN_R) o.hr = +clamp((j.rel !== null ? j.rel : Math.abs(j.sv)) / 100, 0.3, 2.8).toFixed(2);
