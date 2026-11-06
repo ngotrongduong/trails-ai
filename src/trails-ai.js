@@ -2103,8 +2103,10 @@ onmessage=async e=>{const m=e.data;
     for (let i = best.s0 + 1; i <= best.s1; i++) {
       const o = i * SEEN_W;
       if (!(F[o + 4] > 0) || F[o - SEEN_W + 4] > 0 || at[i - 1] < 0) continue;
-      // off the ground at i: to the landing the game counted
-      const L = ride.ev.find(e => e.land && e.n > i && e.n <= i + 600);
+      // off the ground at i, back on it at e: a jump when the game counted a landing there (not a hop)
+      let e = i;
+      while (e < n && F[e * SEEN_W + 4] > 0) e++;
+      const L = ride.ev.find(q => q.land && Math.abs(q.n - e) <= 2);
       if (!L || L.n > best.s1 + 30) continue;
       let pt = 0, np = 0, dir = 0, big = 0, rel = null, relT = null, held = false;
       for (let q = Math.max(best.s0, i - 60); q < L.n; q++) {
@@ -4300,26 +4302,31 @@ onmessage=async e=>{const m=e.data;
         x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
       }
       if (len < 30) return;
+      // every line it followed (lines often share a trail), each kept for that line
+      const got = [];
       for (const [id, L] of knownLines()) {
         // (first: does the ride come near the line at all)
         let near = false;
         for (let i = 0; i < L.X.length && !near; i += 5) near = L.X[i] > x0 - 5 && L.X[i] < x1 + 5 && L.Z[i] > z0 - 5 && L.Z[i] < z1 + 5;
         const rec = near && rideOn(ride, L.X, L.Z);
-        if (!rec) continue;
-        keepPlayerRide(id, rec);
-        meRides++; showMe();
-        const what = rec.jumps.filter(j => playerTr(j)).map(j => trickWords(playerTr(j), 180 * Math.round(Math.abs(j.sv) / 180))).join(', ');
-        const booked = bookFromPlayer(rec);
-        let txt = `<b>Học từ cách bạn lái:</b> bạn vừa lái ${rec.to - rec.from} m trên <b>${esc(lineName(id))}</b>${rec.jumps.length ? `, ${rec.jumps.length} cú nhảy` : ''}${what ? ` (${what})` : ''}.${booked ? ` Thêm ${booked} lần thử trick vào sổ tay trick.` : ''}`;
-        if (trainer.route && trainer.pool && !trainer.temp && baseId(trainer.route.start.id) === id) {
-          const r = await trainer.fromPlayer(playerRides(id));
-          const got = r.run && `${r.run.prog} m${typeof r.run.game === 'number' ? `, ${r.run.game} điểm game` : ''}`;
-          if (!r.secs) txt += ' Bạn chưa đi trọn đoạn nào của bài học, nên chưa có gì để thử.';
-          else if (r.took) { txt += ` Lái theo cách bạn ở ${r.secs} đoạn đó, trong mô phỏng AI đi được <b>${got}</b>, giỏi hơn trước: AI học tiếp từ đó.`; showBest(trainer.best); draw(); }
-          else txt += ` Lái theo cách bạn ở ${r.secs} đoạn đó, trong mô phỏng AI đi được ${got}, chưa hơn cách AI đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`;
-        } else txt += ' Lần tới học đường này, AI sẽ thử cách của bạn.';
-        log(txt);
+        if (rec) { keepPlayerRide(id, rec); got.push({ id, rec }); }
       }
+      if (!got.length) return;
+      meRides++; showMe();
+      // told (and its tricks booked) once, by the line followed longest
+      const main = got.reduce((a, b) => (b.rec.to - b.rec.from > a.rec.to - a.rec.from ? b : a)), rec = main.rec;
+      const what = rec.jumps.filter(j => playerTr(j)).map(j => trickWords(playerTr(j), 180 * Math.round(Math.abs(j.sv) / 180))).join(', ');
+      const booked = bookFromPlayer(rec);
+      let txt = `<b>Học từ cách bạn lái:</b> bạn vừa lái ${rec.to - rec.from} m trên <b>${esc(lineName(main.id))}</b>${got.length > 1 ? ` (đoạn này cũng thuộc ${got.length - 1} đường khác AI biết)` : ''}${rec.jumps.length ? `, ${rec.jumps.length} cú nhảy` : ''}${what ? ` (${what})` : ''}.${booked ? ` Thêm ${booked} lần thử trick vào sổ tay trick.` : ''}`;
+      const now = trainer.route && trainer.pool && !trainer.temp && got.find(o => o.id === baseId(trainer.route.start.id));
+      if (now) {
+        const r = await trainer.fromPlayer(playerRides(now.id));
+        const as = r.run && `${r.run.prog} m${typeof r.run.game === 'number' ? `, ${r.run.game} điểm game` : ''}`;
+        if (!r.secs) txt += ` Bạn chưa đi trọn đoạn nào của đường AI đang học, nên chưa có gì để thử.`;
+        else if (r.took) { txt += ` Lái theo cách bạn ở ${r.secs} đoạn của đường AI đang học, trong mô phỏng AI đi được <b>${as}</b>, giỏi hơn trước: AI học tiếp từ đó.`; showBest(trainer.best); draw(); }
+        else txt += ` Lái theo cách bạn ở ${r.secs} đoạn của đường AI đang học, trong mô phỏng AI đi được ${as}, chưa hơn cách AI đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`;
+      } else txt += ' Lần tới học những đường này, AI sẽ thử cách của bạn.';
+      log(txt);
     }
     setInterval(async () => {
       // (the AI riding now: the player's ride before it has ended)
