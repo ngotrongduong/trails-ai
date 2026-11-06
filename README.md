@@ -88,6 +88,16 @@ Kế hoạch của AI gắn với từng đoạn của một đường, nên t�
 
 Đo lần đầu trên 4 đường mới, mỗi đường 25 vòng: có mượn thì điểm cao hơn ở 3/4 đường, nhưng chỉ một lần cải thiện là do cách mượn trực tiếp, nên chưa thể nói nó giúp nhiều. Kho hiện mới có 16 cú nhảy từ một đường. Kho càng lớn thì càng dễ tìm được cú giống.
 
+### Học từ cách bạn lái (👀)
+
+Khi bạn tự lái (AI không lái), AI ngồi xem: mỗi khung hình nó ghi vị trí, tốc độ, góc xe và các nút bạn bấm (đạp, phanh, pump, nhấc xe, whip). Hết một lượt (bạn dừng lại, ngã, hay rời khỏi đường), AI đặt lượt đó lên **mọi đường nó biết** (đường đang học và các đường đã có bài học) mà bạn đã lái qua ít nhất 30 m, rồi rút ra cho từng mét: tốc độ bạn **muốn** đi (đoán từ đạp và phanh, không chỉ tốc độ xe đang chạy), chỗ bạn nhấc xe trước mép nhảy, pump mạnh cỡ nào, và với mỗi cú nhảy bạn tiếp đất được: góc xe khi sắp chạm đất, trick bạn làm và lúc bạn buông nó.
+
+- Trick của bạn vào **sổ tay trick**, để AI biết với thời gian bay đó trick nào làm được.
+- Lần học đường đó (hoặc ngay lúc AI đang học nó), AI thử chạy cả đường theo cách bạn lái, và theo cách bạn qua các cú nhảy nhưng ở tốc độ của AI. Chỉ giữ nếu trong mô phỏng nó đi xa hơn hoặc điểm cao hơn cách AI đang có.
+- Mỗi lượt dò, ở mỗi đoạn bạn đã lái trọn, AI thử thêm cách của bạn ở riêng đoạn đó (tối đa 3 lượt gần nhất của bạn), nên cách tốt của bạn ở một cú nhảy vẫn được dùng dù cả lượt của bạn chưa tốt bằng.
+
+Giới hạn: AI chỉ học từ những đường nó đã biết; tốc độ "muốn đi" là đoán từ nút đạp và phanh; với cú flip, góc xe lúc chạm đất không được lấy (lúc đó xe còn đang lộn). Trên một đường AI đã lái rất tốt, đổi cả một đoạn theo cách khác thường làm hỏng các cú nhảy sau, nên cách của bạn có ích nhất ở những chỗ AI đang bị kẹt. Nút **👀 Học từ cách tôi lái** trong phần Chi tiết bật/tắt việc này (mặc định bật). Mọi thứ chỉ lưu trong trình duyệt của bạn.
+
 ### Tập bài tập kiểu Training
 
 Trong **Học lái**, mỗi khi đường đang chọn 3 phút không tiến thêm, AI dành khoảng 3 phút tập các **bài tập kiểu Training** do nó tự tạo mới (cách tạo xem phần bộ não bên dưới). Mỗi bài được học giống như học một đường thật. Bài nào về đích thì AI sang bài tiếp theo ngay.
@@ -282,6 +292,6 @@ tools/cloud-learn.js       học tiếp các bài học không cần mở game (
 
 ## English
 
-A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen, and gives a new line's lesson its starting plan when that rides better; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. The panel speaks Vietnamese by default; press **EN** at its top to switch it to English (kept in your browser). Contributions welcome: lessons via the panel's "Share on GitHub" button, code via pull requests (run `node tools/build.js` first).
+A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen, and gives a new line's lesson its starting plan when that rides better; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. The panel speaks Vietnamese by default; press **EN** at its top to switch it to English (kept in your browser). When you ride yourself, the AI watches (👀, on by default): on every line it knows, it notes the speed you aimed for, where you pulled and pumped, your pitch in the air and your tricks, books the tricks, and tries your way in its simulation, whole and section by section, keeping it only where it rides better. Contributions welcome: lessons via the panel's "Share on GitHub" button, code via pull requests (run `node tools/build.js` first).
 
 Giấy phép: MIT.

@@ -102,6 +102,33 @@ This replaces all the v2 modes: the first sweep gets through the line, the next 
 make the landings and tricks better, and pumping and manuals are values of the sections
 like the rest.
 
+## Learning from the player
+
+While the player rides (the AI not driving), the engine hook (watchStep) keeps a frame of
+each step: x, z, pitch, speed, airtime, the pump, button, whip, pedal and brake inputs,
+the spin angle and the heading, plus the game's landing grades and crashes as events. A
+ride ends when the bike stands still for 2 s, 30 frames after a crash, on a jump of more
+than 8 m (a reset) or after 3 minutes. Each ride is laid on every line the AI knows (the
+one learning now and those with a lesson) whose points it comes near: rideOn follows the
+line point by point (within 3 m, heading within 1.2 rad on the ground) and keeps the
+longest stretch of at least 30 m. For each metre of it, it keeps the speed the player
+aimed for (the speed ridden, raised while they pedal, lowered while they brake), the pump
+and the pull; for each jump, one whose air ends at a landing the game graded, the pitch
+over the last 8 frames in the air, the angles turned (flip, 360, whip), the whip's
+direction, when the trick was let go, and whether they rode away from it. The newest 3
+rides of a line are kept in the browser (trailsai.player), and their tricks go into the
+trick book.
+
+Trainer.playerSecs turns those rides into values of the plan for every section the player
+rode whole (and came down from its jump): speed by parts, pull, pump, pitch (not off a
+flip), trick and its hold. fromPlayer rides the plan with all of them, and with only the
+jumps' (pull, pitch, trick) at the AI's speeds, and keeps the better one if it beats the
+plan held; prepare does this whenever the line is learned, and a ride seen while it is
+learning does it at once. Each sweep also tries the player's way at each section
+(firstTries), from that section's saved state, so a good jump of theirs is kept even when
+their whole ride is not. Plans found by search are finely balanced: one section changed
+often costs the next jumps, which the sweep's later sections then make up for.
+
 ## Learning on GitHub's computers
 
 The shared lessons (lessons/) are learned on further by the workflow cloud-learn, twice a
