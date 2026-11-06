@@ -3589,7 +3589,7 @@ window.TrailsAI = {
 learnLesson,
 open() { el.style.display = ''; },
 newer() { log('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).'); },
-cap, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
+cap, seen, learnRide, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
 };
 if (window.__taiNewer) window.TrailsAI.newer();
 setTimeout(findTracks, 1500);
