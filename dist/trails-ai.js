@@ -3569,9 +3569,10 @@ const main = got.reduce((a, b) => (b.rec.to - b.rec.from > a.rec.to - a.rec.from
 const what = rec.jumps.filter(j => playerTr(j)).map(j => trickWords(playerTr(j), 180 * Math.round(Math.abs(j.sv) / 180))).join(', ');
 const booked = bookFromPlayer(rec);
 let txt = `<b>Học từ cách bạn lái:</b> bạn vừa lái ${rec.to - rec.from} m trên <b>${esc(lineName(main.id))}</b>${got.length > 1 ? ` (đoạn này cũng thuộc ${got.length - 1} đường khác AI biết)` : ''}${rec.jumps.length ? `, ${rec.jumps.length} cú nhảy` : ''}${what ? ` (${what})` : ''}.${booked ? ` Thêm ${booked} lần thử trick vào sổ tay trick.` : ''}`;
-const now = trainer.route && trainer.pool && !trainer.temp && got.find(o => o.id === baseId(trainer.route.start.id));
-if (now) {
-const r = await trainer.fromPlayer(playerRides(now.id));
+const now = trainer.running && trainer.secs && trainer.pool && !trainer.pool.closed && !trainer.temp && got.find(o => o.id === baseId(trainer.route.start.id));
+let r = null;
+if (now) try { r = await trainer.fromPlayer(playerRides(now.id)); } catch (err) { if (trainer.pool && !trainer.pool.closed) console.error(err); }
+if (r) {
 const as = r.run && `${r.run.prog} m${typeof r.run.game === 'number' ? `, ${r.run.game} điểm game` : ''}`;
 if (!r.secs) txt += ` Bạn chưa đi trọn đoạn nào của đường AI đang học, nên chưa có gì để thử.`;
 else if (r.took) { txt += ` Lái theo cách bạn ở ${r.secs} đoạn của đường AI đang học${r.air ? ' (cách bạn qua các cú nhảy, ở tốc độ của AI)' : ''}, trong mô phỏng AI đi được <b>${as}</b>, giỏi hơn trước: AI học tiếp từ đó.`; showBest(trainer.best); draw(); }
