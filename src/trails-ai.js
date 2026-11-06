@@ -166,11 +166,11 @@
   // ---------------------------------------------------------------- watching the player ride
   // While the player rides the bike themselves, every physics step is kept (f, SEEN_W numbers a step): where the bike
   // is, its pitch, speed, how long it has been in the air, the player's own pump, buttons and whip, the angle a 360 has
-  // turned by and the way the bike faces. The game's landings (its grade, the airtime and the trick angles it counted)
+  // turned by, the way the bike faces, and the player's pedals and brake. The game's landings (its grade, the airtime and the trick angles it counted)
   // and falls are events at their step. A ride ends (done, for learnFromPlayer in the panel) when the bike is put
   // somewhere else (a respawn), half a second after a fall, after 2 s standing still, or after 3 minutes. (all: the
   // AI's own rides are watched too, for checking this from the console)
-  const SEEN_W = 10, SEEN_MAX = 60 * 180;
+  const SEEN_W = 12, SEEN_MAX = 60 * 180;
   const seen = { on: true, all: false, f: [], ev: [], seq: null, down: false, fell: -1, still: 0, done: [] };
   function endRide() {
     if (seen.f.length) seen.done.push({ f: seen.f, ev: seen.ev });
@@ -187,7 +187,7 @@
     if (seen.still >= 120) return;
     if (seen.f.length) { const o = seen.f.length - SEEN_W, dx = s[0] - seen.f[o], dz = s[2] - seen.f[o + 1]; if (dx * dx + dz * dz > 64) endRide(); }
     const n = seen.f.length / SEEN_W;
-    seen.f.push(s[0], s[2], s[4], Math.abs(s[8]), s[12] > 0 ? s[12] : 0, inp[4] || 0, inp[5] || 0, inp[6] || 0, s[48] || 0, s[3]);
+    seen.f.push(s[0], s[2], s[4], Math.abs(s[8]), s[12] > 0 ? s[12] : 0, inp[4] || 0, inp[5] || 0, inp[6] || 0, s[48] || 0, s[3], inp[0] || 0, inp[1] || 0);
     if (s[16] !== seen.seq) {
       if (seen.seq !== null && s[15] > 0) seen.ev.push({ n, land: s[15] | 0, a: s[14], fv: s[44] || 0, sv: s[43] || 0, wv: s[41] || 0 });
       seen.seq = s[16];
@@ -2055,7 +2055,7 @@ onmessage=async e=>{const m=e.data;
   }
   // ---------------------------------------------------------------- learning from the player
   // A ride of the player (seen, see watchStep) on a line (X, Z: its points a metre apart), as the AI learns from it: the
-  // stretch of the line they rode along (from, to: metres along it) and, metre by metre, their speed on the ground (v),
+  // stretch of the line they rode along (from, to: metres along it) and, metre by metre, the speed they rode for (v),
   // how hard they pumped (pump, 0 to 1) and whether they pulled (pull); and each jump: the metre it took off from (up),
   // the bike's pitch just before it came down (pt), the game's grade (g) and airtime (a), whether they rode away from it
   // (ok: no fall in the half second after), the trick angles the game counted (fv, sv, wv), the way the whip was held
@@ -2095,7 +2095,11 @@ onmessage=async e=>{const m=e.data;
     for (let i = best.s0; i <= best.s1; i++) {
       const o = i * SEEN_W, u = Math.round(at[i]) - from;
       if (at[i] < 0 || u < 0 || u >= M || F[o + 4] > 0) continue;
-      sv[u] += F[o + 3]; sp[u] += clamp(F[o + 5] / 127, 0, 1); c[u]++; vt += F[o + 3]; vn++;
+      // the speed they rode for, as the AI's rider would hold it (see makeRider): pedals pressed a part mean a speed
+      // above this one, all the way more than the pedals can give here, the brake one below it, neither about this one
+      const v = F[o + 3], pd = clamp(F[o + 10] / 127, 0, 1), br = clamp(F[o + 11] / 127, 0, 1);
+      sv[u] += br > 0.05 ? v - Math.max(0.4, 2 * br) : pd >= 0.95 ? v + 2.5 : pd > 0.15 ? v + (pd - 0.15) / 0.7 : v - 0.2;
+      sp[u] += clamp(F[o + 5] / 127, 0, 1); c[u]++; vt += v; vn++;
       if (F[o + 6] & 1) pull[u] = 1;
     }
     if (!vn || vt / vn < 3) return null;
@@ -2136,11 +2140,13 @@ onmessage=async e=>{const m=e.data;
     for (const old of Object.keys(all).sort((a, b) => ((all[b][0] || {}).at || 0) - ((all[a][0] || {}).at || 0)).slice(30)) delete all[old];
     try { localStorage.setItem(PLAYER, JSON.stringify(all)); } catch { /* storage full or blocked */ }
   }
-  // Section k of plan p ridden the player's way (o, see Trainer.playerSecs).
+  // Section k of plan p ridden the player's way (o, see Trainer.playerSecs; with no speed in o, the plan's is kept).
   function applyPlayer(p, k, o) {
-    p.v[k] = o.v;
-    if (o.vs) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[k] = o.vs.slice(); } else if (p.vs) p.vs[k] = null;
-    p.pl[k] = o.pl;
+    if (o.v !== undefined) {
+      p.v[k] = o.v;
+      if (o.vs) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[k] = o.vs.slice(); } else if (p.vs) p.vs[k] = null;
+    }
+    if (o.pl !== undefined) p.pl[k] = o.pl;
     if (o.pu !== undefined) p.pu[k] = o.pu;
     if (o.pt !== undefined) p.pt[k] = o.pt;
     if (o.mv !== undefined) p.mv[k] = o.mv;
@@ -2255,7 +2261,7 @@ onmessage=async e=>{const m=e.data;
         for (let q = n - 2; q >= 0; q--) if (vs[q] === null) vs[q] = vs[q + 1];
         if (vs[0] === null) return;
         const o = { v: +clampV(vs[n - 1]).toFixed(2), vs: n > 1 ? vs.map(v => +clampV(v).toFixed(2)) : null, pl: 0 };
-        for (let u = a; u <= b; u++) if (rec.pull[u - rec.from] && G.KIND && G.KIND[u + runIn] === 'takeoff') { o.pl = Math.min(10, b - u + 1); break; }
+        for (let u = a; u <= b; u++) if (rec.pull[u - rec.from] && G.KIND && G.KIND[u + runIn] === 'takeoff') { o.pl = clamp(b - u, 1, 10); break; }
         if (G.PZ) { const pu = mean(rec.pump, a, b, u => G.PZ.some(z => u + runIn >= z[0] && u + runIn <= z[1])); if (pu !== null) o.pu = pu < 0.15 ? 0 : +Math.min(1, pu).toFixed(2); }
         if (j) {
           if (j.pt !== null) o.pt = j.pt;
@@ -2270,16 +2276,22 @@ onmessage=async e=>{const m=e.data;
       return out;
     }
     // Takes the player's rides of this line: from now on every sweep tries their way at each section they rode (see
-    // firstTries), and their way on all of those at once, the AI's plan elsewhere, is ridden now and kept if better.
+    // firstTries). Their way on all of those at once, the AI's plan elsewhere, is ridden now and kept if better: all
+    // of it, or only how they took the jumps (the pull, the pitch in the air, the trick) at the AI's own speeds.
     async fromPlayer(recs) {
       this.player = this.playerSecs(recs);
-      const p = clonePlan(this.plan);
+      const all = clonePlan(this.plan), air = clonePlan(this.plan);
       let secs = 0, jumps = 0, tricks = 0;
-      this.player.forEach((alt, k) => { if (!alt.length) return; applyPlayer(p, k, alt[0]); secs++; if (this.secs[k].jump) jumps++; if (alt[0].mv) tricks++; });
+      this.player.forEach((alt, k) => {
+        if (!alt.length) return;
+        const o = alt[0];
+        applyPlayer(all, k, o); applyPlayer(air, k, { pl: o.pl, pt: o.pt, mv: o.mv, hr: o.hr });
+        secs++; if (this.secs[k].jump) jumps++; if (o.mv) tricks++;
+      });
       if (!secs) return { secs };
-      const run = (await this.pool.evalAll([p]))[0], took = beats(run, this.best);
-      if (took) { this.plan = p; this.best = run; this.save(); }
-      return { secs, jumps, tricks, run, took };
+      const runs = await this.pool.evalAll([all, air]), i = beats(runs[1], runs[0]) ? 1 : 0, run = runs[i], took = beats(run, this.best);
+      if (took) { this.plan = i ? air : all; this.best = run; this.save(); }
+      return { secs, jumps, tricks, run, took, air: !!i };
     }
     async prepare(route, workers) {
       this.stop();
@@ -2434,8 +2446,11 @@ onmessage=async e=>{const m=e.data;
         }
         for (const o of ((this.borrow && this.borrow[k]) || []).slice(0, 2)) { const p = clonePlan(nd.plan); applyJump(p, s, k, o.j); out.push({ p }); }
       }
-      // the way the player rode this section (see fromPlayer)
-      for (const o of (this.player && this.player[k]) || []) { const p = clonePlan(nd.plan); applyPlayer(p, k, o); out.push({ p }); }
+      // the way the player rode this section (see fromPlayer), and off a jump only how they took it, at this speed
+      for (const o of (this.player && this.player[k]) || []) {
+        const p = clonePlan(nd.plan); applyPlayer(p, k, o); out.push({ p });
+        if (s.jump) { const q = clonePlan(nd.plan); applyPlayer(q, k, { pl: o.pl, pt: o.pt, mv: o.mv, hr: o.hr }); out.push({ p: q }); }
+      }
       const moves = s.jump ? this.movesFor(k, n) : null;
       for (let i = 0; i < n; i++) {
         if (Math.random() < wild) { out.push(this.wildTry(nd, k)); continue; }
@@ -3247,7 +3262,7 @@ onmessage=async e=>{const m=e.data;
           else if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, lần học sau AI sẽ tự tập trick.');
           }
           const pm = mem.player;
-          if (pm && pm.secs) log(pm.took ? `<b>Học từ cách bạn lái:</b> lái theo cách bạn ở ${pm.secs} đoạn${pm.jumps ? ` (${pm.jumps} cú nhảy)` : ''}, AI đi được ngay <b>${pm.run.prog} m</b>, giỏi hơn cách nó đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`
+          if (pm && pm.secs) log(pm.took ? `<b>Học từ cách bạn lái:</b> lái theo cách bạn ở ${pm.secs} đoạn${pm.jumps ? ` (${pm.jumps} cú nhảy)` : ''}${pm.air ? ', ở tốc độ của AI' : ''}, AI đi được ngay <b>${pm.run.prog} m</b>, giỏi hơn cách nó đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`
             : `<b>Học từ cách bạn lái:</b> AI có ${playerRides(o.s.id).length} lượt bạn lái đường này (${pm.secs} đoạn). Lái theo cả cách đó thì chưa hơn cách AI đang có (${pm.run.prog} m), nên mỗi lượt dò AI thử cách của bạn ở từng đoạn.`);
           if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }
           $('.k-gen').textContent = trainer.gen;
@@ -4323,7 +4338,7 @@ onmessage=async e=>{const m=e.data;
         const r = await trainer.fromPlayer(playerRides(now.id));
         const as = r.run && `${r.run.prog} m${typeof r.run.game === 'number' ? `, ${r.run.game} điểm game` : ''}`;
         if (!r.secs) txt += ` Bạn chưa đi trọn đoạn nào của đường AI đang học, nên chưa có gì để thử.`;
-        else if (r.took) { txt += ` Lái theo cách bạn ở ${r.secs} đoạn của đường AI đang học, trong mô phỏng AI đi được <b>${as}</b>, giỏi hơn trước: AI học tiếp từ đó.`; showBest(trainer.best); draw(); }
+        else if (r.took) { txt += ` Lái theo cách bạn ở ${r.secs} đoạn của đường AI đang học${r.air ? ' (cách bạn qua các cú nhảy, ở tốc độ của AI)' : ''}, trong mô phỏng AI đi được <b>${as}</b>, giỏi hơn trước: AI học tiếp từ đó.`; showBest(trainer.best); draw(); }
         else txt += ` Lái theo cách bạn ở ${r.secs} đoạn của đường AI đang học, trong mô phỏng AI đi được ${as}, chưa hơn cách AI đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`;
       } else txt += ' Lần tới học những đường này, AI sẽ thử cách của bạn.';
       log(txt);
