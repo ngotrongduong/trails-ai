@@ -109,6 +109,7 @@ seen.f = []; seen.ev = []; seen.fell = -1;
 }
 function watchStep(inp) {
 const s = liveState();
+if (s[13] > 0 && seen.down && seen.fell < 0) return;
 seen.still = Math.abs(s[8]) < 0.3 && !(s[12] > 0) ? seen.still + 1 : 0;
 if (seen.still === 120) endRide();
 if (seen.still >= 120) return;
