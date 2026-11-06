@@ -92,7 +92,7 @@ if (live.drive && g === live.g) {
 try { const o = live.drive.step(); if (o) inp = o; } catch (err) { live.drive = null; console.error(err); }
 }
 const out = ex.trails_game_step(g, ...inp);
-if (!live.drive && g === live.g && seen.on) { try { watchStep(inp); } catch (err) { seen.on = false; console.error(err); } }
+if ((!live.drive || seen.all) && g === live.g && seen.on) { try { watchStep(inp); } catch (err) { seen.on = false; console.error(err); } }
 return out;
 };
 live.ex = ex; live.SL = ex.trails_state_len();
@@ -101,7 +101,7 @@ return { module: r.module, instance: { exports: px } };
 const liveState = () => new Float64Array(live.ex.memory.buffer, live.ex.trails_game_state(live.g), live.SL);
 const riderSetup = () => ({ tricks: live.tricks === null ? 511 : live.tricks, bike: live.bike, tunes: { ...live.tunes } });
 const SEEN_W = 10, SEEN_MAX = 60 * 180;
-const seen = { on: true, f: [], ev: [], seq: null, down: false, fell: -1, still: 0, done: [] };
+const seen = { on: true, all: false, f: [], ev: [], seq: null, down: false, fell: -1, still: 0, done: [] };
 function endRide() {
 if (seen.f.length) seen.done.push({ f: seen.f, ev: seen.ev });
 if (seen.done.length > 4) seen.done.shift();
@@ -3562,7 +3562,7 @@ log(txt);
 }
 }
 setInterval(async () => {
-if (live.drive && seen.f.length) endRide();
+if (live.drive && !seen.all && seen.f.length) endRide();
 if (meBusy || !seen.done.length) return;
 meBusy = true;
 try { while (seen.done.length) await learnRide(seen.done.shift()); } catch (err) { console.error(err); } finally { meBusy = false; }

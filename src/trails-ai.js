@@ -153,7 +153,7 @@
       }
       const out = ex.trails_game_step(g, ...inp);
       // the player riding (not the AI): their bike and controls are watched (see watchStep)
-      if (!live.drive && g === live.g && seen.on) { try { watchStep(inp); } catch (err) { seen.on = false; console.error(err); } }
+      if ((!live.drive || seen.all) && g === live.g && seen.on) { try { watchStep(inp); } catch (err) { seen.on = false; console.error(err); } }
       return out;
     };
     live.ex = ex; live.SL = ex.trails_state_len();
@@ -168,9 +168,10 @@
   // is, its pitch, speed, how long it has been in the air, the player's own pump, buttons and whip, the angle a 360 has
   // turned by and the way the bike faces. The game's landings (its grade, the airtime and the trick angles it counted)
   // and falls are events at their step. A ride ends (done, for learnFromPlayer in the panel) when the bike is put
-  // somewhere else (a respawn), half a second after a fall, after 2 s standing still, or after 3 minutes.
+  // somewhere else (a respawn), half a second after a fall, after 2 s standing still, or after 3 minutes. (all: the
+  // AI's own rides are watched too, for checking this from the console)
   const SEEN_W = 10, SEEN_MAX = 60 * 180;
-  const seen = { on: true, f: [], ev: [], seq: null, down: false, fell: -1, still: 0, done: [] };
+  const seen = { on: true, all: false, f: [], ev: [], seq: null, down: false, fell: -1, still: 0, done: [] };
   function endRide() {
     if (seen.f.length) seen.done.push({ f: seen.f, ev: seen.ev });
     if (seen.done.length > 4) seen.done.shift();
@@ -4320,7 +4321,7 @@ onmessage=async e=>{const m=e.data;
     }
     setInterval(async () => {
       // (the AI riding now: the player's ride before it has ended)
-      if (live.drive && seen.f.length) endRide();
+      if (live.drive && !seen.all && seen.f.length) endRide();
       if (meBusy || !seen.done.length) return;
       meBusy = true;
       try { while (seen.done.length) await learnRide(seen.done.shift()); } catch (err) { console.error(err); } finally { meBusy = false; }
