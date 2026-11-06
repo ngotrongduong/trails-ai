@@ -91,13 +91,39 @@ px.trails_game_step = (g, ...inp) => {
 if (live.drive && g === live.g) {
 try { const o = live.drive.step(); if (o) inp = o; } catch (err) { live.drive = null; console.error(err); }
 }
-return ex.trails_game_step(g, ...inp);
+const out = ex.trails_game_step(g, ...inp);
+if (!live.drive && g === live.g && seen.on) { try { watchStep(inp); } catch (err) { seen.on = false; console.error(err); } }
+return out;
 };
 live.ex = ex; live.SL = ex.trails_state_len();
 return { module: r.module, instance: { exports: px } };
 };
 const liveState = () => new Float64Array(live.ex.memory.buffer, live.ex.trails_game_state(live.g), live.SL);
 const riderSetup = () => ({ tricks: live.tricks === null ? 511 : live.tricks, bike: live.bike, tunes: { ...live.tunes } });
+const SEEN_W = 10, SEEN_MAX = 60 * 180;
+const seen = { on: true, f: [], ev: [], seq: null, down: false, fell: -1, still: 0, done: [] };
+function endRide() {
+if (seen.f.length) seen.done.push({ f: seen.f, ev: seen.ev });
+if (seen.done.length > 4) seen.done.shift();
+seen.f = []; seen.ev = []; seen.fell = -1;
+}
+function watchStep(inp) {
+const s = liveState();
+seen.still = Math.abs(s[8]) < 0.3 && !(s[12] > 0) ? seen.still + 1 : 0;
+if (seen.still === 120) endRide();
+if (seen.still >= 120) return;
+if (seen.f.length) { const o = seen.f.length - SEEN_W, dx = s[0] - seen.f[o], dz = s[2] - seen.f[o + 1]; if (dx * dx + dz * dz > 64) endRide(); }
+const n = seen.f.length / SEEN_W;
+seen.f.push(s[0], s[2], s[4], Math.abs(s[8]), s[12] > 0 ? s[12] : 0, inp[4] || 0, inp[5] || 0, inp[6] || 0, s[48] || 0, s[3]);
+if (s[16] !== seen.seq) {
+if (seen.seq !== null && s[15] > 0) seen.ev.push({ n, land: s[15] | 0, a: s[14], fv: s[44] || 0, sv: s[43] || 0, wv: s[41] || 0 });
+seen.seq = s[16];
+}
+const down = s[13] > 0;
+if (down && !seen.down) { seen.ev.push({ n, crash: 1 }); seen.fell = n; }
+seen.down = down;
+if ((seen.fell >= 0 && n - seen.fell >= 30) || n + 1 >= SEEN_MAX) endRide();
+}
 const cap = { chunks: new Map(), held: new Set(), starts: [], ws: null, pose: null, poseAt: 0, levels: null, levelsAt: 0, askedAt: 0 };
 const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
 const WRAPPED = Symbol('trailsai');
@@ -1596,6 +1622,81 @@ function applyJump(p, s, k, j) {
 p.v[k] = j.v; p.pt[k] = s.pt + j.dpt; p.pl[k] = j.pl; p.pu[k] = j.pu;
 if (p.vs) p.vs[k] = null;
 }
+function rideOn(ride, X, Z) {
+const F = ride.f, n = F.length / SEEN_W, N = X.length, at = new Float64Array(n).fill(-1);
+if (n < 60 || N < 20) return null;
+let cur = -1, miss = 0;
+for (let i = 0; i < n; i++) {
+const o = i * SEEN_W, x = F[o], z = F[o + 1];
+if (miss > 15) cur = -1;
+let bi = -1, bd = 9;
+for (let j = cur >= 0 ? Math.max(0, cur - 5) : 0, e = cur >= 0 ? Math.min(N, cur + 40) : N; j < e; j++) { const d = (X[j] - x) ** 2 + (Z[j] - z) ** 2; if (d < bd) { bd = d; bi = j; } }
+if (bi < 0) { miss++; continue; }
+const j = Math.min(N - 2, bi), dx = X[j + 1] - X[j], dz = Z[j + 1] - Z[j];
+if (!(F[o + 4] > 0) && Math.abs(wrapA(F[o + 9] - Math.atan2(dz, dx))) > 1.2) { miss++; continue; }
+at[i] = j + clamp(((x - X[j]) * dx + (z - Z[j]) * dz) / (dx * dx + dz * dz || 1), -0.5, 1.5);
+cur = bi; miss = 0;
+}
+let best = null, s0 = -1, last = -1, gap = 0, u0 = 0, top = 0;
+const close = () => { if (s0 >= 0 && top - u0 >= 30 && (!best || top - u0 > best.top - best.u0)) best = { s0, s1: last, u0, top }; s0 = -1; };
+for (let i = 0; i < n; i++) {
+if (at[i] < 0) { if (s0 >= 0 && ++gap > 30) close(); continue; }
+if (s0 >= 0 && at[i] < top - 3) close();
+if (s0 < 0) { s0 = i; u0 = top = at[i]; }
+gap = 0; last = i; top = Math.max(top, at[i]);
+}
+close();
+if (!best) return null;
+const from = Math.ceil(best.u0), to = Math.floor(best.top), M = to - from + 1;
+const sv = new Float64Array(M), sp = new Float64Array(M), c = new Float64Array(M), pull = new Array(M).fill(0);
+let vt = 0, vn = 0;
+for (let i = best.s0; i <= best.s1; i++) {
+const o = i * SEEN_W, u = Math.round(at[i]) - from;
+if (at[i] < 0 || u < 0 || u >= M || F[o + 4] > 0) continue;
+sv[u] += F[o + 3]; sp[u] += clamp(F[o + 5] / 127, 0, 1); c[u]++; vt += F[o + 3]; vn++;
+if (F[o + 6] & 1) pull[u] = 1;
+}
+if (!vn || vt / vn < 3) return null;
+const jumps = [];
+for (let i = best.s0 + 1; i <= best.s1; i++) {
+const o = i * SEEN_W;
+if (!(F[o + 4] > 0) || F[o - SEEN_W + 4] > 0 || at[i - 1] < 0) continue;
+const L = ride.ev.find(e => e.land && e.n > i && e.n <= i + 600);
+if (!L || L.n > best.s1 + 30) continue;
+let pt = 0, np = 0, dir = 0, big = 0, rel = null, relT = null, held = false;
+for (let q = Math.max(best.s0, i - 60); q < L.n; q++) {
+const w = F[q * SEEN_W + 7];
+if (Math.abs(w) > big) { big = Math.abs(w); dir = Math.sign(w); }
+if (Math.abs(w) > 20) held = true;
+else if (held && rel === null && F[q * SEEN_W + 4] > 0) { rel = Math.abs(F[q * SEEN_W + 8]); relT = F[q * SEEN_W + 4]; }
+if (q >= L.n - 8 && F[q * SEEN_W + 4] > 0) { pt += F[q * SEEN_W + 2]; np++; }
+}
+const ok = !ride.ev.some(e => e.crash && e.n >= L.n && e.n <= L.n + 30);
+jumps.push({ up: +at[i - 1].toFixed(1), pt: np ? +(pt / np).toFixed(4) : null, g: L.land, a: +L.a.toFixed(2), ok, fv: Math.round(L.fv), sv: Math.round(L.sv), wv: Math.round(L.wv), dir, rel: rel === null ? null : Math.round(rel), relT: relT === null ? null : +relT.toFixed(2) });
+}
+const v = Array.from(sv, (x, u) => (c[u] ? +(x / c[u]).toFixed(2) : null)), pump = Array.from(sp, (x, u) => (c[u] ? +(x / c[u]).toFixed(2) : null));
+return { from, to, v, pump, pull, jumps, at: Date.now() };
+}
+const playerTr = j => (Math.abs(j.fv) >= 270 ? 1 : 0) | (Math.abs(j.sv) >= 300 ? 2 : 0) | (Math.abs(j.wv) >= 45 ? 4 : 0);
+const playerMove = j => { const t = playerTr(j); return t & 1 ? FLIP : t & 2 ? (j.dir < 0 ? SPIN_L : SPIN_R) : t & 4 ? (j.dir < 0 ? WHIP_L : WHIP_R) : 0; };
+const PLAYER = 'trailsai.player';
+const playerAll = () => { try { return JSON.parse(localStorage.getItem(PLAYER) || '{}') || {}; } catch { return {}; } };
+const playerRides = id => { const r = playerAll()[baseId(id)]; return Array.isArray(r) ? r : []; };
+function keepPlayerRide(id, rec) {
+const all = playerAll(), k = baseId(id);
+all[k] = [rec].concat(Array.isArray(all[k]) ? all[k] : []).slice(0, 3);
+for (const old of Object.keys(all).sort((a, b) => ((all[b][0] || {}).at || 0) - ((all[a][0] || {}).at || 0)).slice(30)) delete all[old];
+try { localStorage.setItem(PLAYER, JSON.stringify(all)); } catch { /* storage full or blocked */ }
+}
+function applyPlayer(p, k, o) {
+p.v[k] = o.v;
+if (o.vs) { if (!p.vs) p.vs = p.v.map(() => null); p.vs[k] = o.vs.slice(); } else if (p.vs) p.vs[k] = null;
+p.pl[k] = o.pl;
+if (o.pu !== undefined) p.pu[k] = o.pu;
+if (o.pt !== undefined) p.pt[k] = o.pt;
+if (o.mv !== undefined) p.mv[k] = o.mv;
+if (o.hr !== undefined) p.hr[k] = o.hr;
+}
 let simHash = null;
 function simId() {
 if (simHash === null) { let h = 2166136261; for (let i = 0; i < workerSrc.length; i++) h = Math.imul(h ^ workerSrc.charCodeAt(i), 16777619) >>> 0; simHash = h.toString(36); }
@@ -1667,6 +1768,44 @@ const took = beats(run, this.best);
 if (took) { this.plan = clonePlan(plan); this.best = run; this.save(); }
 return { fits: true, took, run };
 }
+playerSecs(recs) {
+const S = this.secs, runIn = this.N - this.route.length, G = this.geo || {}, out = S.map(() => []);
+for (const rec of recs) S.forEach((s, k) => {
+const a = s.a - runIn, b = s.b - runIn;
+if (a < rec.from || b > rec.to || out[k].length >= 3) return;
+const j = s.jump ? rec.jumps.find(q => Math.abs(q.up - b) <= 3) : null;
+if (s.jump && !(j && j.ok)) return;
+const mean = (arr, u0, u1, keep) => { let t = 0, c = 0; for (let u = u0; u <= u1; u++) { const x = arr[u - rec.from]; if (x !== null && x !== undefined && (!keep || keep(u))) { t += x; c++; } } return c ? t / c : null; };
+const len = b - a + 1, n = len >= 16 ? Math.min(4, Math.round(len / 8)) : 1;
+const vs = Array.from({ length: n }, (_, q) => mean(rec.v, a + Math.floor(q * len / n), a + Math.floor((q + 1) * len / n) - 1));
+for (let q = 1; q < n; q++) if (vs[q] === null) vs[q] = vs[q - 1];
+for (let q = n - 2; q >= 0; q--) if (vs[q] === null) vs[q] = vs[q + 1];
+if (vs[0] === null) return;
+const o = { v: +clampV(vs[n - 1]).toFixed(2), vs: n > 1 ? vs.map(v => +clampV(v).toFixed(2)) : null, pl: 0 };
+for (let u = a; u <= b; u++) if (rec.pull[u - rec.from] && G.KIND && G.KIND[u + runIn] === 'takeoff') { o.pl = Math.min(10, b - u + 1); break; }
+if (G.PZ) { const pu = mean(rec.pump, a, b, u => G.PZ.some(z => u + runIn >= z[0] && u + runIn <= z[1])); if (pu !== null) o.pu = pu < 0.15 ? 0 : +Math.min(1, pu).toFixed(2); }
+if (j) {
+if (j.pt !== null) o.pt = j.pt;
+if (this.setup.tricks) {
+o.mv = playerMove(j);
+if (o.mv === SPIN_L || o.mv === SPIN_R) o.hr = +clamp((j.rel !== null ? j.rel : Math.abs(j.sv)) / 100, 0.3, 2.8).toFixed(2);
+else if ((o.mv === WHIP_L || o.mv === WHIP_R) && j.relT !== null) o.hr = +clamp(j.relT / 0.25, 0.3, 2.8).toFixed(2);
+}
+}
+out[k].push(o);
+});
+return out;
+}
+async fromPlayer(recs) {
+this.player = this.playerSecs(recs);
+const p = clonePlan(this.plan);
+let secs = 0, jumps = 0, tricks = 0;
+this.player.forEach((alt, k) => { if (!alt.length) return; applyPlayer(p, k, alt[0]); secs++; if (this.secs[k].jump) jumps++; if (alt[0].mv) tricks++; });
+if (!secs) return { secs };
+const run = (await this.pool.evalAll([p]))[0], took = beats(run, this.best);
+if (took) { this.plan = p; this.best = run; this.save(); }
+return { secs, jumps, tricks, run, took };
+}
 async prepare(route, workers) {
 this.stop();
 if (this.pool) this.pool.close();
@@ -1716,6 +1855,9 @@ const runs = await this.pool.evalAll(mixes);
 const bi = runs.reduce((b, r, i) => (beats(r, runs[b]) ? i : b), 0);
 if (beats(runs[bi], this.best)) { this.plan = mixes[bi]; this.best = runs[bi]; }
 }
+this.player = null;
+const recs = this.temp ? [] : playerRides(route.start.id);
+if (recs.length) { mem.player = await this.fromPlayer(recs); if (mem.player.took) mem.from = 'player'; }
 return mem;
 }
 stop() { this.running = false; }
@@ -1787,6 +1929,7 @@ out.push({ p });
 }
 for (const o of ((this.borrow && this.borrow[k]) || []).slice(0, 2)) { const p = clonePlan(nd.plan); applyJump(p, s, k, o.j); out.push({ p }); }
 }
+for (const o of (this.player && this.player[k]) || []) { const p = clonePlan(nd.plan); applyPlayer(p, k, o); out.push({ p }); }
 const moves = s.jump ? this.movesFor(k, n) : null;
 for (let i = 0; i < n; i++) {
 if (Math.random() < wild) { out.push(this.wildTry(nd, k)); continue; }
@@ -2231,6 +2374,7 @@ el.innerHTML = `
 <span>Đang làm</span><b class="k-now">–</b>
 <span>Đường này</span><b class="k-line">chưa học</b>
 <span>Bộ não chung</span><b class="k-brain">–</b>
+<span>Học từ bạn</span><b class="k-me">–</b>
 </div>
 <div class="log"></div>
 <details class="more"><summary>Chi tiết, xem lại và chia sẻ</summary>
@@ -2253,6 +2397,7 @@ el.innerHTML = `
 <div class="row s"><button class="b g export" disabled>Lưu ra file</button><button class="b g import">Mở file</button><button class="b g share" disabled>Chia sẻ GitHub</button></div>
 <input type="file" accept=".json,application/json" class="file" hidden>
 <div class="row"><button class="b g forget" disabled>Quên đường này, học lại từ đầu</button></div>
+<div class="row"><button class="b g watchme" title="Khi bạn tự lái trên đường AI đã học hoặc đang học, AI ghi lại tốc độ, chỗ bạn nhấc xe, pump, góc xe khi bay và trick của bạn, rồi thử cách đó trong mô phỏng">👀 Học từ cách tôi lái: bật</button></div>
 <div class="sec">Bộ não chung<small>Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra. Bộ não cũng cho đường mới một cách bắt đầu.</small></div>
 <div class="kv">
 <span>Vòng luyện</span><b class="b-gen">0</b>
@@ -2506,6 +2651,9 @@ else log(`Bộ não chung đi được ${b.prog} m trên đường này. Chép c
 if (route.drill) log(`<b>Bài tập Training “${DRILL_GOALS[route.drill.goal].name}”:</b> AI tập trong mô phỏng cho tới khi đạt mục tiêu của bài${route.drill.pedals ? '' : ' (không được đạp, như trong game)'}.`);
 else if (trainer.setup.tricks === 0) log('Tài khoản của bạn chưa mở khóa trick trong game (game mở khi bạn đủ 200 cú nhảy và 5 đường), nên AI tập chạy hết đường mà không làm trick. Mở khóa xong, lần học sau AI sẽ tự tập trick.');
 }
+const pm = mem.player;
+if (pm && pm.secs) log(pm.took ? `<b>Học từ cách bạn lái:</b> lái theo cách bạn ở ${pm.secs} đoạn${pm.jumps ? ` (${pm.jumps} cú nhảy)` : ''}, AI đi được ngay <b>${pm.run.prog} m</b>, giỏi hơn cách nó đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`
+: `<b>Học từ cách bạn lái:</b> AI có ${playerRides(o.s.id).length} lượt bạn lái đường này (${pm.secs} đoạn). Lái theo cả cách đó thì chưa hơn cách AI đang có (${pm.run.prog} m), nên mỗi lượt dò AI thử cách của bạn ở từng đoạn.`);
 if (shared) { sharedSeen.set(o.s.id, shared.savedAt); await useLesson(shared, 'cộng đồng trên GitHub'); }
 $('.k-gen').textContent = trainer.gen;
 showBest(trainer.best);
@@ -3343,6 +3491,83 @@ if (!m || sharedSeen.get(id) === m.savedAt) return;
 sharedSeen.set(id, m.savedAt);
 await useLesson(m, 'cộng đồng trên GitHub', true);
 }, 10 * 60 * 1000);
+const WATCH = 'trailsai.watchme';
+let watchOn = (() => { try { return localStorage.getItem(WATCH) !== '0'; } catch { return true; } })(), meRides = 0, meBusy = false;
+seen.on = watchOn;
+function showMe() {
+$('.k-me').textContent = !watchOn ? 'tắt' : meRides ? `đã ghi ${meRides} lượt bạn lái` : 'đang xem bạn lái';
+$('.watchme').textContent = `👀 Học từ cách tôi lái: ${watchOn ? 'bật' : 'tắt'}`;
+}
+$('.watchme').onclick = () => {
+watchOn = !watchOn; seen.on = watchOn;
+if (!watchOn) { seen.f = []; seen.ev = []; seen.done.length = 0; }
+try { localStorage.setItem(WATCH, watchOn ? '1' : '0'); } catch { /* storage blocked */ }
+showMe();
+say(watchOn ? 'AI sẽ xem bạn lái trên những đường nó biết và học theo.' : 'AI không xem bạn lái nữa.');
+};
+const lineGeo = new Map();
+function knownLines() {
+const out = new Map();
+if (trainer.route && !trainer.temp) out.set(baseId(trainer.route.start.id), { X: trainer.route.X, Z: trainer.route.Z });
+try {
+for (let i = 0; i < localStorage.length; i++) {
+const key = localStorage.key(i);
+if (!key || !key.startsWith(STORE) || out.has(baseId(key.slice(STORE.length)))) continue;
+if (!lineGeo.has(key)) {
+let m = null;
+try { m = JSON.parse(localStorage.getItem(key)); } catch { m = null; }
+const L = m && m.line;
+lineGeo.set(key, L && Array.isArray(L.X) && Array.isArray(L.Z) && L.X.length >= 20 ? { X: L.X, Z: L.Z } : null);
+}
+if (lineGeo.get(key)) out.set(baseId(key.slice(STORE.length)), lineGeo.get(key));
+}
+} catch { /* storage blocked */ }
+return out;
+}
+function bookFromPlayer(rec) {
+const mask = riderSetup().tricks;
+const rows = mask ? rec.jumps.filter(j => playerMove(j)).map(j => [j.a, playerMove(j), j.ok ? 1 : 0, playerTr(j), j.g]) : [];
+if (!rows.length) return 0;
+if (trainer.book && trainer.setup && trainer.setup.tricks === mask) { trainer.book.push(...rows); if (trainer.running) trainer.bookDirty = true; else saveBook(mask, trainer.book); }
+else saveBook(mask, loadBook(mask).concat(rows));
+return rows.length;
+}
+async function learnRide(ride) {
+const F = ride.f, n = F.length / SEEN_W;
+let len = 0, x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+for (let i = 0; i < n; i++) {
+const x = F[i * SEEN_W], z = F[i * SEEN_W + 1];
+if (i) len += Math.hypot(x - F[(i - 1) * SEEN_W], z - F[(i - 1) * SEEN_W + 1]);
+x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+}
+if (len < 30) return;
+for (const [id, L] of knownLines()) {
+let near = false;
+for (let i = 0; i < L.X.length && !near; i += 5) near = L.X[i] > x0 - 5 && L.X[i] < x1 + 5 && L.Z[i] > z0 - 5 && L.Z[i] < z1 + 5;
+const rec = near && rideOn(ride, L.X, L.Z);
+if (!rec) continue;
+keepPlayerRide(id, rec);
+meRides++; showMe();
+const what = rec.jumps.filter(j => playerTr(j)).map(j => trickWords(playerTr(j), 180 * Math.round(Math.abs(j.sv) / 180))).join(', ');
+const booked = bookFromPlayer(rec);
+let txt = `<b>Học từ cách bạn lái:</b> bạn vừa lái ${rec.to - rec.from} m trên <b>${esc(lineName(id))}</b>${rec.jumps.length ? `, ${rec.jumps.length} cú nhảy` : ''}${what ? ` (${what})` : ''}.${booked ? ` Thêm ${booked} lần thử trick vào sổ tay trick.` : ''}`;
+if (trainer.route && trainer.pool && !trainer.temp && baseId(trainer.route.start.id) === id) {
+const r = await trainer.fromPlayer(playerRides(id));
+const got = r.run && `${r.run.prog} m${typeof r.run.game === 'number' ? `, ${r.run.game} điểm game` : ''}`;
+if (!r.secs) txt += ' Bạn chưa đi trọn đoạn nào của bài học, nên chưa có gì để thử.';
+else if (r.took) { txt += ` Lái theo cách bạn ở ${r.secs} đoạn đó, trong mô phỏng AI đi được <b>${got}</b>, giỏi hơn trước: AI học tiếp từ đó.`; showBest(trainer.best); draw(); }
+else txt += ` Lái theo cách bạn ở ${r.secs} đoạn đó, trong mô phỏng AI đi được ${got}, chưa hơn cách AI đang có. Mỗi lượt dò AI vẫn thử cách của bạn ở từng đoạn.`;
+} else txt += ' Lần tới học đường này, AI sẽ thử cách của bạn.';
+log(txt);
+}
+}
+setInterval(async () => {
+if (live.drive && seen.f.length) endRide();
+if (meBusy || !seen.done.length) return;
+meBusy = true;
+try { while (seen.done.length) await learnRide(seen.done.shift()); } catch (err) { console.error(err); } finally { meBusy = false; }
+}, 1000);
+showMe();
 async function learnLesson(raw, ms, n) {
 const m = readLesson(raw);
 if (!m) throw new Error('not a lesson');
