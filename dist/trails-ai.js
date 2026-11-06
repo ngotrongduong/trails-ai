@@ -2279,6 +2279,9 @@ this.ui.brainProgress({ gen: this.gen, ms: performance.now() - t0, tries: brains
 const css = `
 #tai{position:fixed;top:64px;right:12px;width:330px;max-height:calc(100vh - 80px);overflow:auto;z-index:2147483000;
 background:rgba(18,22,28,.94);color:#e8edf2;font:13px/1.4 system-ui,sans-serif;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:12px 14px}
+#tai-open{position:fixed;top:64px;right:12px;z-index:2147483000;padding:7px 12px;border-radius:18px;border:1px solid #3a4554;
+background:rgba(18,22,28,.9);color:#e8edf2;font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}
+#tai-open:hover{background:#2f6fde;border-color:#2f6fde}
 #tai h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:center}
 #tai .x{background:none;border:0;color:#9aa;font-size:18px;cursor:pointer}
 #tai .lang{background:none;border:1px solid #3a4554;border-radius:6px;color:#9aa;font-size:11px;padding:1px 6px;margin-right:6px;cursor:pointer}
@@ -3451,13 +3454,19 @@ say(tx(`${d.who} đang lái xe của bạn${learning ? ' và vẫn học tiếp 
 `${d.who} is riding your bike${learning ? ' and still learning in the background' : ''} (you need to be on the bike, not walking). After a fall or at the end of the trail the AI rides again from the start; press “Stop AI riding” to take the bike back.`));
 }
 el.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button'); if (b) b.blur(); });
-$('.x').onclick = () => { el.style.display = 'none'; };
+const opener = document.createElement('button');
+opener.id = 'tai-open'; opener.textContent = '🤖 AI'; opener.style.display = 'none';
+opener.title = tx('Mở lại bảng AI', 'Show the AI panel again');
+document.body.appendChild(opener);
+const showPanel = on => { el.style.display = on ? '' : 'none'; opener.style.display = on ? 'none' : ''; };
+opener.onclick = () => { opener.blur(); showPanel(true); };
+$('.x').onclick = () => showPanel(false);
 $('.lang').onclick = () => {
 lang = lang === 'en' ? 'vi' : 'en';
 try { localStorage.setItem(LANG, lang); } catch { /* storage blocked */ }
 relabel(el);
 $('.lang').textContent = tx('EN', 'VI');
-const again = [showNow, () => driveLabel(looping || !!live.drive), chLabel, showBrain, showLine, showBorrow, showMe, draw, () => trainer.best && showBest(trainer.best)];
+const again = [showNow, () => driveLabel(looping || !!live.drive), chLabel, showBrain, showLine, showBorrow, showMe, () => { opener.title = tx('Mở lại bảng AI', 'Show the AI panel again'); }, draw, () => trainer.best && showBest(trainer.best)];
 for (const f of again) try { f(); } catch { /* nothing to show yet */ }
 if (choices.length) listLines();
 else for (const o of $('.pick').options) o.textContent = PICK_WAIT.includes(o.textContent) ? tx(...PICK_WAIT) : PICK_NONE.includes(o.textContent) ? tx(...PICK_NONE) : o.textContent;
@@ -3666,7 +3675,7 @@ return { lesson, before: sum(before), after: sum(after), improved: beats(after, 
 }
 window.TrailsAI = {
 learnLesson,
-open() { el.style.display = ''; },
+open() { showPanel(true); },
 newer() { log(tx('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).', '<b>A new AI is out.</b> Press F5 to use it (what the AI has learned stays).')); },
 cap, seen, learnRide, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
 };
