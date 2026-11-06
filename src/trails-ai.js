@@ -73,8 +73,10 @@
 
   // ---------------------------------------------------------------- constants
   const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
-  const N_MOVES = 21;          // trick moves for the air the worker knows (index 0 = none); MANUAL is on the ground
+  const N_MOVES = 26;          // the moves the worker knows (index 0 = none); MANUAL is on the ground, the rest in the air
   const SPIN_L = 16, SPIN_R = 17, FLIP = 18, WHIP_L = 19, WHIP_R = 20, MANUAL = 21;
+  // combos, two tricks in one jump: a backflip with a whip either way, a backflip with a 360 either way
+  const FLIP_WL = 22, FLIP_WR = 23, FLIP_SL = 24, FLIP_SR = 25;
   // The game's Training drills, by what each asks for (as the game judges it): need is how much of it one ride must get.
   // pumps: the rollers without pedals, faster at the end than at the start (the game counts 6 good pumps); laps: two laps
   // of the pump track without pedals; clean: every jump landed clean in one ride (Jumping, Pump & pull); boost / racer:
@@ -975,9 +977,13 @@
   // let go hr × 100° round), a backflip (FLIP: the pedals held up the takeoff and a pull pl metres before the lip, then
   // let it go round), a whip either way let go hr × 0.25 s after the lip (WHIP_L, WHIP_R: in time for the bike to come
   // back straight, a whip held down to the landing is landed crossed up) and a manual (MANUAL: on the ground, the front
-  // wheel held up).
+  // wheel held up). Then combos, each the two moves at once: a backflip with a whip (the whip let go hr × 0.25 s after
+  // the lip, as WHIP_L / WHIP_R) and a backflip with a 360 (the pedals and the whip both held up the takeoff). Measured
+  // in the game's physics: the game counts both tricks of either, on a 2.1 s jump a backflip with a whip landed clean
+  // for 1620 points where the backflip alone got 1200. A 360 with a whip cannot be done: the two are the same control.
   const MOVES = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 }, { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 },
-    { spin: -1 }, { spin: 1 }, { flip: 1 }, { wt: -1 }, { wt: 1 }, { man: 1 }];
+    { spin: -1 }, { spin: 1 }, { flip: 1 }, { wt: -1 }, { wt: 1 }, { man: 1 },
+    { flip: 1, wt: -1 }, { flip: 1, wt: 1 }, { flip: 1, spin: -1 }, { flip: 1, spin: 1 }];
   // when to pump through a dip, unless a plan has its own (P.pk): from 0.1 m past where it starts to 0.2 m past its end
   const PUMP0 = [0.1, 0.2];
 
@@ -1114,17 +1120,25 @@
           me.rot += wrapA(s[4] - me.prevP);
           lean = clamp(2.2 * (s[4] - P.pt[me.airSec]) + 0.35 * dp, -1, 1);
           const mv = MOVES[P.mv[me.airSec] | 0];
-          if (mv && mv.spin) {
-            // hold the whip until the bike is hr × 100° round, and leave its angle alone while it turns
-            const a = Math.abs(s[48]);
-            if (a >= P.hr[me.airSec] * 100) me.let = true;
-            if (!me.let) whip = mv.spin;
-            if (a > 5 && a < 320) lean = 0;
-          } else if (mv && mv.flip) {
-            // let it go over, then bring it to the landing angle
-            if (me.rot > -0.6 && me.rot < 5) lean = 0;
-          } else if (mv && mv.wt) {
-            if (s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
+          // Steering in the air, as much as the section says (P.sa: 0 none, up to 1), toward the line ahead as on the
+          // ground. The game turns the bike in the air and the way it flies with it: measured, about 30° a second at
+          // full lock, half that at half, as much at 5 m/s as at 11. Not while a 360 goes round (the bike faces every way).
+          const sa = P.sa ? P.sa[me.airSec] || 0 : 0;
+          if (sa && !(mv && mv.spin && Math.abs(s[48]) < 340)) st = clamp(sa * (2.2 * e1 + 0.6 * e2), -1, 1);
+          if (mv && (mv.spin || mv.flip || mv.wt)) {
+            // (free: the bike's angle left alone while a trick turns it)
+            let free = false;
+            if (mv.spin) {
+              // hold the whip until the bike is hr × 100° round, and leave its angle alone while it turns
+              const a = Math.abs(s[48]);
+              if (a >= P.hr[me.airSec] * 100) me.let = true;
+              if (!me.let) whip = mv.spin;
+              if (a > 5 && a < 320) free = true;
+            }
+            // a backflip: let it go over, then bring it to the landing angle
+            if (mv.flip && me.rot > -0.6 && me.rot < 5) free = true;
+            if (mv.wt && s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
+            if (free) lean = 0;
           } else if (mv && !mv.man) {
             const gnd = Math.max(H[look(3)], H[look(8)]);
             if (s[12] > 0.1 && by - gnd > P.hr[me.airSec]) { btn = mv.b || 0; if (mv.ln !== undefined) lean = mv.ln; if (mv.st) st = mv.st; if (mv.w) whip = mv.w; }
@@ -1659,6 +1673,7 @@ function watchPlan(P,until,w){
   if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
   for(const k of ['as','pz','pk'])if(P[k]!==undefined)Q[k]=P[k];
   if(P.lg)Q.lg=S.map((_,i)=>P.lg[i]||0);
+  if(P.sa)Q.sa=S.map((_,i)=>P.sa[i]||0);
   let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
   let prog=0,progT=0,fell=false;
   for(let t=0;t<18000;t++){
@@ -1882,9 +1897,11 @@ onmessage=async e=>{const m=e.data;
   const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
   const num = v => typeof v === 'number' && Number.isFinite(v);
   // vs, a speed for every part of a section, is there only once learning has split a section
-  // (and lg, the rider's weight on the ground by section, once learning has tried one)
+  // (and lg, the rider's weight on the ground by section, once learning has tried one; sa, the steering in the air off
+  // each jump, likewise)
   const partsOk = (P, n) => (P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num)))))
-    && (P.lg === undefined || (Array.isArray(P.lg) && P.lg.length === n && P.lg.every(num)));
+    && (P.lg === undefined || (Array.isArray(P.lg) && P.lg.length === n && P.lg.every(num)))
+    && (P.sa === undefined || (Array.isArray(P.sa) && P.sa.length === n && P.sa.every(num)));
   const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
   // Ride a beats ride b when it gets further, or as far with more points. Points only decide once rides get as far
   // (in the end, all the way): before, a trick a ride did on an earlier jump made it count over rides that went further.
@@ -1911,6 +1928,9 @@ onmessage=async e=>{const m=e.data;
   // the rider's weight on the ground a try may give a section (P.lg; > 0: forward), and setting it
   const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6];
   const setLean = (p, k, v) => { if (!p.lg) { if (!v) return; p.lg = p.v.map(() => 0); } p.lg[k] = v; };
+  // how much a try may steer in the air off a jump toward the line (P.sa, see makeRider), and setting it
+  const AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
+  const setAirSteer = (p, k, v) => { if (!p.sa) { if (!v) return; p.sa = p.v.map(() => 0); } p.sa[k] = v; };
   // a try still riding where it was stopped, or ridden to the end
   const aliveAt = r => r.end === 'đang đi' || r.end === 'về đích';
 
@@ -1939,28 +1959,33 @@ onmessage=async e=>{const m=e.data;
   // bound), so a move tried a few times and failed is not given up on, and the best is not tried only. Every trick
   // move that has had fewer than 3 tries at this air gets one try in the round first; the rest are drawn by worth.
   // (Weighing what the moves had landed, squared, made the whip, the easiest trick, take nearly every try.)
-  const TRICK_MOVES = [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R];
-  const moveBit = m => (m === FLIP ? 1 : m === SPIN_L || m === SPIN_R ? 2 : m === WHIP_L || m === WHIP_R ? 4 : 0);
-  function bookMoves(rows, air, n) {
+  // A combo is worth both its tricks (a backflip with a whip 400, with a 360 500) and counts as landed before only when
+  // both were. Moves of tricks the account has not unlocked (mask, the game's unlock bits) are never drawn.
+  const TRICK_MOVES = [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R, FLIP_WL, FLIP_WR, FLIP_SL, FLIP_SR];
+  // the tricks a move throws (tr: 1 backflip, 2 360, 4 whip), and the unlock bits they need (TRICK_BIT)
+  const moveBit = m => { const o = m > 15 && MOVES[m]; return o ? (o.flip ? 1 : 0) | (o.spin ? 2 : 0) | (o.wt ? 4 : 0) : 0; };
+  const moveNeeds = m => { const b = moveBit(m); return (b & 1 ? TRICK_BIT.flip : 0) | (b & 2 ? TRICK_BIT.spin : 0) | (b & 4 ? TRICK_BIT.whip : 0); };
+  function bookMoves(rows, air, n, mask) {
     const near = rows.filter(r => Math.abs(r[0] - air) <= 0.2);
     let landed = 0;
     for (const r of rows) if (r[2] && r[0] <= air + 0.1) landed |= r[3];
     const tries = new Array(N_MOVES).fill(0), w = new Array(N_MOVES).fill(0);
     for (const r of near) if (r[1] > 0 && r[1] < N_MOVES) tries[r[1]]++;
-    const all = near.length;
+    const all = near.length, can = m => m !== MANUAL && (mask === undefined || (moveNeeds(m) & mask) === moveNeeds(m));
     for (let m = 1; m < N_MOVES; m++) {
+      if (!can(m)) continue;
       let ok = 0, val = 0;
       for (const r of near) if (r[1] === m && r[2] && r[3]) { ok++; val += trickValue(r[3]); }
-      const b = moveBit(m), prior = b ? trickValue(b) * (landed & b || !rows.length ? 1 : 0.5) : 40;
+      const b = moveBit(m), prior = b ? trickValue(b) * ((landed & b) === b || !rows.length ? 1 : 0.5) : 40;
       const est = ((ok + 1) / (tries[m] + 2)) * (ok ? val / ok : prior);
       w[m] = est + 150 * Math.sqrt(Math.log(all + 2) / (tries[m] + 1)) * (b ? 1 : 0.25);
     }
-    const out = TRICK_MOVES.filter(m => tries[m] < 3).sort((a, b) => w[b] - w[a]).slice(0, n);
+    const out = TRICK_MOVES.filter(m => can(m) && tries[m] < 3).sort((a, b) => w[b] - w[a]).slice(0, n);
     const sum = w.reduce((a, v) => a + v * v, 0);
     while (out.length < n) {
-      let x = Math.random() * sum, m = 1;
-      for (; m < N_MOVES - 1; m++) { x -= w[m] * w[m]; if (x <= 0) break; }
-      out.push(m);
+      let x = Math.random() * sum, pick = 0;
+      for (let m = 1; m < N_MOVES; m++) if (w[m]) { pick = m; x -= w[m] * w[m]; if (x <= 0) break; }
+      out.push(pick);
     }
     return out;
   }
@@ -1974,8 +1999,9 @@ onmessage=async e=>{const m=e.data;
       return { name, n: got.length, min, tries };
     });
   }
-  // The moves a trick drill of the game's Training tries on its jumps.
-  const DRILL_MOVES = { whip: [WHIP_L, WHIP_R], spin: [SPIN_L, SPIN_R], flip: [FLIP], tricks: [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R] };
+  // The moves a trick drill of the game's Training tries on its jumps (with several tricks to get, combos too: two in
+  // one jump).
+  const DRILL_MOVES = { whip: [WHIP_L, WHIP_R], spin: [SPIN_L, SPIN_R], flip: [FLIP], tricks: [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R, FLIP_WL, FLIP_WR, FLIP_SL, FLIP_SR] };
   // A first plan for a Training drill: the jumps of a trick drill taken fast (its kickers throw the bike up more than
   // along: measured, about 13 m/s gets a backflip, a 360 or a whip round and onto the landing), and a manual on the
   // Manual drill. The tricks themselves come once the drill is ridden to the end (see drillGoal). The drills without
@@ -2203,6 +2229,7 @@ onmessage=async e=>{const m=e.data;
         if (this.secs[k].b >= end) break;
         for (const key of PLAN_KEYS) out[key][k] = P[key][k];
         if (P.vs && P.vs[k]) { if (!out.vs) out.vs = out.v.map(() => null); out.vs[k] = P.vs[k].slice(); }
+        if (P.sa && P.sa[k]) setAirSteer(out, k, P.sa[k]);
       }
       // the first section not kept
       this.kept = k;
@@ -2366,6 +2393,7 @@ onmessage=async e=>{const m=e.data;
           for (let k = mem.kept; k < this.secs.length; k++) {
             for (const key of PLAN_KEYS) p[key][k] = b[key][k];
             if (p.vs) p.vs[k] = b.vs && b.vs[k] ? b.vs[k].slice() : null;
+            if (p.sa) p.sa[k] = 0;
           }
           return p;
         });
@@ -2410,7 +2438,7 @@ onmessage=async e=>{const m=e.data;
       const D = this.route.aim || this.route.drill, only = D && DRILL_MOVES[D.mk || D.kind];
       if (only) return Array.from({ length: n }, () => only[Math.floor(Math.random() * only.length)]);
       const air = this.airOf(k);
-      return this.setup.tricks && air ? bookMoves(this.book, air, n) : null;
+      return this.setup.tricks && air ? bookMoves(this.book, air, n, this.setup.tricks) : null;
     }
     // Section k of base changed about as much as wide says: its speed (one, or by parts), the angle held in the air,
     // the pull, the pump, the move off a jump and its timing, a manual on the flat (on a drill that asks for one).
@@ -2432,8 +2460,9 @@ onmessage=async e=>{const m=e.data;
       if (Math.random() < 0.12 * wide) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
       if (s.jump && move !== undefined && move !== null) {
         p.mv[k] = move;
-        if (move === FLIP && Math.random() < 0.5) p.pl[k] = 1 + Math.floor(Math.random() * 5);
+        if (moveBit(move) & 1 && Math.random() < 0.5) p.pl[k] = 1 + Math.floor(Math.random() * 5);
       }
+      if (s.jump && Math.random() < 0.25 * wide) setAirSteer(p, k, AIR_STEERS[Math.floor(Math.random() * AIR_STEERS.length)]);
       if (s.jump && (p.mv[k] | 0) && Math.random() < 0.6) p.hr[k] = +clamp(p.hr[k] + gauss() * 0.5 * wide, 0.3, 2.8).toFixed(2);
       if (!s.jump && (dk === 'manual' || dk === 'tricks') && Math.random() < 0.3) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
       return p;
@@ -2453,6 +2482,7 @@ onmessage=async e=>{const m=e.data;
         // (the angle worked out for the landing can be far off: one jump needed 0.94 rad more nose down)
         p.pt[k] = Math.random() < 0.5 ? s.pt + r(-0.6, 0.4) : r(-1.2, 0.6);
         p.pl[k] = Math.random() < 0.6 ? 1 + Math.floor(Math.random() * 6) : 0;
+        if (Math.random() < 0.5) setAirSteer(p, k, AIR_STEERS[Math.floor(Math.random() * AIR_STEERS.length)]);
       }
       p.pu[k] = Math.random() < 0.3 ? [0.5, 0.8, 1][Math.floor(Math.random() * 3)] : 0;
       if (Math.random() < 0.4) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
@@ -2499,6 +2529,8 @@ onmessage=async e=>{const m=e.data;
       const m = one(); p.mv[k] = m.mv[k]; p.hr[k] = clamp(m.hr[k] + gauss() * 0.15, 0.3, 2.8);
       const w = one();
       if (w.lg || p.lg) { if (!p.lg) p.lg = p.v.map(() => 0); p.lg[k] = w.lg ? w.lg[k] : 0; }
+      const a = one();
+      if (a.sa || p.sa) { if (!p.sa) p.sa = p.v.map(() => 0); p.sa[k] = a.sa ? a.sa[k] : 0; }
       return { p };
     }
     // Rides tries cs (each {nd, p}) from their partial rides, spread over the workers; each gets r (its result) and
@@ -3685,11 +3717,12 @@ onmessage=async e=>{const m=e.data;
         known = p;
         const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
         for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
-        for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0)) return;
+        for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0)) return;
         for (const k of ['pz', 'pk', 'as']) if (!same(p[k], plan[k])) return;
         for (const k of PLAN_KEYS) plan[k] = p[k].slice();
         if (p.vs) plan.vs = p.vs.map(q => (q ? q.slice() : null)); else delete plan.vs;
         if (p.lg) plan.lg = p.lg.slice(); else delete plan.lg;
+        if (p.sa) plan.sa = p.sa.slice(); else delete plan.sa;
         took();
       };
     }
