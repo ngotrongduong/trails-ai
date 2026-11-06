@@ -110,6 +110,8 @@
   const END_EN = { 'về đích': 'finished', 'ngã': 'fell', 'đang đi': 'still riding', 'hết giờ': 'out of time', 'lạc khỏi đường': 'off the line',
     'đạt mốc': 'reached the mark', 'kẹt': 'stuck', 'đứng lại': 'came to a stop', 'lỗi': 'error' };
   const endWord = e => tx(e, END_EN[e] || e);
+  // what the list of lines says while it has none (an option holds text only, so these are put right by hand)
+  const PICK_WAIT = ['Đang tìm đường gần bạn…', 'Looking for lines near you…'], PICK_NONE = ['Không thấy điểm xuất phát nào gần đây', 'No start nearby'];
   // a text of the panel that follows the language (see relabel), and a title the same way
   const tl = (vi, en) => `<span data-vi="${esc(vi)}" data-en="${esc(en)}">${esc(tx(vi, en))}</span>`;
   const tt = (vi, en) => `title="${esc(tx(vi, en))}" data-tvi="${esc(vi)}" data-ten="${esc(en)}"`;
@@ -2775,7 +2777,7 @@ onmessage=async e=>{const m=e.data;
     el.innerHTML = `
       <h3>${tl('AI tự học Trails', 'Trails AI that learns')} <span><button class="lang" ${tt('Chuyển sang tiếng Anh', 'Switch to Vietnamese')}>${tx('EN', 'VI')}</button><button class="x" ${tt('Ẩn', 'Hide')}>×</button></span></h3>
       <div class="st">${tx('Đang chuẩn bị…', 'Getting ready…')}</div>
-      <div class="row pk"><select class="pick"><option>${tx('Đang tìm đường gần bạn…', 'Looking for lines near you…')}</option></select><button class="b g here" ${tt('Đường chỗ tôi đứng: thêm con đường dưới bánh xe, từ chỗ này, theo hướng tôi đang quay mặt', 'The line where I am: add the trail under the wheels, from here, the way I am facing')}>📍</button><button class="b g rename" ${tt('Đặt tên cho đường này', 'Name this line')}>✎</button><button class="b g refresh" ${tt('Tìm lại đường gần tôi', 'Look again for lines near me')}>↻</button></div>
+      <div class="row pk"><select class="pick"><option>${tx(...PICK_WAIT)}</option></select><button class="b g here" ${tt('Đường chỗ tôi đứng: thêm con đường dưới bánh xe, từ chỗ này, theo hướng tôi đang quay mặt', 'The line where I am: add the trail under the wheels, from here, the way I am facing')}>📍</button><button class="b g rename" ${tt('Đặt tên cho đường này', 'Name this line')}>✎</button><button class="b g refresh" ${tt('Tìm lại đường gần tôi', 'Look again for lines near me')}>↻</button></div>
       <div class="row big"><button class="b learn" disabled>${tx('Học lái', 'Learn')}</button><button class="b drive" disabled>${tx('AI lái', 'AI rides')}</button></div>
       <div class="row"><button class="b g chal" ${tt('AI đọc các thử thách đang mở trong game (Challenges), chọn đường hợp nhất cho từng cái, học rồi lái cho tới khi game tính xong', "The AI reads the game's open challenges (Challenges), picks the best line for each, learns it and rides until the game counts it done")}>${tx('🏆 Làm thử thách của game', "🏆 Do the game's challenges")}</button></div>
       <div class="kv">
@@ -2797,7 +2799,7 @@ onmessage=async e=>{const m=e.data;
       </div>
       <div class="k-tricks"></div>
       <div class="sec">${tl('Xem lại từng cú nhảy', 'Every jump, one by one')}<small>${tl('Lượt tốt nhất, chấm như game chấm: kiểu tiếp đất, trick, điểm và chuỗi nhân.', 'The best ride, graded as the game grades it: landing, trick, points and streak.')}</small></div>
-      <div class="k-jumps"><div class="jr">${tx('Chưa có lượt nào.', 'No ride yet.')}</div></div>
+      <div class="k-jumps"><div class="jr">${tl('Chưa có lượt nào.', 'No ride yet.')}</div></div>
       <div class="k-book"></div>
       <canvas width="600" height="180"></canvas>
       <div class="row"><button class="b g watch" disabled>${tl('Xem lại lượt chạy tốt nhất', 'Watch the best ride')}</button></div>
@@ -2987,7 +2989,7 @@ onmessage=async e=>{const m=e.data;
     function listLines() {
       const sel = $('.pick'), at = sel.value;
       sel.innerHTML = choices.length ? choices.map((o, i) => `<option value="${i}">${i + 1}. ${esc(lineName(o.s.id))} · ${o.drill ? tx('bài tập đang mở', 'drill open now') : tx(`cách ${Math.round(o.d)} m`, `${Math.round(o.d)} m away`)}${hasMemory(o.s.id) ? tx(' · đã học', ' · learned') : ''}</option>`).join('')
-        : `<option>${tx('Không thấy điểm xuất phát nào gần đây', 'No start nearby')}</option>`;
+        : `<option>${tx(...PICK_NONE)}</option>`;
       if (at && choices[+at]) sel.value = at;
     }
     // The line where you are (lineHere), put first in the list and kept in this browser, to learn and ride like the others.
@@ -4005,8 +4007,11 @@ onmessage=async e=>{const m=e.data;
       try { localStorage.setItem(LANG, lang); } catch { /* storage blocked */ }
       relabel(el);
       $('.lang').textContent = tx('EN', 'VI');
-      showNow(); driveLabel(looping || !!live.drive); chLabel(); showBrain(); if (choices.length) listLines(); showLine(); showBorrow(); draw();
-      if (trainer.best) showBest(trainer.best);
+      // (each on its own: some have nothing to show yet, before the game has loaded or a line has been learned)
+      const again = [showNow, () => driveLabel(looping || !!live.drive), chLabel, showBrain, showLine, showBorrow, draw, () => trainer.best && showBest(trainer.best)];
+      for (const f of again) try { f(); } catch { /* nothing to show yet */ }
+      if (choices.length) listLines();
+      else for (const o of $('.pick').options) o.textContent = PICK_WAIT.includes(o.textContent) ? tx(...PICK_WAIT) : PICK_NONE.includes(o.textContent) ? tx(...PICK_NONE) : o.textContent;
       say(tx('AI giờ nói tiếng Việt.', 'The AI speaks English now.'));
     };
     $('.refresh').onclick = () => findTracks();
