@@ -34,6 +34,8 @@ So với cách học cũ (bản 2: mỗi lần thử chạy cả đường, bả
 
 Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng: học đường đang chọn, tập một bài tập kiểu Training, luyện bộ não chung, xem bên dưới) và **AI lái**. Mọi thứ khác nằm trong mục **Chi tiết, xem lại và chia sẻ** thu gọn ở cuối bảng.
 
+Nút nhỏ **EN** ở góc trên bảng AI chuyển mọi thứ AI hiển thị sang tiếng Anh (nút đổi thành **VI** để chuyển lại tiếng Việt). Trình duyệt nhớ lựa chọn này cho những lần sau. Những dòng đã ghi trong nhật ký thì giữ nguyên ngôn ngữ lúc ghi.
+
 Vật lý của game cho kết quả giống hệt nhau mỗi lần chạy, nên những gì AI làm được trong mô phỏng thì ngoài game nó cũng làm được y như vậy. Đã kiểm tra: mô phỏng ngã ở mét 1096 thì AI lái thật ngã ở mét 1094.
 
 ### Vừa lái thật vừa học
@@ -280,6 +282,6 @@ tools/cloud-learn.js       học tiếp các bài học không cần mở game (
 
 ## English
 
-A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen, and gives a new line's lesson its starting plan when that rides better; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. Contributions welcome: lessons via the in-game "Chia sẻ GitHub" button, code via pull requests (run `node tools/build.js` first).
+A fun, open project: an AI that teaches itself to ride any line in Trails: The Game by trial and error inside the game's own physics (WebAssembly, run in Web Workers), learns tricks, and can ride your real bike in the game. A small shared neural network ("the brain", trained with evolution strategies on many lines at once, after first imitating the lessons) rides lines it has never seen, and gives a new line's lesson its starting plan when that rides better; it is shared in `brain/`. Lessons (the learned plan per line) are shared in `lessons/`; every client re-verifies a shared lesson in its own simulation before using it. Open [the how-to page](https://ngotrongduong.github.io/trails-ai/) to try it. The panel speaks Vietnamese by default; press **EN** at its top to switch it to English (kept in your browser). Contributions welcome: lessons via the panel's "Share on GitHub" button, code via pull requests (run `node tools/build.js` first).
 
 Giấy phép: MIT.
