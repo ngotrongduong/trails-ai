@@ -2841,7 +2841,7 @@ onmessage=async e=>{const m=e.data;
   const css = `
   #tai{position:fixed;top:64px;right:12px;width:330px;max-height:calc(100vh - 80px);overflow:auto;z-index:2147483000;
     background:rgba(18,22,28,.94);color:#e8edf2;font:13px/1.4 system-ui,sans-serif;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:12px 14px}
-  #tai-open{position:fixed;top:64px;right:12px;z-index:2147483000;padding:7px 12px;border-radius:18px;border:1px solid #3a4554;
+  #tai-open{position:fixed;top:104px;right:12px;z-index:2147483000;padding:7px 12px;border-radius:18px;border:1px solid #3a4554;
     background:rgba(18,22,28,.9);color:#e8edf2;font:600 13px system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.35)}
   #tai-open:hover{background:#2f6fde;border-color:#2f6fde}
   #tai h3{margin:0 0 6px;font-size:15px;display:flex;justify-content:space-between;align-items:center}
@@ -4209,7 +4209,7 @@ onmessage=async e=>{const m=e.data;
     // buttons must not keep the keyboard focus, or the game's keys would press them
     el.addEventListener('click', e => { const b = e.target.closest && e.target.closest('button'); if (b) b.blur(); });
 
-    // hidden, the panel leaves a small button at the top right that brings it back
+    // hidden, the panel leaves a small button at the top right (below the game's own buttons) that brings it back
     const opener = document.createElement('button');
     opener.id = 'tai-open'; opener.textContent = '🤖 AI'; opener.style.display = 'none';
     opener.title = tx('Mở lại bảng AI', 'Show the AI panel again');
