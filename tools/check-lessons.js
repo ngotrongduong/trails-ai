@@ -25,6 +25,7 @@ function problems(file, m) {
   if (L.land !== undefined && !(Array.isArray(L.land) && L.land.length === 4 && L.land.every(num))) out.push('line.land, when there, must be 4 numbers');
   if (!P || !Array.isArray(P.v) || !PLAN_KEYS.every(k => Array.isArray(P[k]) && P[k].length === P.v.length && P[k].every(num))) out.push(`plan needs ${PLAN_KEYS.join(', ')} as number lists of the same length`);
   if (P && P.vs !== undefined && (!Array.isArray(P.vs) || !Array.isArray(P.v) || P.vs.length !== P.v.length || !P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num))))) out.push('plan.vs must hold, for every section, null or a list of up to 12 speeds');
+  if (P && P.sa !== undefined && (!Array.isArray(P.sa) || !Array.isArray(P.v) || P.sa.length !== P.v.length || !P.sa.every(num))) out.push('plan.sa must be numbers, one per section');
   if (m.bestRun &&(!num(m.bestRun.fit) || !num(m.bestRun.prog))) out.push('bestRun needs fit and prog numbers');
   const J = m.jumps;
   if (J !== undefined && (!J || !num(J.version) || !Array.isArray(J.list) || J.list.length > 2000
@@ -48,14 +49,14 @@ for (const name of fs.readdirSync(dir).filter(f => f.endsWith('.json')).sort()) 
   const b = m.bestRun || {};
   rows.push(`| ${m.line.start.id} | ${m.line.X.length} m | ${b.prog ?? '?'} m | ${b.fit !== undefined ? Math.round(b.fit) : '?'} | ${b.end ?? '?'} | ${m.gen ?? '?'} | ${m.setup ? m.setup.tricks : '?'} |`);
 }
-// brain/brain.json: the shared brain, a list of weights (22 inputs, 16 hidden, 4 outputs)
-const BRAIN_SIZE = 22 * 16 + 16 * 4 + 4;
+// brain/brain.json: the shared brain, a list of weights (28 inputs, 32 hidden, 5 outputs)
+const BRAIN_SIZE = 28 * 32 + 32 * 5 + 5;
 const brainFile = path.join(__dirname, '..', 'brain', 'brain.json');
 if (fs.existsSync(brainFile)) {
   let m = null, errs = [];
   if (fs.statSync(brainFile).size > MAX_BYTES) errs.push('brain.json is too big');
   else { try { m = JSON.parse(fs.readFileSync(brainFile, 'utf8')); } catch (e) { errs.push('not valid JSON: ' + e.message); } }
-  if (m && (m.format !== 'trails-ai-brain' || m.version !== 2)) errs.push('format must be "trails-ai-brain", version 2');
+  if (m && (m.format !== 'trails-ai-brain' || m.version !== 3)) errs.push('format must be "trails-ai-brain", version 3');
   if (m && (!Array.isArray(m.w) || m.w.length !== BRAIN_SIZE || !m.w.every(num))) errs.push(`w must be ${BRAIN_SIZE} numbers`);
   if (errs.length) { bad++; console.log(`✗ brain/brain.json\n  - ${errs.join('\n  - ')}`); }
   else console.log(`brain/brain.json: ${m.gen ?? '?'} rounds on ${Array.isArray(m.lines) ? m.lines.length : '?'} lines\n`);

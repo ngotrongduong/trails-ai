@@ -1147,7 +1147,7 @@
         me.prevP = s[4];
         me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, Math.round(whip * 127)];
         // what the plan asks for here, in the brain's terms (for the brain to learn from lessons)
-        me.want = air ? [0, 0, 0, P.pt[me.airSec], 1] : [vAt(P, sec, idx), btn & 1, pump, 0, 0];
+        me.want = air ? [0, 0, 0, P.pt[me.airSec], 1, P.sa ? P.sa[me.airSec] || 0 : 0] : [vAt(P, sec, idx), btn & 1, pump, 0, 0, 0];
       }
       return me.inp;
     };
@@ -1158,16 +1158,19 @@
 
   // The brain: a small neural network that rides any line from what it sees, instead of a plan learned for one line.
   // Every other step it looks at the bike (speed, pitch and how fast it turns, in the air or not, rising or falling,
-  // height above the ground) and the ground 2 to 33 m ahead, and sets the speed to hold, whether to pull up, how hard
-  // to pump and the angle to hold in the air. Steering stays the fixed controller's. Weights w: 22 inputs to 16 hidden
-  // (tanh), then 4 outputs (tanh) with a bias each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope.
-  const BRAIN = { inp: 22, hid: 16, out: 4 };
+  // height above the ground, how long it has been in the air), the ground 2 to 33 m ahead and the way the line goes
+  // (where it turns ahead, how far the bike is to one side of it), and sets the speed to hold, whether to pull up, how
+  // hard to pump, the angle to hold in the air and how much to steer in the air toward the line. Steering on the
+  // ground stays the fixed controller's. Weights w: 28 inputs to 32 hidden (tanh), then 5 outputs (tanh) with a bias
+  // each. All-zero outputs ride like a fresh plan: 8 m/s, land on the slope, no steering in the air.
+  // (Version 2 was 22 inputs, 16 hidden, 4 outputs: it saw nothing of the line's turns and could not steer in the air.)
+  const BRAIN = { inp: 28, hid: 32, out: 5 };
   BRAIN.size = BRAIN.inp * BRAIN.hid + BRAIN.hid * BRAIN.out + BRAIN.out;
   // The speed output o (-1 to 1) asks for 2 to 18 m/s, 8 at 0; the air output, up to 0.8 rad off the landing slope.
   // (The first brains could only ask for 3 to 13 m/s and 0.4 rad, and a fifth of the jumps learned on lines need more.)
   const brainSpeed = o => 8 + (o > 0 ? 10 : 6) * o, speedOut = v => (v > 8 ? (v - 8) / 10 : (v - 8) / 6), BRAIN_TILT = 0.8;
   function makeBrainRider(R, H, w) {
-    const N = R.length, NI = 22, NH = 16, NO = 4, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
+    const N = R.length, NI = 28, NH = 32, NO = 5, AHEAD = [2, 4, 6, 8, 11, 14, 18, 22, 27, 33];
     let nextTake = R.nextTake, nextLand = R.nextLand;
     if (!nextTake) {
       nextTake = new Int32Array(N).fill(-1); nextLand = new Int32Array(N).fill(-1);
@@ -1201,6 +1204,14 @@
         x[16] = nt < 0 ? 1 : Math.min(1, (nt - idx) / 30);
         x[17] = air ? me.landPt : nt >= 0 ? landSlope(nt) : 0;
         x[18] = R.KIND[idx] === 'takeoff' ? 1 : 0; x[19] = R.KIND[idx] === 'landing' ? 1 : 0; x[20] = R.KIND[idx] === 'pump' ? 1 : 0; x[21] = 1;
+        // the line's way: the bike's heading off the line a little and further ahead, how much the line turns 10 to
+        // 30 m on, how far to one side of it the bike is (the sign: which side), how long it has been in the air, how
+        // far the next landing is
+        const j = Math.min(N - 2, idx), dx = R.X[j + 1] - R.X[j], dz = R.Z[j + 1] - R.Z[j];
+        const hd = i => Math.atan2(R.Z[Math.min(N - 1, i + 2)] - R.Z[i], R.X[Math.min(N - 1, i + 2)] - R.X[i]);
+        x[22] = clamp(e1, -2, 2); x[23] = clamp(e2, -2, 2); x[24] = clamp(wrapA(hd(look(30)) - hd(look(10))), -2, 2);
+        x[25] = clamp(((bz - R.Z[j]) * dx - (bx - R.X[j]) * dz) / (Math.hypot(dx, dz) || 1) / 2, -3, 3);
+        x[26] = clamp(s[12] / 1.5, 0, 2); x[27] = nextLand[idx] < 0 ? 1 : Math.min(1, (nextLand[idx] - idx) / 30);
         // without weights the brain only watches (while a lesson's plan rides, to learn from it)
         if (!w) { me.prevP = s[4]; me.seen = true; return me.inp; }
         me.seen = false;
@@ -1211,7 +1222,11 @@
           if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
           if (o[1] > 0.5) btn |= 1;
           if (o[2] > 0) pump = o[2];
-        } else lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
+        } else {
+          lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
+          // steering in the air as a plan's P.sa does (see makeRider), as much as the fifth output says above 0
+          if (o[4] > 0) st = clamp(o[4] * (2.2 * e1 + 0.6 * e2), -1, 1);
+        }
         me.prevP = s[4];
         me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, 0];
       }
@@ -1220,11 +1235,12 @@
     me.x = x; me.o = o;
     return me;
   }
-  // Teach brain w to do what the plans did (rows from watchPlan: 22 seen, 5 asked for, landing slope). Each output is
-  // fitted before its tanh, only where it means something: speed, pull and pump on the ground, the air angle in the
-  // air. Pull is rare, so its rows count more. Returns new weights; w is not changed.
+  // Teach brain w to do what the plans did (rows from watchPlan: BRAIN.inp seen, 6 asked for, landing slope). Each
+  // output is fitted before its tanh, only where it means something: speed, pull and pump on the ground, the air angle
+  // and the steering in the air. Pull is rare, so its rows count more. Returns new weights; w is not changed.
+  const BRAIN_ROW = BRAIN.inp + 7;
   async function fitBrain(w, rows, epochs = 40) {
-    const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = 28, n = rows.length / RW | 0;
+    const NI = BRAIN.inp, NH = BRAIN.hid, NO = BRAIN.out, W2 = NI * NH, B2 = W2 + NH * NO, RW = BRAIN_ROW, n = rows.length / RW | 0;
     const at = v => Math.atanh(clamp(v, -0.95, 0.95));
     const T = new Float64Array(n * NO), M = new Float64Array(n * NO);
     let pulls = 0;
@@ -1232,7 +1248,12 @@
     const pullW = clamp((n - pulls) / Math.max(1, pulls) / 4, 1, 8);
     for (let r = 0; r < n; r++) {
       const q = r * RW + NI, air = rows[q + 4] > 0;
-      if (air) { T[r * NO + 3] = at((rows[q + 3] - rows[q + 5]) / BRAIN_TILT); M[r * NO + 3] = 1; continue; }
+      if (air) {
+        T[r * NO + 3] = at((rows[q + 3] - rows[q + 6]) / BRAIN_TILT); M[r * NO + 3] = 1;
+        // (no steering is any output at 0 or below: aim a little below)
+        T[r * NO + 4] = rows[q + 5] > 0 ? at(rows[q + 5]) : -0.5; M[r * NO + 4] = 1;
+        continue;
+      }
       T[r * NO] = at(speedOut(rows[q])); M[r * NO] = 1;
       T[r * NO + 1] = rows[q + 1] > 0 ? 1.2 : -1.2; M[r * NO + 1] = rows[q + 1] > 0 ? pullW : 1;
       T[r * NO + 2] = rows[q + 2] > 0 ? at(rows[q + 2]) : -1; M[r * NO + 2] = 1;
@@ -1687,7 +1708,7 @@ function watchPlan(P,until,w){
     l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
     if(s[13]>0){fell=true;break}
   }
-  if(fell&&!me)rows.length=Math.max(0,rows.length-30*28);
+  if(fell&&!me)rows.length=Math.max(0,rows.length-30*${BRAIN_ROW});
   return {rows,prog};
 }
 // The brain w rides the line and its riding is written down as a plan, section by section: the speed it held (as it
@@ -1699,7 +1720,7 @@ function brainPlan(w){
   const N=R.length,K=S.length,me=makeBrainRider(R,H,w);
   const Q={v:S.map(()=>8),pt:S.map(s=>s.pt),mv:S.map(()=>0),hr:S.map(()=>1.5),pl:S.map(()=>0),pu:S.map(()=>0),as:1};
   const tk=makeRider(R,H,S,Q),z=()=>new Float64Array(K);
-  const aim=z(),went=z(),nv=z(),aimE=z(),wentE=z(),nE=z(),pu=z(),np=z(),pt=z(),na=z(),pl=z();
+  const aim=z(),went=z(),nv=z(),aimE=z(),wentE=z(),nE=z(),pu=z(),np=z(),pt=z(),na=z(),pl=z(),sa=z();
   const maxT=Math.min(18000,Math.round(N/2.5*60)+600);
   let s=state(),prog=0,progT=0,stall=0;
   for(let t=0;t<maxT;t++){
@@ -1711,7 +1732,7 @@ function brainPlan(w){
         if(i>=S[k].b-8){aimE[k]+=a;wentE[k]+=v;nE[k]++}
         if((inp[5]&1)&&R.KIND[i]==='takeoff'&&i<=S[k].b)pl[k]=Math.max(pl[k],S[k].b-i+1);
         if((H[Math.min(N-1,i+1)]-H[Math.min(N-1,i+3)])/2>0.03){pu[k]+=Math.max(0,me.o[2]);np[k]++}}
-      else{const k=tk.airSec;pt[k]+=me.landPt+BRAIN_TILT*me.o[3];na[k]++}
+      else{const k=tk.airSec;pt[k]+=me.landPt+BRAIN_TILT*me.o[3];sa[k]+=Math.max(0,me.o[4]);na[k]++}
     }
     l.trails_game_step(g,inp[0],inp[1],inp[2],inp[3],inp[4],inp[5],inp[6]);s=state();
     if(s[13]>0)break;
@@ -1725,6 +1746,7 @@ function brainPlan(w){
       if(na[k])P.pt[k]=+(pt[k]/na[k]).toFixed(4);
       P.pl[k]=Math.min(10,Math.round(pl[k]));
       const p=np[k]?pu[k]/np[k]:0;P.pu[k]=p<0.05?0:+p.toFixed(2);
+      const a=na[k]?sa[k]/na[k]:0;if(a>=0.05){if(!P.sa)P.sa=S.map(()=>0);P.sa[k]=+a.toFixed(2)}
     }
     return P};
   return {prog,plans:[plan(aim,nv),plan(went,nv),plan(aim,nv,aimE),plan(went,nv,wentE)]};
@@ -1999,9 +2021,10 @@ onmessage=async e=>{const m=e.data;
       return { name, n: got.length, min, tries };
     });
   }
-  // The moves a trick drill of the game's Training tries on its jumps (with several tricks to get, combos too: two in
-  // one jump).
-  const DRILL_MOVES = { whip: [WHIP_L, WHIP_R], spin: [SPIN_L, SPIN_R], flip: [FLIP], tricks: [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R, FLIP_WL, FLIP_WR, FLIP_SL, FLIP_SR] };
+  // The moves a trick drill of the game's Training tries on its jumps. A challenge of several tricks (mk 'tricks')
+  // tries combos too, two of them in one jump; the Trick line drill counts one trick a jump, so there they are no use.
+  const DRILL_MOVES = { whip: [WHIP_L, WHIP_R], spin: [SPIN_L, SPIN_R], flip: [FLIP], tricks: [FLIP, SPIN_L, SPIN_R, WHIP_L, WHIP_R] };
+  const AIM_TRICKS = TRICK_MOVES;
   // A first plan for a Training drill: the jumps of a trick drill taken fast (its kickers throw the bike up more than
   // along: measured, about 13 m/s gets a backflip, a 360 or a whip round and onto the landing), and a manual on the
   // Manual drill. The tricks themselves come once the drill is ridden to the end (see drillGoal). The drills without
@@ -2178,9 +2201,13 @@ onmessage=async e=>{const m=e.data;
     return { from, to, v, pump, pull, jumps, at: Date.now() };
   }
   // the tricks the game counted on a jump of the player's (rideOn), as its bits (1 backflip, 2 360, 4 whip), and as
-  // the AI's move for the first of them (0: none)
+  // the AI's move for them, a combo for a backflip with a 360 or a whip (0: none)
   const playerTr = j => (Math.abs(j.fv) >= 270 ? 1 : 0) | (Math.abs(j.sv) >= 300 ? 2 : 0) | (Math.abs(j.wv) >= 45 ? 4 : 0);
-  const playerMove = j => { const t = playerTr(j); return t & 1 ? FLIP : t & 2 ? (j.dir < 0 ? SPIN_L : SPIN_R) : t & 4 ? (j.dir < 0 ? WHIP_L : WHIP_R) : 0; };
+  const playerMove = j => {
+    const t = playerTr(j), l = j.dir < 0;
+    if (t & 1) return t & 2 ? (l ? FLIP_SL : FLIP_SR) : t & 4 ? (l ? FLIP_WL : FLIP_WR) : FLIP;
+    return t & 2 ? (l ? SPIN_L : SPIN_R) : t & 4 ? (l ? WHIP_L : WHIP_R) : 0;
+  };
   // The player's rides kept for each line (by its id; newest first, 3 a line, the 30 lines ridden last).
   const PLAYER = 'trailsai.player';
   const playerAll = () => { try { return JSON.parse(localStorage.getItem(PLAYER) || '{}') || {}; } catch { return {}; } };
@@ -2435,7 +2462,7 @@ onmessage=async e=>{const m=e.data;
     // the account has tricks; none (the plan's move kept, or none) without.
     movesFor(k, n) {
       // (a challenge's moves: mk, see aimOf)
-      const D = this.route.aim || this.route.drill, only = D && DRILL_MOVES[D.mk || D.kind];
+      const D = this.route.aim || this.route.drill, only = D && (this.route.aim && D.mk === 'tricks' ? AIM_TRICKS : DRILL_MOVES[D.mk || D.kind]);
       if (only) return Array.from({ length: n }, () => only[Math.floor(Math.random() * only.length)]);
       const air = this.airOf(k);
       return this.setup.tricks && air ? bookMoves(this.book, air, n, this.setup.tricks) : null;
@@ -2672,9 +2699,10 @@ onmessage=async e=>{const m=e.data;
   // copies of itself (every change tried both ways) on a few of its lines, and moves its weights toward the changes
   // that rode better. The line chosen in the list is kept aside and never learned on: how far the brain rides it shows
   // whether it can ride a line it has never seen. The best brain so far on all its lines is the one kept and used.
-  // version 2: wider speed and air outputs (brainSpeed), so the numbers of a version 1 brain mean something else
-  const BRAIN_KEY = 'trailsai.brain2';
-  const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 2;
+  // version 2: wider speed and air outputs (brainSpeed), so the numbers of a version 1 brain mean something else;
+  // version 3: a bigger brain (BRAIN) that sees the line's turns and steers in the air
+  const BRAIN_KEY = 'trailsai.brain3';
+  const BRAIN_FORMAT = 'trails-ai-brain', BRAIN_VERSION = 3;
   const BRAIN_URL = `https://raw.githubusercontent.com/${REPO}/main/brain/brain.json`;
   const BRAIN_CAP = 400;   // metres of each line a brain is scored on (a long line would hold every round up)
   const weightsOk = w => Array.isArray(w) && w.length === BRAIN.size && w.every(num);
@@ -2789,7 +2817,7 @@ onmessage=async e=>{const m=e.data;
       const info = { lines: teach.length, rows: 0, took: false, steps: [], plans: seen.map((r, k) => [plans[k].line, r.prog, mine(plans[k].line)]) };
       this.lastDistill = info;
       let rows = join();
-      if (rows.length < 28 * 200) return info;
+      if (rows.length < BRAIN_ROW * 200) return info;
       let w = await fitBrain(freshBrain(), rows, 60), bestW = null, bestR = null;
       for (let k = 0; ; k++) {
         const [r] = await this.rate([w], this.trainIdx);
@@ -2800,7 +2828,7 @@ onmessage=async e=>{const m=e.data;
         rows = join();
         w = await fitBrain(w, rows, 30);
       }
-      Object.assign(info, { rows: rows.length / 28 | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
+      Object.assign(info, { rows: rows.length / BRAIN_ROW | 0, share: bestR.share(), w: bestW, took: await this.keep(bestW, bestR) });
       return info;
     }
     // The next BATCH training lines, taken in turn from a shuffled queue: with many lines a round costs the same, and
