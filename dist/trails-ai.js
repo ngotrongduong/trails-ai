@@ -466,6 +466,27 @@ start: { id: start.id, x: start.x, z: start.z, heading: start.heading },
 X, Z, KIND, W, length: X.length, pieces, kinds,
 };
 }
+async function widthsOf(route) {
+const e = await engine(), segs = [];
+for (const p of route.pieces) {
+if (!PHYS_KINDS.includes(p.kind) || !(p.params && p.params.width > 0)) continue;
+const lay = layOf(e, p);
+if (lay && lay.path && lay.path.length > 1) segs.push({ hw: p.params.width / 2, pts: lay.path.map(q => [q[1], q[2]]) });
+}
+return Array.from(route.X, (x, i) => {
+const z = route.Z[i];
+let w = 0;
+for (const s of segs) {
+if (s.hw <= w) continue;
+for (let k = 1; k < s.pts.length; k++) {
+const [ax, az] = s.pts[k - 1], [bx, bz] = s.pts[k], dx = bx - ax, dz = bz - az;
+const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1)));
+if (Math.hypot(x - ax - dx * t, z - az - dz * t) < 2) { w = s.hw; break; }
+}
+}
+return w;
+});
+}
 const ONWARD_GAP = 60, ONWARD_R = 2.5;
 function joinCurve(ex, ez, eh, x, z, h) {
 const d = Math.hypot(x - ex, z - ez);
@@ -2705,6 +2726,7 @@ let route = o.drill || routeCache.get(o.s.id) || savedLine(o.s.id) || routeCache
 if (route && lineStale(route)) { log(tx('Đường này đã được sửa trong game từ lần học trước, AI dò lại đường.', 'This line has been changed in the game since it was last learned: the AI traces it again.')); route = null; }
 if (!route && shared && !lineStale(shared.line)) { route = shared.line; log(tx('Lấy bản đồ đường này từ bài học cộng đồng trên GitHub.', "Taking this line's map from the community lesson on GitHub.")); }
 if (!route) route = await buildRoute(o.s, undefined, undefined, o.s.back);
+else if (!route.W && !route.practice && !o.drill) route = { ...route, W: await widthsOf(route) };
 if (!route) { say(tx('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.', 'Could not trace a line from this start (it may not have loaded yet). Try another start or get closer.')); return false; }
 const len0 = route.tour === undefined ? route.length : 0;
 route = await extendRoute(route);

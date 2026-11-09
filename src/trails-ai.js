@@ -592,6 +592,30 @@
     };
   }
 
+  // Half the width of the piece under each point of a route kept from before routes carried it (R.W): the widest
+  // piece whose way passes within 2 m of the point, else 0.
+  async function widthsOf(route) {
+    const e = await engine(), segs = [];
+    for (const p of route.pieces) {
+      if (!PHYS_KINDS.includes(p.kind) || !(p.params && p.params.width > 0)) continue;
+      const lay = layOf(e, p);
+      if (lay && lay.path && lay.path.length > 1) segs.push({ hw: p.params.width / 2, pts: lay.path.map(q => [q[1], q[2]]) });
+    }
+    return Array.from(route.X, (x, i) => {
+      const z = route.Z[i];
+      let w = 0;
+      for (const s of segs) {
+        if (s.hw <= w) continue;
+        for (let k = 1; k < s.pts.length; k++) {
+          const [ax, az] = s.pts[k - 1], [bx, bz] = s.pts[k], dx = bx - ax, dz = bz - az;
+          const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1)));
+          if (Math.hypot(x - ax - dx * t, z - az - dz * t) < 2) { w = s.hw; break; }
+        }
+      }
+      return w;
+    });
+  }
+
   // The lines the bike could go on to from line R, best first (at most max). Any line with a piece within ONWARD_GAP
   // metres of the end counts (or of a point of R it can turn off at, see onwardChoices), whichever way it goes:
   // straight on, across the way the bike goes, off to a side or back round a turn, joined at its start or in its
@@ -3335,6 +3359,7 @@ onmessage=async e=>{const m=e.data;
           if (route && lineStale(route)) { log(tx('Đường này đã được sửa trong game từ lần học trước, AI dò lại đường.', 'This line has been changed in the game since it was last learned: the AI traces it again.')); route = null; }
           if (!route && shared && !lineStale(shared.line)) { route = shared.line; log(tx('Lấy bản đồ đường này từ bài học cộng đồng trên GitHub.', "Taking this line's map from the community lesson on GitHub.")); }
           if (!route) route = await buildRoute(o.s, undefined, undefined, o.s.back);
+          else if (!route.W && !route.practice && !o.drill) route = { ...route, W: await widthsOf(route) };
           if (!route) { say(tx('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.', 'Could not trace a line from this start (it may not have loaded yet). Try another start or get closer.')); return false; }
           // learned as a tour, with the lines that go on from its end
           const len0 = route.tour === undefined ? route.length : 0;
