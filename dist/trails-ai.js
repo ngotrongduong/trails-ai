@@ -1180,6 +1180,7 @@ const E={P,N,until:opt.until||1e9,t:0,idx:0,prog:0,pts:0,seq:s[16],stall:0,crash
 maxT:Math.min(120000,Math.round(N/2.5*60)+600),vr:new Float32Array(N),tricks:{},pending:null,manualM:0,landT:-1e9,jumps:0,landAt:-1,lastJ:-1,
 progAt:0,progT:0,jl:[],game:0,streak:0,airP:0,tail:-1,calm:0,halt:0,held:-1,vTail:0,manRun:0,manBest:0,push:null,goodPumps:0,pumpGain:0,seenPump:c0?c0[0]:0,
 crashT:-1,mc:0,mm:0,manOk:0,manLong:0,mov:0,
+bigLand:-1,
 tr:opt.rec?[]:null,ev:opt.rec?[]:null};
 E.rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
 return E;
@@ -1201,7 +1202,7 @@ const q=coach();if(q&&q[0]!==E.seenPump){E.seenPump=q[0];E.pumpGain+=q[1];if(p)p
 if(p&&p.since!==null&&(p.since>=27||p.kmh!==null)){const z=p.z;
 if(z&&p.from>=z[0]-0.8&&p.from<=z[2]+0.2&&p.to<=z[1]+0.8&&p.to>=z[2]-0.2&&!(p.kmh!==null&&p.kmh<0.3))E.goodPumps++;
 E.push=c?newPush(u):null}}
-const idx=E.idx=rider.idx;if(idx>E.prog){for(let i=E.prog+1;i<=idx;i++)E.vr[i]=Math.abs(s[8]);E.prog=idx}
+const idx=E.idx=rider.idx;if(rider.landed&&s[14]>2)E.bigLand=idx;if(idx>E.prog){for(let i=E.prog+1;i<=idx;i++)E.vr[i]=Math.abs(s[8]);E.prog=idx}
 E.calm=air?0:E.calm+1;
 if(idx>=N-3&&E.tail<0){if(R.drill){E.end='về đích';E.pts+=150;return fin(E,s)}E.tail=t;E.vTail=+Math.abs(s[8]).toFixed(2)}
 if(E.tail>=0){
@@ -1209,7 +1210,7 @@ if(!E.halt&&(E.calm>=30||(!air&&s[8]<-0.3)))E.halt=1;
 if(E.held<0&&E.halt&&!air&&Math.abs(s[8])<0.5&&Math.abs(s[4])<0.15)E.held=t;
 if((E.held>=0&&t-E.held>=60)||t-E.tail>=420){E.end='về đích';E.pts+=150;return fin(E,s)}
 inp=E.held>=0?noPedals([0,127,0,0,0,0,0]):tailInp(s,inp,E.halt);
-}else if(rider.off>Math.max(7,R.W&&R.W.length===N?R.W[idx]+1:0)&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
+}else if(rider.off>(E.bigLand>=0&&idx-E.bigLand<40?15:Math.max(7,R.W&&R.W.length===N?R.W[idx]+1:0))&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
 if(idx>=E.until){E.end='đạt mốc';return fin(E,s)}
 if(rider.landed){E.landT=t;if(s[14]>0.3)E.landAt=t}
 if(E.landAt>=0&&t-E.landAt>=45){if(idx>E.lastJ+3){E.pts+=15;E.jumps++;E.lastJ=idx}E.landAt=-1}
@@ -3380,7 +3381,7 @@ function ride(d, R) {
 ridden = true;
 const st = d.route.start;
 d.runIn = Math.max(0, R.length - d.route.length);
-d.base = -d.runIn; d.legs = 0;
+d.base = -d.runIn; d.legs = 0; d.bigLand = -1;
 const drill = d.route.drill;
 if (!drill) {
 live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
@@ -3434,7 +3435,7 @@ for (const l of ahead) if (l !== leg) stopLeg(l);
 ahead = []; tried.clear();
 cur = leg; mark(leg.route);
 d.base += (coast ? coast.at : rider.idx) - bi; d.legs++; coast = null;
-R = R2; rider = d.rider = r2; far = bi; farT = t;
+R = R2; rider = d.rider = r2; far = bi; farT = t; d.bigLand = -1;
 look();
 };
 d.step = () => {
@@ -3491,7 +3492,8 @@ const p = s[4], brake = air || v <= 0 ? 0 : Math.abs(p) >= 0.15 ? (p > 0 ? 70 : 
 inp = coast.halt ? [0, brake, Math.round(st * 127), ln, 0, 0, 0] : [v < 6 ? 127 : 0, v > 9 ? 40 : 0, Math.round(st * 127), ln, 0, 0, 0];
 } else {
 inp = rider.step(s, t++).slice();
-if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive(tx('lạc khỏi đường', 'off the line')), 0); return null; }
+if (rider.landed && s[14] > 2) d.bigLand = rider.idx;
+if (rider.off > (d.bigLand >= 0 && rider.idx - d.bigLand < 40 ? 18 : 12) && !(s[12] > 0)) { setTimeout(() => stopDrive(tx('lạc khỏi đường', 'off the line')), 0); return null; }
 if (rider.idx > far || s[12] > 0) { far = Math.max(far, rider.idx); farT = t; }
 else if (t - farT > 180) { setTimeout(() => stopDrive(tx('bị kẹt (3 giây không tiến thêm được mét nào, chắc xe chạm vào vách)', 'stuck (not a metre further in 3 seconds: the bike is probably against a wall)')), 0); return null; }
 }

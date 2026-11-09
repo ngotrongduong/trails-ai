@@ -1511,6 +1511,8 @@ function Ep(P,opt){
     // (for a challenge, see aimGoal: the step of the fall, the manual going on now (steps, metres), the metres of
     // the manuals held a second or more and the longest, steps moving)
     crashT:-1,mc:0,mm:0,manOk:0,manLong:0,mov:0,
+    // (where the bike last came down from a flight of over 2 s)
+    bigLand:-1,
     tr:opt.rec?[]:null,ev:opt.rec?[]:null};
   E.rider=opt.brain?makeBrainRider(R,H,opt.brain):makeRider(R,H,S,P);
   return E;
@@ -1533,7 +1535,7 @@ function go(E,stop){
       if(p&&p.since!==null&&(p.since>=27||p.kmh!==null)){const z=p.z;
         if(z&&p.from>=z[0]-0.8&&p.from<=z[2]+0.2&&p.to<=z[1]+0.8&&p.to>=z[2]-0.2&&!(p.kmh!==null&&p.kmh<0.3))E.goodPumps++;
         E.push=c?newPush(u):null}}
-    const idx=E.idx=rider.idx;if(idx>E.prog){for(let i=E.prog+1;i<=idx;i++)E.vr[i]=Math.abs(s[8]);E.prog=idx}
+    const idx=E.idx=rider.idx;if(rider.landed&&s[14]>2)E.bigLand=idx;if(idx>E.prog){for(let i=E.prog+1;i<=idx;i++)E.vr[i]=Math.abs(s[8]);E.prog=idx}
     // Past the end the bike rides on as the AI does in the game when it sees no line to go on to (tailInp): the ride
     // is through once the bike has come down, been on the ground half a second (calm: since when) and braked to a
     // stop, so a plan does not end on a jump it would crash out of. A Training drill ends at its finish, as the game
@@ -1547,8 +1549,9 @@ function go(E,stop){
       if(E.held<0&&E.halt&&!air&&Math.abs(s[8])<0.5&&Math.abs(s[4])<0.15)E.held=t;
       if((E.held>=0&&t-E.held>=60)||t-E.tail>=420){E.end='về đích';E.pts+=150;return fin(E,s)}
       inp=E.held>=0?noPedals([0,127,0,0,0,0,0]):tailInp(s,inp,E.halt);
-    // (off the line: over 7 m from its middle, or past the edge of a wider trail, R.W)
-    }else if(rider.off>Math.max(7,R.W&&R.W.length===N?R.W[idx]+1:0)&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
+    // (off the line: over 7 m from its middle, or past the edge of a wider trail, R.W; for 40 m after a flight of
+    // over 2 s, 15 m: a 100 m jump comes down a few metres to one side, and the bike steers back onto the line)
+    }else if(rider.off>(E.bigLand>=0&&idx-E.bigLand<40?15:Math.max(7,R.W&&R.W.length===N?R.W[idx]+1:0))&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
     if(idx>=E.until){E.end='đạt mốc';return fin(E,s)}
     if(rider.landed){E.landT=t;if(s[14]>0.3)E.landAt=t}
     if(E.landAt>=0&&t-E.landAt>=45){if(idx>E.lastJ+3){E.pts+=15;E.jumps++;E.lastJ=idx}E.landAt=-1}
@@ -4139,7 +4142,7 @@ onmessage=async e=>{const m=e.data;
       // the training line starts with a straight run-in from the spawn; distances shown are along the real line
       d.runIn = Math.max(0, R.length - d.route.length);
       // metres ridden = d.base + the index on the line ridden now (lines ridden on into add up)
-      d.base = -d.runIn; d.legs = 0;
+      d.base = -d.runIn; d.legs = 0; d.bigLand = -1;
       // a Training drill has been started over by the game itself (getUp), from its start and at its speed
       const drill = d.route.drill;
       if (!drill) {
@@ -4206,7 +4209,7 @@ onmessage=async e=>{const m=e.data;
         ahead = []; tried.clear();
         cur = leg; mark(leg.route);
         d.base += (coast ? coast.at : rider.idx) - bi; d.legs++; coast = null;
-        R = R2; rider = d.rider = r2; far = bi; farT = t;
+        R = R2; rider = d.rider = r2; far = bi; farT = t; d.bigLand = -1;
         look();
       };
       d.step = () => {
@@ -4274,7 +4277,9 @@ onmessage=async e=>{const m=e.data;
             inp = coast.halt ? [0, brake, Math.round(st * 127), ln, 0, 0, 0] : [v < 6 ? 127 : 0, v > 9 ? 40 : 0, Math.round(st * 127), ln, 0, 0, 0];
           } else {
             inp = rider.step(s, t++).slice();
-            if (rider.off > 12 && !(s[12] > 0)) { setTimeout(() => stopDrive(tx('lạc khỏi đường', 'off the line')), 0); return null; }
+            // (as in the simulation, 15 m and more is allowed for 40 m after a flight of over 2 s)
+            if (rider.landed && s[14] > 2) d.bigLand = rider.idx;
+            if (rider.off > (d.bigLand >= 0 && rider.idx - d.bigLand < 40 ? 18 : 12) && !(s[12] > 0)) { setTimeout(() => stopDrive(tx('lạc khỏi đường', 'off the line')), 0); return null; }
             // nosed into a wall without falling, the wheel pushing on: the bike would stay there for ever
             if (rider.idx > far || s[12] > 0) { far = Math.max(far, rider.idx); farT = t; }
             else if (t - farT > 180) { setTimeout(() => stopDrive(tx('bị kẹt (3 giây không tiến thêm được mét nào, chắc xe chạm vào vách)', 'stuck (not a metre further in 3 seconds: the bike is probably against a wall)')), 0); return null; }

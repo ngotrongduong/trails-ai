@@ -67,7 +67,9 @@ are no limit. A route joins a takeoff to a landing up to 250 m on (a big jump do
 hill), anything else to at most 40 m, and nearer pieces always win. A route carries half the
 width of the piece under each metre (`W`): a ride is off the line when the bike is more than
 7 m from the middle and past the edge of a wider trail (a 20 m wide run-out lets it be 11 m
-off after a 100 m jump).
+off after a 100 m jump). For 40 m after a flight of over 2 s the limit is 15 m (18 m when the
+AI rides in the game, 12 m elsewhere there): a 100 m jump comes down a few metres to one side
+of a landing at most 8 m wide, and the bike steers back onto the line.
 
 The search goes along the line section by section, keeping a **beam** of the best few
 partial rides. Each one is a saved state at the start of section k with the plan so far
