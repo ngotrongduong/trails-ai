@@ -75,6 +75,9 @@
   const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
   const N_MOVES = 21;          // trick moves for the air the worker knows (index 0 = none); MANUAL is on the ground
   const SPIN_L = 16, SPIN_R = 17, FLIP = 18, WHIP_L = 19, WHIP_R = 20, MANUAL = 21;
+  // A planned speed at the top of the range (18 m/s, or 17.5 and up) has no limit: pedal while it helps, never brake,
+  // however fast the bike goes (the owner wants no speed limit on the AI; 40 m/s and more down a big hill).
+  const VFREE = 17.5;
   // The game's Training drills, by what each asks for (as the game judges it): need is how much of it one ride must get.
   // pumps: the rollers without pedals, faster at the end than at the start (the game counts 6 good pumps); laps: two laps
   // of the pump track without pedals; clean: every jump landed clean in one ride (Jumping, Pump & pull); boost / racer:
@@ -518,10 +521,12 @@
         const f = dx * Math.cos(eh) + dz * Math.sin(eh);
         const lat = -dx * Math.sin(eh) + dz * Math.cos(eh);
         const dh = Math.abs(wrapA(lh - eh));
-        const maxF = jump ? 40 : 3.5;
+        // (a big jump down a long hill flies 100 m and more: from a takeoff, a landing up to 250 m on still joins; anything
+        // else only up to 40 m, and nearer pieces always win)
+        const maxF = jump ? (b.p.kind === 'landing' ? 250 : 40) : 3.5;
         // (a berm's way in and out are 3 m long and lie over the flats either side of it)
         if (f < -3.5 || f > maxF) continue;
-        if (Math.abs(lat) > 1.5 + Math.max(0, f) * (jump ? 0.45 : 0.3)) continue;
+        if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
         if (dh > (jump ? 0.75 : 0.65)) continue;
         const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
         if (sc < score) { score = sc; nxt = s; }
@@ -1089,8 +1094,8 @@
         const sec = me.sec, idx = me.idx;
         if (!air) {
           // hold the planned speed; ease off the pedals on steep drops (full power there throws you over the bars)
-          const e = vAt(P, sec, idx) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
-          if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
+          const va = vAt(P, sec, idx), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+          if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
           if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
           // Pump, as hard as the section says. A plan with pz pumps through the dips as the game's Training teaches (the
           // zones R.PZ: from pk[0] m past where one starts to pk[1] m past where it ends); older plans where the ground
@@ -1193,8 +1198,8 @@
         for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
         for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
         if (!air) {
-          const e = brainSpeed(o[0]) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
-          if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
+          const va = brainSpeed(o[0]), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+          if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
           if (o[1] > 0.5) btn |= 1;
           if (o[2] > 0) pump = o[2];
         } else lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
@@ -1317,7 +1322,7 @@ const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
 // steps without a metre more along the line before a ride is stuck (the AI driving in the game gives up as soon)
 const STUCK=180;
 const MOVES=${JSON.stringify(MOVES)},PUMP0=${JSON.stringify(PUMP0)};
-const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
+const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT},VFREE=${VFREE};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
 ${gamePoints.toString()}
@@ -2438,17 +2443,19 @@ onmessage=async e=>{const m=e.data;
       if (!s.jump && (dk === 'manual' || dk === 'tricks') && Math.random() < 0.3) p.mv[k] = p.mv[k] === MANUAL ? 0 : MANUAL;
       return p;
     }
-    // Section k drawn anew, whatever the plan had: speeds anywhere from 3 to 18 m/s (often by parts), any angle in the
+    // Section k drawn anew, whatever the plan had: speeds anywhere from 3 to 18 m/s (often by parts; a quarter of them
+    // 18, no limit at all, VFREE), any angle in the
     // air (around the jump's own, or anywhere from 1.2 rad nose down to 0.6 up), a pull or none, a pump or none. A place no ride has got past
     // yet may need what is far from anything tried (one line needed 60° nose down and 18 m/s into a jump after 7).
     wildTry(nd, k) {
       const s = this.secs[k], p = clonePlan(nd.plan), r = (a, b) => a + Math.random() * (b - a);
+      const rv = () => Math.random() < 0.25 ? 18 : +r(3, 18).toFixed(2);
       if (!p.vs) p.vs = p.v.map(() => null);
       if (Math.random() < 0.5 && s.b - s.a >= 12) {
         const n = 2 + Math.floor(Math.random() * 3);
-        p.vs[k] = Array.from({ length: n }, () => +r(3, 18).toFixed(2));
+        p.vs[k] = Array.from({ length: n }, rv);
         p.v[k] = p.vs[k][n - 1];
-      } else { p.vs[k] = null; p.v[k] = r(3, 18); }
+      } else { p.vs[k] = null; p.v[k] = rv(); }
       if (s.jump) {
         // (the angle worked out for the landing can be far off: one jump needed 0.94 rad more nose down)
         p.pt[k] = Math.random() < 0.5 ? s.pt + r(-0.6, 0.4) : r(-1.2, 0.6);
@@ -2463,6 +2470,8 @@ onmessage=async e=>{const m=e.data;
     // ride falls or the section before, a third once the search has had to back up past here, a tenth elsewhere.
     firstTries(nd, k, wide, n, wild) {
       const S = this.secs, s = S[k], out = [{ p: clonePlan(nd.plan), same: true }];
+      // always one try with no speed limit here (VFREE: never brake)
+      if (nd.plan.v[k] < VFREE || (nd.plan.vs && nd.plan.vs[k])) { const p = clonePlan(nd.plan); if (p.vs) p.vs[k] = null; p.v[k] = 18; out.push({ p }); }
       if (s.jump) {
         for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
           const p = clonePlan(nd.plan), u = p.vs && p.vs[k];

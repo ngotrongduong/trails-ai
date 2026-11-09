@@ -59,6 +59,13 @@ The line is cut into sections as before (one per jump, else every 40 m). A plan 
 same values per section (speed, or speeds by part, angle in the air, pull, pump, trick and
 its timing), so v2 lessons still load.
 
+There is no speed limit: a planned speed at the top of the range (18, or 17.5 and up,
+`VFREE`) means pedal while it helps and never brake, however fast the bike goes (40 m/s and
+more down a big hill). The brain's speed output at its top means the same. Every section
+gets one try with no limit among its first tries, and a quarter of the speeds drawn anew
+are no limit. A route joins a takeoff to a landing up to 250 m on (a big jump down a long
+hill), anything else to at most 40 m, and nearer pieces always win.
+
 The search goes along the line section by section, keeping a **beam** of the best few
 partial rides. Each one is a saved state at the start of section k with the plan so far
 and its score so far (the game's points with the streak, the drill's progress).

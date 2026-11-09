@@ -34,6 +34,7 @@ tick();
 const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
 const N_MOVES = 21;          // trick moves for the air the worker knows (index 0 = none); MANUAL is on the ground
 const SPIN_L = 16, SPIN_R = 17, FLIP = 18, WHIP_L = 19, WHIP_R = 20, MANUAL = 21;
+const VFREE = 17.5;
 const DRILL_GOALS = {
 pumps: { name: 'Pumping', pedals: false, need: 6 }, laps: { name: 'Pump track', pedals: false },
 clean4: { name: 'Jumping' }, clean3: { name: 'Pump & pull' }, boost: { name: 'Boost & racer (boost)' },
@@ -407,9 +408,9 @@ const dx = lx - ex, dz = lz - ez;
 const f = dx * Math.cos(eh) + dz * Math.sin(eh);
 const lat = -dx * Math.sin(eh) + dz * Math.cos(eh);
 const dh = Math.abs(wrapA(lh - eh));
-const maxF = jump ? 40 : 3.5;
+const maxF = jump ? (b.p.kind === 'landing' ? 250 : 40) : 3.5;
 if (f < -3.5 || f > maxF) continue;
-if (Math.abs(lat) > 1.5 + Math.max(0, f) * (jump ? 0.45 : 0.3)) continue;
+if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
 if (dh > (jump ? 0.75 : 0.65)) continue;
 const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
 if (sc < score) { score = sc; nxt = s; }
@@ -860,8 +861,8 @@ const e1 = wrapA(Math.atan2(R.Z[a1] - bz, R.X[a1] - bx) - bh), e2 = wrapA(Math.a
 let st = air ? 0 : clamp(2.2 * e1 + 0.6 * e2, -1, 1), pedal = 0, brake = 0, lean = 0, btn = 0, whip = 0, pump = 0;
 const sec = me.sec, idx = me.idx;
 if (!air) {
-const e = vAt(P, sec, idx) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
-if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
+const va = vAt(P, sec, idx), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
 if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
 if (P.pu && P.pu[sec] > 0 && R.KIND[idx] !== 'start') {
 if (P.pz && R.PZ) { const pk = P.pk || PUMP0, u = me.at; if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec]; }
@@ -941,8 +942,8 @@ me.seen = false;
 for (let j = 0; j < NH; j++) { let a = 0; for (let i = 0; i < NI; i++) a += x[i] * w[i * NH + j]; h[j] = Math.tanh(a); }
 for (let k = 0; k < NO; k++) { let a = w[B2 + k]; for (let j = 0; j < NH; j++) a += h[j] * w[W2 + j * NO + k]; o[k] = Math.tanh(a); }
 if (!air) {
-const e = brainSpeed(o[0]) - sp, pm = s[4] < -0.15 ? 0.4 : 1;
-if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4) brake = Math.min(1, -e * 0.5);
+const va = brainSpeed(o[0]), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
+if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
 if (o[1] > 0.5) btn |= 1;
 if (o[2] > 0) pump = o[2];
 } else lean = clamp(2.2 * (s[4] - (me.landPt + BRAIN_TILT * o[3])) + 0.35 * dp, -1, 1);
@@ -1054,7 +1055,7 @@ const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
 const TP={flip:300,spin:200,table:80,tailwhip:150,barspin:120,tbog:80,xup:60};
 const STUCK=180;
 const MOVES=${JSON.stringify(MOVES)},PUMP0=${JSON.stringify(PUMP0)};
-const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT};
+const brainSpeed=${brainSpeed.toString()},BRAIN_TILT=${BRAIN_TILT},VFREE=${VFREE};
 ${makeRider.toString()}
 ${makeBrainRider.toString()}
 ${gamePoints.toString()}
@@ -1934,12 +1935,13 @@ return p;
 }
 wildTry(nd, k) {
 const s = this.secs[k], p = clonePlan(nd.plan), r = (a, b) => a + Math.random() * (b - a);
+const rv = () => Math.random() < 0.25 ? 18 : +r(3, 18).toFixed(2);
 if (!p.vs) p.vs = p.v.map(() => null);
 if (Math.random() < 0.5 && s.b - s.a >= 12) {
 const n = 2 + Math.floor(Math.random() * 3);
-p.vs[k] = Array.from({ length: n }, () => +r(3, 18).toFixed(2));
+p.vs[k] = Array.from({ length: n }, rv);
 p.v[k] = p.vs[k][n - 1];
-} else { p.vs[k] = null; p.v[k] = r(3, 18); }
+} else { p.vs[k] = null; p.v[k] = rv(); }
 if (s.jump) {
 p.pt[k] = Math.random() < 0.5 ? s.pt + r(-0.6, 0.4) : r(-1.2, 0.6);
 p.pl[k] = Math.random() < 0.6 ? 1 + Math.floor(Math.random() * 6) : 0;
@@ -1950,6 +1952,7 @@ return { p };
 }
 firstTries(nd, k, wide, n, wild) {
 const S = this.secs, s = S[k], out = [{ p: clonePlan(nd.plan), same: true }];
+if (nd.plan.v[k] < VFREE || (nd.plan.vs && nd.plan.vs[k])) { const p = clonePlan(nd.plan); if (p.vs) p.vs[k] = null; p.v[k] = 18; out.push({ p }); }
 if (s.jump) {
 for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
 const p = clonePlan(nd.plan), u = p.vs && p.vs[k];
