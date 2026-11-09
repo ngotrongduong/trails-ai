@@ -109,6 +109,41 @@ This replaces all the v2 modes: the first sweep gets through the line, the next 
 make the landings and tricks better, and pumping and manuals are values of the sections
 like the rest.
 
+### Combos and steering in the air
+
+Measured in the game's physics on the longest jumps of the shared lessons (1.8 to 2.3 s
+in the air), with the plan's controls changed only in that flight:
+
+- The game counts two tricks of one jump: a backflip with a whip (on Trảng Sương 29's
+  2.1 s jump, landed clean for 1620 points, the backflip alone 1200) and a backflip with
+  a 360 (counted, up to 1800, but every such try fell soon after it landed). A 360 with a
+  whip cannot be done: both are the whip control, held through the turn for a 360.
+- So there are four combo moves (22 to 25, after the manual, so the ids of older moves keep
+  their meaning): a backflip with a whip either way, a backflip with a 360 either way. The
+  rider does each part as the single trick does it (the pedals held up the takeoff for the
+  backflip, the whip held up it for the 360, the whip let go hr × 0.25 s after the lip),
+  and leaves the bike's angle alone while either turns it. The trick book weighs a combo
+  as both its tricks and counts it as landed before only when both were; it draws no move
+  of a trick the account has not unlocked. The Trick line drill counts one trick a jump,
+  so only challenges of several tricks try combos.
+- Steering in the air turns the bike and the way it flies alike: about 30° a second at
+  full lock, linear in the input (0.5 s at half lock: 7.2°; at full: 14.9°; 1 s: 30.7°),
+  the same at 5 m/s as at 11. The rider used to let go of the bars in the air. A plan now
+  holds sa per section (0 to 1): in the air off that jump it steers toward the line ahead
+  as on the ground, times sa (not while a 360 goes round). The search tries 0, 0.15, 0.3,
+  0.5, 0.8 and 1 on jumps. Steering every jump of a lesson learned without it set the bike
+  down nearer the line but made the lesson fall early, so it is learned jump by jump like
+  the rest. Plans without sa ride exactly as before.
+- The shared brain (version 3) steers in the air too: a fifth output, times the same
+  steering toward the line, learned from the lessons' sa. It is bigger than version 2
+  (28 inputs, 32 hidden, 5 outputs, 1061 weights; was 22, 16, 4, 420) and sees how far off
+  the line's heading it is near and far, how far left or right of the line, how much the
+  line turns 10 to 30 m ahead, how long it has flown and how far the next landing is.
+  Both learned from nothing (distilled from the lessons, then 6 min of evolution) on 20
+  lines and tested on 11 unseen ones, twice: version 3 rode 40.5 % / 33.1 % of the unseen
+  lines, version 2 31.9 % / 32.3 % (39.6 / 37.6 % against 36.2 / 36.0 % on the training
+  lines). It is stored under a new key (trailsai.brain3), so everyone's brain starts over.
+
 ## Learning from the player
 
 While the player rides (the AI not driving), the engine hook (watchStep) keeps a frame of

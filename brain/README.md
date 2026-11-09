@@ -15,9 +15,9 @@ Pull request sẽ được nhận nếu bộ não mới đi giỏi hơn bộ nã
 ```json
 {
   "format": "trails-ai-brain",
-  "version": 2,
-  "arch": { "inp": 22, "hid": 16, "out": 4, "size": 420 },
-  "w": [420 số],
+  "version": 3,
+  "arch": { "inp": 28, "hid": 32, "out": 5, "size": 1061 },
+  "w": [1061 số],
   "gen": 120,
   "lines": ["mã đường", "…"],
   "score": { "share": 0.55 },
@@ -25,8 +25,8 @@ Pull request sẽ được nhận nếu bộ não mới đi giỏi hơn bộ nã
 }
 ```
 
-- `w`: các trọng số. 22 × 16 đầu tiên nối đầu vào với nơ-ron ẩn, 16 × 4 tiếp theo nối nơ-ron ẩn với đầu ra, 4 số cuối là độ lệch của đầu ra. Mã ở `makeBrainRider` trong [`src/trails-ai.js`](../src/trails-ai.js).
-- `version`: 2 kể từ khi đầu ra tốc độ đòi được 2–18 m/s và đầu ra góc bay lệch được 0,8 rad. Bộ não version 1 không còn được dùng, vì cùng các số đó giờ mang nghĩa khác.
+- `w`: các trọng số. 28 × 32 đầu tiên nối đầu vào với nơ-ron ẩn, 32 × 5 tiếp theo nối nơ-ron ẩn với đầu ra, 5 số cuối là độ lệch của đầu ra. Mã ở `makeBrainRider` trong [`src/trails-ai.js`](../src/trails-ai.js).
+- `version`: 3 kể từ khi bộ não lớn hơn (32 nơ-ron ẩn thay vì 16), nhìn thêm 6 thứ (độ lệch khỏi đường, khúc cua phía xa, thời gian đã bay, khoảng cách tới chỗ đáp kế tiếp) và có đầu ra thứ năm để đánh lái trên không. Bộ não version 1 và 2 không còn được dùng, vì cùng các số đó giờ mang nghĩa khác.
 - `gen`: số vòng đã luyện. `lines`: các đường đã luyện trên đó. `score` và `test`: phần đường đi được trên các đường luyện và trên đường được để riêng.
 
 `node tools/check-lessons.js` kiểm tra file này mỗi khi có thay đổi.
