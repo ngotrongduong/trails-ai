@@ -64,7 +64,10 @@ There is no speed limit: a planned speed at the top of the range (18, or 17.5 an
 more down a big hill). The brain's speed output at its top means the same. Every section
 gets one try with no limit among its first tries, and a quarter of the speeds drawn anew
 are no limit. A route joins a takeoff to a landing up to 250 m on (a big jump down a long
-hill), anything else to at most 40 m, and nearer pieces always win.
+hill), anything else to at most 40 m, and nearer pieces always win. A route carries half the
+width of the piece under each metre (`W`): a ride is off the line when the bike is more than
+7 m from the middle and past the edge of a wider trail (a 20 m wide run-out lets it be 11 m
+off after a 100 m jump).
 
 The search goes along the line section by section, keeping a **beam** of the best few
 partial rides. Each one is a saved state at the start of section k with the plan so far

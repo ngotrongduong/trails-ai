@@ -451,22 +451,22 @@
 
   // ---------------------------------------------------------------- route
   const wrapA = a => Math.atan2(Math.sin(a), Math.cos(a));
-  // points [x, z, kind] along a line, from point k0 on, as one point every metre
+  // points [x, z, kind, half width] along a line, from point k0 on, as one point every metre
   function resample(raw, k0) {
-    const X = [], Z = [], KIND = [];
+    const X = [], Z = [], KIND = [], W = [];
     let px = raw[k0][0], pz = raw[k0][1];
-    X.push(px); Z.push(pz); KIND.push(raw[k0][2]);
+    X.push(px); Z.push(pz); KIND.push(raw[k0][2]); W.push(raw[k0][3] || 0);
     for (let i = k0 + 1; i < raw.length; i++) {
-      const [qx, qz, kd] = raw[i];
+      const [qx, qz, kd, hw] = raw[i];
       let d = Math.hypot(qx - px, qz - pz);
       if (d < 1e-6) continue;
       while (d >= 1) {
         px += (qx - px) / d; pz += (qz - pz) / d;
-        X.push(px); Z.push(pz); KIND.push(kd);
+        X.push(px); Z.push(pz); KIND.push(kd); W.push(hw || 0);
         d = Math.hypot(qx - px, qz - pz);
       }
     }
-    return { X, Z, KIND };
+    return { X, Z, KIND, W };
   }
 
   // The line from start along the pieces the game has loaded (or along pieces src, on ground land). back: the line
@@ -544,13 +544,16 @@
     const add = (x, z, kd, h) => {
       if (src && hh !== null && (x - hx) * Math.cos(hh) + (z - hz) * Math.sin(hh) < 0.2) return;
       if (hh !== null || src) { hh = h !== undefined ? h : raw.length ? Math.atan2(z - hz, x - hx) : 0; }
-      hx = x; hz = z; raw.push([x, z, kd]);
+      hx = x; hz = z; raw.push([x, z, kd, hw]);
     };
+    // half the width of the piece the points are on (a wide trail lets the bike be further off the middle, see R.W)
+    let hw = 0;
     let n0 = 0;
     // (the wrong way round: each piece from its end back along its points, flown onto over the gap after the one
     // before when there is one; a point's kind is that of the way from the point before)
     const flip = { takeoff: 'landing', landing: 'takeoff' };
     chain.forEach((s, ci) => {
+      hw = s.p.params && s.p.params.width > 0 ? s.p.params.width / 2 : 0;
       if (back) {
         const kd = flip[s.p.kind] || s.p.kind;
         add(s.end[0], s.end[1], ci && gapAfter[ci - 1] ? 'air' : kd);
@@ -564,7 +567,7 @@
     // the line starts on the first piece (a line that goes round comes back past the start)
     let k0 = 0, d0 = Infinity;
     raw.forEach((q, i) => { const d = Math.hypot(q[0] - start.x, q[1] - start.z); if ((i < n0 || !src) && d < d0) { d0 = d; k0 = i; } });
-    const { X, Z, KIND } = resample(raw, k0);
+    const { X, Z, KIND, W } = resample(raw, k0);
     if (X.length < 20) return null;
     // pieces the physics needs: everything close to the route
     const cell = 32, grid = new Map();
@@ -585,7 +588,7 @@
     chain.forEach(s => { kinds[s.p.kind] = (kinds[s.p.kind] || 0) + 1; });
     return {
       start: { id: start.id, x: start.x, z: start.z, heading: start.heading },
-      X, Z, KIND, length: X.length, pieces, kinds,
+      X, Z, KIND, W, length: X.length, pieces, kinds,
     };
   }
 
@@ -704,6 +707,7 @@
       const RX = Array.from(R.X).slice(at, xi), RZ = Array.from(R.Z).slice(at, xi), JX = P.map(q => q[0]), JZ = P.map(q => q[1]);
       r.X = RX.concat(JX, Array.from(r.X)); r.Z = RZ.concat(JZ, Array.from(r.Z));
       r.KIND = (R.KIND ? Array.from(R.KIND).slice(at, xi) : RX.map(() => 'flat')).concat(P.map(() => 'flat'), Array.from(r.KIND)); r.length = r.X.length;
+      if (r.W) r.W = (R.W ? Array.from(R.W).slice(at, xi) : RX.map(() => 0)).concat(P.map(() => 0), Array.from(r.W));
       const have = new Set(r.pieces);
       for (const p of piecesNear(RX.concat(JX), RZ.concat(JZ))) if (!have.has(p)) { have.add(p); r.pieces.push(p); }
       r.start = { id: 'onward', x: R.X[at], z: R.Z[at], heading: headAt(at) };
@@ -793,7 +797,7 @@
   async function extendRoute(route) {
     if (route.practice || route.tour !== undefined) return route;
     const g = ground();
-    let X = Array.from(route.X), Z = Array.from(route.Z), KIND = Array.from(route.KIND), legs = 0;
+    let X = Array.from(route.X), Z = Array.from(route.Z), KIND = Array.from(route.KIND), W = route.W ? Array.from(route.W) : null, legs = 0;
     const pieces = route.pieces.slice(), kinds = { ...route.kinds }, have = new Set(pieces.map(p => p.kind + p.x + ',' + p.z));
     g.mark(route);
     while (legs < TOUR_LEGS && X.length < TOUR_MAX) {
@@ -802,11 +806,12 @@
       // (the line found starts with its way onto it, from this end on)
       const ex = X[X.length - 1], ez = Z[Z.length - 1], from = Math.hypot(r.X[0] - ex, r.Z[0] - ez) < 0.5 ? 1 : 0;
       X = X.concat(Array.from(r.X).slice(from)); Z = Z.concat(Array.from(r.Z).slice(from)); KIND = KIND.concat(Array.from(r.KIND).slice(from));
+      W = W && r.W ? W.concat(Array.from(r.W).slice(from)) : null;
       for (const p of r.pieces) { const key = p.kind + p.x + ',' + p.z; if (!have.has(key)) { have.add(key); pieces.push(p); } }
       for (const [k, n] of Object.entries(r.kinds || {})) kinds[k] = (kinds[k] || 0) + n;
       g.mark(r); legs++;
     }
-    return { ...route, X, Z, KIND, length: X.length, pieces, kinds, tour: legs };
+    return { ...route, X, Z, KIND, W: W && W.length === X.length ? W : undefined, length: X.length, pieces, kinds, tour: legs };
   }
 
   // ---------------------------------------------------------------- practice lines
@@ -1332,6 +1337,7 @@ function addLine(route,setup){
   {const d=Math.hypot(R.X[0]-R.start.x,R.Z[0]-R.start.z),n=Math.floor(d);
     if(n>=2){const X=[],Z=[],KI=[];for(let i=0;i<n;i++){const f=i/d;X.push(R.start.x+(R.X[0]-R.start.x)*f);Z.push(R.start.z+(R.Z[0]-R.start.z)*f);KI.push('start')}
       R.X=X.concat(Array.from(R.X));R.Z=Z.concat(Array.from(R.Z));R.KIND=KI.concat(Array.from(R.KIND));R.length=R.X.length;
+      if(R.W)R.W=X.map(()=>0).concat(Array.from(R.W));
       if(R.lands)R.lands=R.lands.map(q=>[q[0]+n,q[1]+n])}}
   // the game's terrain, or the ground of a practice line (R.land)
   const arr=[fmt,...(R.land||[2,0,0,0])];let n=0;
@@ -1517,7 +1523,8 @@ function go(E,stop){
       if(E.held<0&&E.halt&&!air&&Math.abs(s[8])<0.5&&Math.abs(s[4])<0.15)E.held=t;
       if((E.held>=0&&t-E.held>=60)||t-E.tail>=420){E.end='về đích';E.pts+=150;return fin(E,s)}
       inp=E.held>=0?noPedals([0,127,0,0,0,0,0]):tailInp(s,inp,E.halt);
-    }else if(rider.off>7&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
+    // (off the line: over 7 m from its middle, or past the edge of a wider trail, R.W)
+    }else if(rider.off>Math.max(7,R.W&&R.W.length===N?R.W[idx]+1:0)&&!air){E.end='lạc khỏi đường';E.pts-=20;return fin(E,s)}
     if(idx>=E.until){E.end='đạt mốc';return fin(E,s)}
     if(rider.landed){E.landT=t;if(s[14]>0.3)E.landAt=t}
     if(E.landAt>=0&&t-E.landAt>=45){if(idx>E.lastJ+3){E.pts+=15;E.jumps++;E.lastJ=idx}E.landAt=-1}
@@ -2727,7 +2734,7 @@ onmessage=async e=>{const m=e.data;
     const X = Array.from(route.X).slice(0, n), Z = Array.from(route.Z).slice(0, n);
     const near = (x, z, r) => { for (let i = 0; i < n; i += 3) if (Math.hypot(X[i] - x, Z[i] - z) < r) return true; return false; };
     const pieces = route.pieces.filter(p => near(p.x, p.z, p.kind === 'shape' || p.kind === 'ground' ? 70 : 35));
-    return { ...route, X, Z, KIND: route.KIND.slice(0, n), length: n, pieces };
+    return { ...route, X, Z, KIND: route.KIND.slice(0, n), W: route.W ? Array.from(route.W).slice(0, n) : undefined, length: n, pieces };
   }
   async function communityBrain() {
     try {
