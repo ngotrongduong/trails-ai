@@ -96,7 +96,8 @@ const WAI = WebAssembly.instantiate.bind(WebAssembly);
 const live = { ex: null, g: 0, SL: 0, drive: null, tricks: null, bike: 0, tunes: {}, spawn: null };
 WebAssembly.instantiate = async function (src, imports) {
 const r = await WAI(src, imports);
-const ex = r && r.instance && r.instance.exports;
+const bare = r instanceof WebAssembly.Instance;
+const ex = bare ? r.exports : r && r.instance && r.instance.exports;
 if (!ex || !ex.trails_game_step || live.ex) return r;
 const px = { ...ex };
 const mine = g => !live.g || g === live.g;
@@ -114,7 +115,7 @@ if ((!live.drive || seen.all) && g === live.g && seen.on) { try { watchStep(inp)
 return out;
 };
 live.ex = ex; live.SL = ex.trails_state_len();
-return { module: r.module, instance: { exports: px } };
+return bare ? { exports: px } : { module: r.module, instance: { exports: px } };
 };
 const liveState = () => new Float64Array(live.ex.memory.buffer, live.ex.trails_game_state(live.g), live.SL);
 const riderSetup = () => ({ tricks: live.tricks === null ? 511 : live.tricks, bike: live.bike, tunes: { ...live.tunes } });
