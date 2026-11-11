@@ -156,7 +156,9 @@ flip: 'Backflip', spin: '360', whip: 'Whip', table: 'Table', tailwhip: 'Tailwhip
 barspin: 'Barspin', tbog: 'T-bog', xup: 'X-up', manual: 'Manual',
 };
 const WAI = WebAssembly.instantiate.bind(WebAssembly);
-const live = { ex: null, g: 0, SL: 0, drive: null, tricks: null, bike: 0, tunes: {}, spawn: null };
+const live = { ex: null, g: 0, SL: 0, drive: null, tricks: null, bike: 0, tunes: {}, spawn: null, ws: null };
+const WSS = WebSocket.prototype.send;
+WebSocket.prototype.send = function (data) { if (typeof data === 'string') live.ws = this; return WSS.call(this, data); };
 WebAssembly.instantiate = async function (src, imports) {
 const r = await WAI(src, imports);
 const bare = r instanceof WebAssembly.Instance;
@@ -2611,6 +2613,7 @@ ${tl('Mượn kinh nghiệm', 'Borrowed experience')}<b class="k-borrow">–</b>
 <input type="file" accept=".json,application/json" class="file" hidden>
 <div class="row"><button class="b g forget" disabled>${tl('Quên đường này, học lại từ đầu', 'Forget this line, learn it again')}</button></div>
 <div class="row"><button class="b g watchme" ${tt('Khi bạn tự lái trên đường AI đã học hoặc đang học, AI ghi lại tốc độ, chỗ bạn nhấc xe, pump, góc xe khi bay và trick của bạn, rồi thử cách đó trong mô phỏng', 'When you ride a line the AI has learned or is learning, the AI notes your speed, where you lift the bike, your pumping, the pitch in the air and your tricks, then tries your way in the simulation')}>👀</button></div>
+<div class="row"><button class="b g shareme" ${tt('Mỗi lượt AI lái về đích không ngã, cách lần trước ít nhất 10 phút: AI tạo link xem lại lượt đó bằng nút Share của game (hiện trên trang của bạn) và mời mọi người trong chat vào chạy đường đó', 'Every ride the AI takes to the end without a fall, 10 minutes after the last at least: the AI makes a link to watch it with the game’s Share (shown on your profile) and invites everyone in chat to ride that line')}>📣</button></div>
 <div class="sec">${tl('Bộ não chung', 'Shared brain')}<small>${tl('Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra. Bộ não cũng cho đường mới một cách bắt đầu.', 'A neural network trained on many lines at once, to ride lines it has never seen too. The chosen line is kept apart as its test. The brain also gives new lines a way to start.')}</small></div>
 <div class="kv">
 ${tl('Vòng luyện', 'Rounds')}<b class="b-gen">0</b>
@@ -3137,13 +3140,16 @@ if (lineStale(d.route)) log(tx('<b>Bản đồ trong mô phỏng không còn kh�
 else if (Math.abs(m - e) > 15) log(tx(`Lượt thật lệch so với mô phỏng (dự đoán ${e} m), dù bản đồ vẫn khớp.`, `The real ride went otherwise than the simulation (it expected ${e} m), though the map still matches.`));
 else log(tx(`Đúng như mô phỏng dự đoán (${e} m).`, `Just as the simulation expected (${e} m).`));
 }
+if (park && !byPlayer && shareOn && !sharing && Date.now() - shareAt() >= SHARE_EVERY) shareGood(d, m);
 if (looping) {
 say(tx(`${d.who} lái thật: ${why} sau ${m} m. Lái lại từ đầu đường sau 3 giây với những gì mới học được (bấm “Dừng AI lái” để dừng hẳn).`, `${d.who} rode for real: ${why} after ${m} m. Riding again from the start of the line in 3 seconds with what it has just learned (press “Stop AI riding” to stop for good).`));
-setTimeout(() => {
+const rideAgain = () => {
 if (!looping) return;
+if (sharing) { setTimeout(rideAgain, 1000); return; }
 if (live.drive && live.drive.hold) { live.drive = null; if (badge) { badge.remove(); badge = null; } }
 if (!live.drive) aiDrive();
-}, 3000);
+};
+setTimeout(rideAgain, 3000);
 } else say(tx(`${d.who} lái thật: ${why} sau ${m} m${extra}.`, `${d.who} rode for real: ${why} after ${m} m${extra}.`));
 if (park) {
 live.drive = { hold: true, step: () => [0, 127, 0, 0, 0, 0, 0] };
@@ -3634,7 +3640,7 @@ lang = lang === 'en' ? 'vi' : 'en';
 try { keep.setItem(LANG, lang); } catch { /* storage blocked */ }
 relabel(el);
 $('.lang').textContent = tx('EN', 'VI');
-const again = [showNow, () => driveLabel(looping || !!live.drive), chLabel, showBrain, showLine, showBorrow, showMe, () => { opener.title = tx('Mở lại bảng AI', 'Show the AI panel again'); }, draw, () => trainer.best && showBest(trainer.best)];
+const again = [showNow, () => driveLabel(looping || !!live.drive), chLabel, showBrain, showLine, showBorrow, showMe, showShare, () => { opener.title = tx('Mở lại bảng AI', 'Show the AI panel again'); }, draw, () => trainer.best && showBest(trainer.best)];
 for (const f of again) try { f(); } catch { /* nothing to show yet */ }
 if (choices.length) listLines();
 else for (const o of $('.pick').options) o.textContent = PICK_WAIT.includes(o.textContent) ? tx(...PICK_WAIT) : PICK_NONE.includes(o.textContent) ? tx(...PICK_NONE) : o.textContent;
@@ -3760,6 +3766,64 @@ try { keep.setItem(WATCH, watchOn ? '1' : '0'); } catch { /* storage blocked */ 
 showMe();
 say(watchOn ? 'AI sẽ xem bạn lái trên những đường nó biết và học theo.' : 'AI không xem bạn lái nữa.');
 };
+const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3;
+let shareOn = (() => { try { return keep.getItem(SHARE) !== '0'; } catch { return true; } })(), sharing = false;
+const shareAt = () => +(keep.getItem(SHARE_AT) || 0) || 0;
+const press = (code, key) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true })); };
+const until = async (f, ms) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await new Promise(r => setTimeout(r, 250))) { const v = f(); if (v) return v; } return null; };
+const sharePanel = () => { const c = [...document.querySelectorAll('.rp-caps')].find(e => e.textContent === 'Share this run'); return c && c.parentElement; };
+function showShare() {
+$('.shareme').textContent = tx(`📣 Tự chia sẻ lượt chạy đẹp (10 phút/lần): ${shareOn ? 'bật' : 'tắt'}`, `📣 Share good rides (every 10 min): ${shareOn ? 'on' : 'off'}`);
+}
+$('.shareme').onclick = () => {
+shareOn = !shareOn;
+try { keep.setItem(SHARE, shareOn ? '1' : '0'); } catch { /* storage blocked */ }
+showShare();
+say(shareOn ? tx('Mỗi lượt AI lái về đích không ngã sẽ được chia sẻ (cách nhau ít nhất 10 phút), kèm lời mời mọi người vào chạy.', 'Every ride the AI takes to the end without a fall is shared (10 minutes apart at least), with an invite for everyone to come and ride.')
+: tx('AI không tự chia sẻ lượt chạy nữa.', 'The AI no longer shares its rides.'));
+};
+async function shareRun(title) {
+try {
+press('KeyL', 'l');
+if (!(await until(sharePanel, 8000))) throw new Error(tx('game không mở bảng chia sẻ (cần đang ở trong game và có mạng)', 'the game did not open its share panel (it needs to be riding, online)'));
+const field = sharePanel().querySelector('input.rp-field');
+if (field) { field.value = title; field.dispatchEvent(new Event('input', { bubbles: true })); }
+const sw = sharePanel().querySelector('.rp-switch');
+if (sw && !sw.classList.contains('on')) sw.click();
+if (!sharePanel().querySelector('.rp-url')) {
+const make = await until(() => [...sharePanel().querySelectorAll('button')].find(b => b.textContent === 'Make the link'), 3000);
+if (!make) throw new Error(tx('không thấy nút “Make the link”', 'no “Make the link” button'));
+make.click();
+}
+const got = await until(() => { const p = sharePanel(); return p && (p.querySelector('.rp-url') || p.querySelector('.rp-error')); }, 180e3);
+if (!got) throw new Error(tx('3 phút chưa có link', 'no link after 3 minutes'));
+if (got.classList.contains('rp-error')) throw new Error(got.textContent);
+return 'https://' + got.textContent.trim();
+} finally {
+const p = sharePanel(), x = p && p.querySelector('.rp-panel-close');
+if (x) x.click();
+if (document.body.classList.contains('replaying')) press('KeyP', 'p');
+await until(() => !document.body.classList.contains('replaying'), 3000);
+}
+}
+async function shareGood(d, m) {
+sharing = true;
+try { keep.setItem(SHARE_AT, String(Date.now())); } catch { /* storage blocked */ }
+try {
+const pts = d.game || 0, st = d.route.start;
+const link = await shareRun(`AI Trails · ${m} m · ${pts} pts`.slice(0, 60));
+const ws = live.ws;
+let invited = false;
+if (ws && ws.readyState === 1 && st && num(st.x) && num(st.z)) {
+ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`, invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
+invited = true;
+}
+log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Đã mời mọi người trong chat vào chạy đường này.' : '. Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 10 phút nữa.`,
+`<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Invited everyone in chat to ride this line.' : '. Could not invite in chat (the game is not connected to its server).'} Next share: 10 minutes from now at the earliest.`));
+} catch (err) {
+log(tx(`<b>Chưa chia sẻ được lượt chạy:</b> ${esc(err && err.message || err)}. AI thử lại ở lượt đẹp sau 10 phút nữa.`, `<b>Could not share the ride:</b> ${esc(err && err.message || err)}. The AI tries again on a good ride 10 minutes from now.`));
+} finally { sharing = false; }
+}
 const lineGeo = new Map();
 function knownLines() {
 const out = new Map();
@@ -3829,7 +3893,7 @@ if (meBusy || !seen.done.length) return;
 meBusy = true;
 try { while (seen.done.length) await learnRide(seen.done.shift()); } catch (err) { console.error(err); } finally { meBusy = false; }
 }, 1000);
-showMe();
+showMe(); showShare();
 async function learnLesson(raw, ms, n) {
 const m = readLesson(raw);
 if (!m) throw new Error('not a lesson');
@@ -3851,7 +3915,7 @@ window.TrailsAI = {
 learnLesson,
 open() { showPanel(true); },
 newer() { log(tx('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).', '<b>A new AI is out.</b> Press F5 to use it (what the AI has learned stays).')); },
-cap, seen, learnRide, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain,
+cap, seen, learnRide, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain, shareRun, shareGood,
 };
 if (window.__taiNewer) window.TrailsAI.newer();
 setTimeout(findTracks, 1500);
