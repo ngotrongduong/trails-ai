@@ -83,14 +83,20 @@ db = null;
 try { for (let i = 0; i < LS.length; i++) { const k = LS.key(i); if (ours(k)) mem.set(k, LS.getItem(k)); } } catch { /* storage blocked */ }
 }
 })();
+const failed = err => { console.error('AI Trails: IndexedDB', err); if (api.onError) { try { api.onError(err); } catch { /* the panel is gone */ } } };
 const write = (k, v) => {
 if (db) {
-try { const t = db.transaction(OS, 'readwrite'); if (v === null) t.objectStore(OS).delete(k); else t.objectStore(OS).put(v, k); t.onerror = () => console.error('AI Trails: IndexedDB', t.error); } catch (err) { console.error(err); }
+try {
+const t = db.transaction(OS, 'readwrite');
+if (v === null) t.objectStore(OS).delete(k); else t.objectStore(OS).put(v, k);
+t.onerror = t.onabort = () => failed(t.error);
+if (t.commit) t.commit();
+} catch (err) { failed(err); }
 } else if (v === null) LS.removeItem(k); else LS.setItem(k, v);
 if (chan) chan.postMessage({ key: k, value: v });
 };
-return {
-ready,
+const api = {
+ready, onError: null,
 getItem: k => (LOCAL.has(k) ? LS.getItem(k) : mem.has(k) ? mem.get(k) : null),
 setItem(k, v) { v = String(v); if (LOCAL.has(k)) { LS.setItem(k, v); return; } write(k, v); mem.set(k, v); },
 removeItem(k) { if (LOCAL.has(k)) { LS.removeItem(k); return; } mem.delete(k); write(k, null); },
@@ -98,6 +104,7 @@ key: i => [...mem.keys()][i] ?? null,
 get length() { return mem.size; },
 listen: f => { listeners.push(f); },
 };
+return api;
 })();
 const NAMES = 'trailsai.names';
 const MINE = 'trailsai.mine';
@@ -937,8 +944,10 @@ return '';
 const trickWords = (tr, turn) =>[tr & 1 ? 'Backflip' : '', tr & 2 ? `Spin ${turn}` : '', tr & 4 ? 'Whip' : ''].filter(Boolean).join(' + ');
 function makeRider(R, H, S, P) {
 const N = R.length;
-const me = { P, idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, rot: 0, let: false, inp: [0, 0, 0, 0, 0, 0, 0] };
+const me = { P, idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false, prevP: null, rot: 0, let: false, inp: [0, 0, 0, 0, 0, 0, 0],
+py: 0, pat: 0, lt: -1, pa: false, vy: null, va: 0, ay: null, gOff: 0, la: -1 };
 const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
+const hAt = u => { const i = clamp(Math.floor(u), 0, N - 2), f = clamp(u - i, 0, 1); return H[i] + (H[i + 1] - H[i]) * f; };
 const vAt = (P, k, i) => { const q = P.vs && P.vs[k]; return q && q.length ? q[Math.min(q.length - 1, Math.max(0, Math.floor((i - S[k].a) * q.length / (S[k].b - S[k].a + 1))))] : P.v[k]; };
 const near = (bx, bz) => {
 let bi = me.idx, bd = Infinity;
@@ -969,6 +978,13 @@ const a1 = look(3 + Math.abs(sp) * 0.35), a2 = look(10 + Math.abs(sp) * 0.6);
 const e1 = wrapA(Math.atan2(R.Z[a1] - bz, R.X[a1] - bx) - bh), e2 = wrapA(Math.atan2(R.Z[a2] - bz, R.X[a2] - bx) - bh);
 let st = air ? 0 : clamp(2.2 * e1 + 0.6 * e2, -1, 1), pedal = 0, brake = 0, lean = 0, btn = 0, whip = 0, pump = 0;
 const sec = me.sec, idx = me.idx;
+if (me.lt >= 0 && t > me.lt) {
+const dt = (t - me.lt) / 60, vy = (by - me.py) / dt;
+if (air && me.pa && me.vy !== null) { const a = (vy - me.vy) / dt; me.ay = me.ay === null ? a : me.ay + 0.25 * (a - me.ay); }
+me.vy = vy; me.va = (me.at - me.pat) / dt;
+}
+if (!air) { me.ay = null; me.gOff = by - hAt(me.at); }
+me.py = by; me.pat = me.at; me.lt = t; me.pa = air;
 if (!air) {
 const va = vAt(P, sec, idx), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
 if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
@@ -984,7 +1000,15 @@ if (P.lg && P.lg[sec]) lean = P.lg[sec];
 } else {
 const dp = wrapA(s[4] - me.prevP) * 30;
 me.rot += wrapA(s[4] - me.prevP);
-lean = clamp(2.2 * (s[4] - P.pt[me.airSec]) + 0.35 * dp, -1, 1);
+let aim = P.pt[me.airSec];
+if (P.la && me.vy !== null) {
+const ay = me.ay === null ? -9.8 : clamp(me.ay, -16, -3), h = 1 / 30;
+let y = by, u = me.at, vy = me.vy, hit = -1;
+for (let k = 0; k < 450 && hit < 0; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) break; if (vy < 0 && y - me.gOff <= hAt(u)) hit = u; }
+if (hit >= 0) { const i = clamp(Math.round(hit), 2, N - 3); aim += clamp(Math.atan2(H[i + 2] - H[i - 2], 4), -0.9, 0.3) - S[me.airSec].pt; me.la = hit; }
+}
+lean = clamp(2.2 * (s[4] - aim) + 0.35 * dp, -1, 1);
+me.aim = aim;
 const mv = MOVES[P.mv[me.airSec] | 0];
 const sa = P.sa ? P.sa[me.airSec] || 0 : 0;
 if (sa && !(mv && mv.spin && Math.abs(s[48]) < 340)) st = clamp(sa * (2.2 * e1 + 0.6 * e2), -1, 1);
@@ -1006,7 +1030,7 @@ if (s[12] > 0.1 && by - gnd > P.hr[me.airSec]) { btn = mv.b || 0; if (mv.ln !== 
 }
 me.prevP = s[4];
 me.inp = [Math.round(pedal * 127), Math.round(brake * 127), Math.round(st * 127), Math.round(lean * 127), Math.round(pump * 127), btn, Math.round(whip * 127)];
-me.want = air ? [0, 0, 0, P.pt[me.airSec], 1, P.sa ? P.sa[me.airSec] || 0 : 0] : [vAt(P, sec, idx), btn & 1, pump, 0, 0, 0];
+me.want = air ? [0, 0, 0, me.aim, 1, P.sa ? P.sa[me.airSec] || 0 : 0] : [vAt(P, sec, idx), btn & 1, pump, 0, 0, 0];
 }
 return me.inp;
 };
@@ -1617,13 +1641,15 @@ close() { this.closed = true; this.ws.forEach(w => w.terminate()); this.failAll(
 const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 const clonePlan = p => JSON.parse(JSON.stringify(p));
 function freshPlan(secs) {
-return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0), as: 1 };
+return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0), as: 1, la: 1 };
 }
 async function settleAir(pool, P) {
-if (P.as !== undefined) return { plan: P, run: (await pool.evalAll([P]))[0] };
-const two = [{ ...clonePlan(P), as: 0 }, { ...clonePlan(P), as: 1 }];
+if (P.as !== undefined && P.la !== undefined) return { plan: P, run: (await pool.evalAll([P]))[0] };
+const ways = P.as !== undefined ? [P.as] : [0, 1], two = [];
+for (const as of ways) for (const la of P.la !== undefined ? [P.la] : [0, 1]) two.push({ ...clonePlan(P), as, la });
 const runs = await pool.evalAll(two);
-const i = beats(runs[1], runs[0]) ? 1 : 0;
+let i = runs.length - 1;
+for (let j = runs.length - 2; j >= 0; j--) if (beats(runs[j], runs[i])) i = j;
 return { plan: two[i], run: runs[i] };
 }
 const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
@@ -2811,11 +2837,9 @@ if (!route && shared && !lineStale(shared.line)) { route = shared.line; log(tx('
 if (!route) route = await buildRoute(o.s, undefined, undefined, o.s.back);
 else if (!route.W && !route.practice && !o.drill) route = { ...route, W: await widthsOf(route) };
 if (!route) { say(tx('Không dò được đường từ điểm này (có thể chưa tải hết). Thử điểm khác hoặc đến gần hơn.', 'Could not trace a line from this start (it may not have loaded yet). Try another start or get closer.')); return false; }
-const len0 = route.tour === undefined ? route.length : 0;
-route = await extendRoute(route);
+if (route.tour === undefined && !route.practice) route = { ...route, tour: 0 };
 if (o.s.aim) route = { ...route, start: { ...route.start, id: o.s.id }, aim: o.s.aim };
 routeCache.set(o.s.id, route);
-if (len0 && route.tour) log(tx(`Nối thêm <b>${route.tour} đường đi tiếp</b> sau đường này (${len0} m thành ${route.length} m): AI học cả tuyến, để lúc lái thật nó đi tiếp bằng bài học.`, `Joined <b>${route.tour} lines that follow</b> after this one (${len0} m became ${route.length} m): the AI learns the whole way, so riding for real it rides on with the lesson.`));
 say(tx(`Đường dài ${route.length} m, ${route.pieces.length} chi tiết. Đang nạp vật lý vào ${workers} luồng (có thể mất vài chục giây)…`, `The line is ${route.length} m, ${route.pieces.length} pieces. Loading the physics into ${workers} threads (may take some tens of seconds)…`));
 const t0 = performance.now();
 trainer.library = await gatherJumps();
@@ -2867,6 +2891,7 @@ await trainer.run();
 } catch (err) {
 say(tx('Lỗi: ', 'Error: ') + (err && err.message || err));
 console.error(err);
+return false;
 } finally {
 busy = false;
 }
@@ -3052,8 +3077,8 @@ releaseDrill();
 }
 return true;
 }
-const LINE_MIN = 2 * 60e3, LINE_STALL = 3 * 60e3, BRAIN_TIME = 5 * 60e3;
-let learning = false, cancel = false, phase = null, phaseT0 = 0, gainT = 0, gainRun = null, brainT0 = 0, brainRestUntil = 0, loopId = 0;
+const BRAIN_TIME = 5 * 60e3;
+let learning = false, cancel = false, phase = null, brainT0 = 0, loopId = 0;
 function showNow() {
 $('.k-now').textContent = !learning ? tx('nghỉ', 'resting') : phase === 'brain' ? tx('luyện bộ não chung', 'training the shared brain') : phase === 'drill' ? tx('tập bài tập kiểu Training', 'practising a Training-style drill') : tx('học đường này', 'learning this line');
 const b = $('.learn');
@@ -3062,25 +3087,15 @@ b.classList.toggle('on', learning);
 }
 async function learnLoop(my) {
 while (learning && my === loopId) {
-cancel = false; phase = 'line'; phaseT0 = gainT = Date.now(); gainRun = null; showNow();
+cancel = false; phase = 'line'; showNow();
 if (!(await start())) { learning = false; break; }
-if (!learning || my !== loopId || cancel || Date.now() < brainRestUntil) continue;
-cancel = false; phase = 'drill'; drillT0 = Date.now(); showNow();
-log(tx(`Đường này ${Math.round(LINE_STALL / 60e3)} phút chưa tiến thêm: AI tập một bài tập kiểu Training, luyện bộ não chung vài phút rồi quay lại.`, `This line has not got better in ${Math.round(LINE_STALL / 60e3)} minutes: the AI practises a Training-style drill, trains the shared brain a few minutes, then comes back.`));
-await drillStart();
-if (!learning || my !== loopId || cancel) continue;
-cancel = false; phase = 'brain'; brainT0 = 0; showNow();
-if (!(await brainStart())) brainRestUntil = Date.now() + 15 * 60e3;
 }
 if (my === loopId) { phase = null; showNow(); }
 }
 setInterval(() => {
 if (!learning) return;
 const now = Date.now();
-if (phase === 'line' && trainer.running) {
-if (trainer.best && beats(trainer.best, gainRun)) { gainRun = trainer.best; gainT = now; }
-if (now - phaseT0 > LINE_MIN && now - gainT > LINE_STALL && now >= brainRestUntil) trainer.stop();
-} else if (phase === 'drill' && drill.running) {
+if (phase === 'drill' && drill.running) {
 if (now - drillT0 > DRILL_TIME || (drill.best && drill.best.end === 'về đích')) drill.stop();
 } else if (phase === 'brain' && brain.running) {
 if (!brainT0) brainT0 = now;
@@ -3174,7 +3189,7 @@ known = p;
 const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
 for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
 for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0)) return;
-for (const k of ['pz', 'pk', 'as']) if (!same(p[k], plan[k])) return;
+for (const k of ['pz', 'pk', 'as', 'la']) if (!same(p[k], plan[k])) return;
 for (const k of PLAN_KEYS) plan[k] = p[k].slice();
 if (p.vs) plan.vs = p.vs.map(q => (q ? q.slice() : null)); else delete plan.vs;
 if (p.lg) plan.lg = p.lg.slice(); else delete plan.lg;
@@ -3712,6 +3727,12 @@ if (trainer.route && trainer.route.start.id === id && trainer.pool) { await useL
 if (hasMemory(id)) { say(tx('Bài học này của một đường khác. Chọn đường đó, bấm “Học lái”, rồi mở file lại.', 'This lesson is for another line. Pick that line, press “Learn”, then open the file again.')); return; }
 try { keep.setItem(STORE + id, JSON.stringify({ ...m, bestRun: null })); } catch { say(tx('Trình duyệt hết chỗ lưu.', 'The browser has no room left to save.')); return; }
 say(tx('Đã nhập bài học. Đến gần đường đó, chọn nó trong danh sách rồi bấm “Học lái”.', 'Lesson imported. Get near that line, pick it in the list, then press “Learn”.'));
+};
+let failTold = 0;
+keep.onError = err => {
+if (Date.now() - failTold < 60e3) return;
+failTold = Date.now();
+log(tx(`<b>Trình duyệt không lưu được</b> những gì AI vừa học (${esc(err && err.name || err)}). Ổ đĩa có thể đã đầy.`, `<b>The browser could not save</b> what the AI just learned (${esc(err && err.name || err)}). The disk may be full.`));
 };
 keep.listen((key, value) => {
 if (!trainer.route || key !== trainer.key() || !value) return;
