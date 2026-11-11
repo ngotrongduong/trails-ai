@@ -94,6 +94,70 @@
     whip: { name: 'Whip', need: 2 }, spin: { name: '360' }, flip: { name: 'Backflip' }, tricks: { name: 'Trick line', need: 5 },
   };
   const STORE = 'trailsai.v2.';
+  // ---------------------------------------------------------------- what the AI keeps in this browser
+  // A lesson is big (the pieces around its line: 100-400 kB), and localStorage holds 5 MB for the whole game page. Once
+  // it was full, the extension could not keep a newer AI there, and the old one went on riding (it could no longer
+  // hook into the game after an update). So the AI keeps what it learns in IndexedDB, which has no such limit: read
+  // into memory once at the start (keep.ready, before the panel opens), written through from then on, and passed to
+  // the AI in other tabs (keep.listen). What an older AI left in localStorage is moved over once. The language and
+  // the extension's copy of the AI stay in localStorage. Without IndexedDB (blocked), localStorage as before.
+  const keep = (() => {
+    const LS = window.localStorage, DB = 'trailsai', OS = 'kv', LOCAL = new Set(['trailsai.code', 'trailsai.lang']);
+    const mem = new Map(), listeners = [];
+    let db = null;
+    const ours = k => !!k && k.startsWith('trailsai.') && !LOCAL.has(k);
+    const chan = typeof BroadcastChannel === 'function' ? new BroadcastChannel('trailsai.keep') : null;
+    if (chan) {
+      chan.onmessage = e => {
+        const { key, value } = e.data || {};
+        if (!ours(key)) return;
+        if (value === null) mem.delete(key); else mem.set(key, value);
+        for (const f of listeners) { try { f(key, value); } catch (err) { console.error(err); } }
+      };
+    }
+    const done = t => new Promise((res, rej) => { t.oncomplete = () => res(); t.onerror = t.onabort = () => rej(t.error); });
+    const ready = (async () => {
+      try {
+        db = await new Promise((res, rej) => {
+          const q = indexedDB.open(DB, 1);
+          q.onupgradeneeded = () => q.result.createObjectStore(OS);
+          q.onsuccess = () => res(q.result); q.onerror = () => rej(q.error);
+        });
+        let t = db.transaction(OS, 'readonly');
+        const ks = t.objectStore(OS).getAllKeys(), vs = t.objectStore(OS).getAll();
+        await done(t);
+        ks.result.forEach((k, i) => mem.set(k, vs.result[i]));
+        const moved = [];
+        for (let i = 0; i < LS.length; i++) if (ours(LS.key(i))) moved.push(LS.key(i));
+        if (moved.length) {
+          t = db.transaction(OS, 'readwrite');
+          for (const k of moved) { const v = LS.getItem(k); t.objectStore(OS).put(v, k); mem.set(k, v); }
+          await done(t);
+          for (const k of moved) LS.removeItem(k);
+        }
+      } catch (err) {
+        console.error('AI Trails: IndexedDB', err);
+        db = null;
+        try { for (let i = 0; i < LS.length; i++) { const k = LS.key(i); if (ours(k)) mem.set(k, LS.getItem(k)); } } catch { /* storage blocked */ }
+      }
+    })();
+    // (into IndexedDB, quietly; into localStorage, throwing when it is full, as callers expect)
+    const write = (k, v) => {
+      if (db) {
+        try { const t = db.transaction(OS, 'readwrite'); if (v === null) t.objectStore(OS).delete(k); else t.objectStore(OS).put(v, k); t.onerror = () => console.error('AI Trails: IndexedDB', t.error); } catch (err) { console.error(err); }
+      } else if (v === null) LS.removeItem(k); else LS.setItem(k, v);
+      if (chan) chan.postMessage({ key: k, value: v });
+    };
+    return {
+      ready,
+      getItem: k => (LOCAL.has(k) ? LS.getItem(k) : mem.has(k) ? mem.get(k) : null),
+      setItem(k, v) { v = String(v); if (LOCAL.has(k)) { LS.setItem(k, v); return; } write(k, v); mem.set(k, v); },
+      removeItem(k) { if (LOCAL.has(k)) { LS.removeItem(k); return; } mem.delete(k); write(k, null); },
+      key: i => [...mem.keys()][i] ?? null,
+      get length() { return mem.size; },
+      listen: f => { listeners.push(f); },
+    };
+  })();
   // A name for every line, easier to tell apart than "the start 40 m away": the one the player gave it, else one made
   // from the start's id, so a line keeps its name on every computer (place, what is there, a number: "Đồi Thông 37").
   const NAMES = 'trailsai.names';
@@ -110,7 +174,7 @@
   // this browser). tx(vi, en) is the one for now. What a ride ended with (r.end) stays a Vietnamese word in the code and
   // in lessons, and is shown through endWord.
   const LANG = 'trailsai.lang';
-  let lang = (() => { try { return localStorage.getItem(LANG) === 'en' ? 'en' : 'vi'; } catch { return 'vi'; } })();
+  let lang = (() => { try { return keep.getItem(LANG) === 'en' ? 'en' : 'vi'; } catch { return 'vi'; } })();
   const tx = (vi, en) => (lang === 'en' ? en : vi);
   const END_EN = { 'về đích': 'finished', 'ngã': 'fell', 'đang đi': 'still riding', 'hết giờ': 'out of time', 'lạc khỏi đường': 'off the line',
     'đạt mốc': 'reached the mark', 'kẹt': 'stuck', 'đứng lại': 'came to a stop', 'lỗi': 'error' };
@@ -124,7 +188,7 @@
     for (const e of root.querySelectorAll('[data-vi]')) e.textContent = e.dataset[lang];
     for (const e of root.querySelectorAll('[data-tvi]')) e.title = lang === 'en' ? e.dataset.ten : e.dataset.tvi;
   }
-  const givenNames = () => { try { return JSON.parse(localStorage.getItem(NAMES) || '{}') || {}; } catch { return {}; } };
+  const givenNames = () => { try { return JSON.parse(keep.getItem(NAMES) || '{}') || {}; } catch { return {}; } };
   // a line learned for a challenge of the game is the line's id, '~' and the challenge (see aimOf): its own lesson
   const baseId = id => String(id).split('~')[0];
   function lineName(id) {
@@ -143,7 +207,7 @@
   function setLineName(id, name) {
     const all = givenNames(), n = String(name).trim().slice(0, 40);
     if (n) all[id] = n; else delete all[id];
-    try { localStorage.setItem(NAMES, JSON.stringify(all)); } catch { /* storage blocked */ }
+    try { keep.setItem(NAMES, JSON.stringify(all)); } catch { /* storage blocked */ }
   }
   // the community repo: lessons/<line id>.json there is the best lesson people have shared for that line
   const REPO = 'ngotrongduong/trails-ai';
@@ -2032,14 +2096,14 @@ onmessage=async e=>{const m=e.data;
   // worked on jumps with as much air, instead of any move at random. Rows: [airtime, move, landed 0/1, tr, grade].
   const BOOK = 'trailsai.trickbook', BOOK_ROWS = 4000;
   function loadBook(mask) {
-    try { const b = JSON.parse(localStorage.getItem(BOOK) || 'null'); return b && b.version === 1 && Array.isArray(b[mask]) ? b[mask] : []; } catch { return []; }
+    try { const b = JSON.parse(keep.getItem(BOOK) || 'null'); return b && b.version === 1 && Array.isArray(b[mask]) ? b[mask] : []; } catch { return []; }
   }
   function saveBook(mask, rows) {
     try {
-      let b = JSON.parse(localStorage.getItem(BOOK) || 'null');
+      let b = JSON.parse(keep.getItem(BOOK) || 'null');
       if (!b || b.version !== 1) b = { version: 1 };
       b[mask] = rows.slice(-BOOK_ROWS);
-      localStorage.setItem(BOOK, JSON.stringify(b));
+      keep.setItem(BOOK, JSON.stringify(b));
     } catch { /* storage full or blocked */ }
   }
   const trickValue = tr => (tr & 1 ? 300 : 0) + (tr & 2 ? 200 : 0) + (tr & 4 ? 100 : 0);
@@ -2155,11 +2219,11 @@ onmessage=async e=>{const m=e.data;
   function localJumps() {
     const out = [];
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
+      for (let i = 0; i < keep.length; i++) {
+        const key = keep.key(i);
         if (!key || !key.startsWith(STORE)) continue;
         let m = null;
-        try { m = JSON.parse(localStorage.getItem(key)); } catch { continue; }
+        try { m = JSON.parse(keep.getItem(key)); } catch { continue; }
         const J = m && m.jumps, id = m && m.line && m.line.start && m.line.start.id;
         if (!J || J.version !== JUMPS_VERSION || !Array.isArray(J.list) || typeof id !== 'string') continue;
         for (const j of J.list) if (goodJump({ ...j, id })) out.push({ ...j, id });
@@ -2280,13 +2344,13 @@ onmessage=async e=>{const m=e.data;
   };
   // The player's rides kept for each line (by its id; newest first, 3 a line, the 30 lines ridden last).
   const PLAYER = 'trailsai.player';
-  const playerAll = () => { try { return JSON.parse(localStorage.getItem(PLAYER) || '{}') || {}; } catch { return {}; } };
+  const playerAll = () => { try { return JSON.parse(keep.getItem(PLAYER) || '{}') || {}; } catch { return {}; } };
   const playerRides = id => { const r = playerAll()[baseId(id)]; return Array.isArray(r) ? r : []; };
   function keepPlayerRide(id, rec) {
     const all = playerAll(), k = baseId(id);
     all[k] = [rec].concat(Array.isArray(all[k]) ? all[k] : []).slice(0, 3);
     for (const old of Object.keys(all).sort((a, b) => ((all[b][0] || {}).at || 0) - ((all[a][0] || {}).at || 0)).slice(30)) delete all[old];
-    try { localStorage.setItem(PLAYER, JSON.stringify(all)); } catch { /* storage full or blocked */ }
+    try { keep.setItem(PLAYER, JSON.stringify(all)); } catch { /* storage full or blocked */ }
   }
   // Section k of plan p ridden the player's way (o, see Trainer.playerSecs; with no speed in o, the plan's is kept).
   function applyPlayer(p, k, o) {
@@ -2336,7 +2400,7 @@ onmessage=async e=>{const m=e.data;
       let mine = null;
       // (temp: a line found while driving, learned for that ride only)
       // (a line learned for a challenge starts from the line's own lesson)
-      try { mine = this.temp ? null : JSON.parse(localStorage.getItem(this.key()) || (this.route.aim && localStorage.getItem(STORE + baseId(this.route.start.id))) || 'null'); } catch { mine = null; }
+      try { mine = this.temp ? null : JSON.parse(keep.getItem(this.key()) || (this.route.aim && keep.getItem(STORE + baseId(this.route.start.id))) || 'null'); } catch { mine = null; }
       this.kept = 0;
       const plan = this.planOf(mine), ok = !!plan;
       this.plan = ok ? clonePlan(plan) : freshPlan(this.secs);
@@ -2371,12 +2435,12 @@ onmessage=async e=>{const m=e.data;
       if (this.temp) return;
       // another tab learning the same line may have stored a better plan: take it instead of writing over it
       if (this.takeStored()) return;
-      try { localStorage.setItem(this.key(), JSON.stringify(this.lesson())); } catch { /* storage full: keep training anyway */ }
+      try { keep.setItem(this.key(), JSON.stringify(this.lesson())); } catch { /* storage full: keep training anyway */ }
     }
     // Plans stored by this browser were scored by the same simulation with the same rider, so a higher score can be trusted.
     takeStored(raw) {
       let m = null;
-      try { m = JSON.parse(raw || localStorage.getItem(this.key()) || 'null'); } catch { m = null; }
+      try { m = JSON.parse(raw || keep.getItem(this.key()) || 'null'); } catch { m = null; }
       if (!m || !this.best || !m.bestRun || m.sim !== simId() || !planFits(m.plan, this.secs) || JSON.stringify(m.setup) !== JSON.stringify(this.setup)) return false;
       if (!beats(m.bestRun, this.best)) return false;
       this.plan = m.plan; this.best = m.bestRun; this.gen = Math.max(this.gen, m.gen || 0);
@@ -2805,7 +2869,7 @@ onmessage=async e=>{const m=e.data;
     constructor(ui) { this.ui = ui; this.running = false; this.pool = null; this.load(); }
     load() {
       let m = null;
-      try { m = readBrain(localStorage.getItem(BRAIN_KEY) || 'null'); } catch { m = null; }
+      try { m = readBrain(keep.getItem(BRAIN_KEY) || 'null'); } catch { m = null; }
       this.best = m ? m.w : freshBrain();
       this.mean = m && weightsOk(m.mean) ? m.mean : this.best.slice();
       this.adam = m && m.adam && weightsOk(m.adam.m) && weightsOk(m.adam.v) ? m.adam : null;
@@ -2816,7 +2880,7 @@ onmessage=async e=>{const m=e.data;
     record() {
       return { format: BRAIN_FORMAT, version: BRAIN_VERSION, arch: BRAIN, w: this.best, mean: this.mean, adam: this.adam, gen: this.gen, lines: this.seen, score: this.score, test: this.test, hist: this.hist.slice(-400), savedAt: Date.now() };
     }
-    save() { try { localStorage.setItem(BRAIN_KEY, JSON.stringify(this.record())); } catch { /* storage full: keep learning anyway */ } }
+    save() { try { keep.setItem(BRAIN_KEY, JSON.stringify(this.record())); } catch { /* storage full: keep learning anyway */ } }
     stop() { this.running = false; }
     // Each worker holds every line; train are learned on, test (may be null) only ridden.
     async prepare(train, test, workers) {
@@ -3165,7 +3229,7 @@ onmessage=async e=>{const m=e.data;
     // every CPU thread but two (kept for the game itself) learns; past 16 the workers' start-up costs more than they add
     const workers = Math.max(1, Math.min(16, (navigator.hardwareConcurrency || 4) - 2));
     let routeCache = new Map(), choices = [], busy = false;
-    const mine = () => { try { return JSON.parse(localStorage.getItem(MINE) || '[]') || []; } catch { return []; } };
+    const mine = () => { try { return JSON.parse(keep.getItem(MINE) || '[]') || []; } catch { return []; } };
     const say = t => { $('.st').textContent = t; };
     const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; $('.log').prepend(d); };
     const fmtTricks = tr => Object.entries(tr || {}).map(([k, n]) => `<span class="tag">${TRICK_NAMES[k] || k}${k === 'whip' ? '' : k === 'manual' ? ' ' + n + ' m' : n > 1 ? ' ×' + n : ''}</span>`).join('') || `<span style="color:#7d8a97">${tx('chưa có trick nào', 'no tricks yet')}</span>`;
@@ -3261,7 +3325,7 @@ onmessage=async e=>{const m=e.data;
       if (o && trainer.route && trainer.route.start.id === o.s.id && trainer.best) t = `${tx('AI đi được', 'AI rides')} ${trainer.best.prog} / ${trainer.N} m`;
       else if (o) {
         let m = null;
-        try { m = JSON.parse(localStorage.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
+        try { m = JSON.parse(keep.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
         t = m && m.bestRun ? `${tx('AI đi được', 'AI rides')} ${m.bestRun.prog} m` : tx('chưa học', 'not learned');
       }
       $('.k-line').textContent = t;
@@ -3339,7 +3403,7 @@ onmessage=async e=>{const m=e.data;
       const got = await lineHere(me);
       if (!got) { say(tx('Không thấy con đường nào trong vòng 20 m quanh bạn, hoặc đường dài chưa tới 25 m. Hãy đến gần hơn (game tải dần đường quanh bạn) rồi bấm 📍 lại.', 'No trail within 20 m of you, or it is shorter than 25 m. Get closer (the game loads the trails around you bit by bit), then press 📍 again.')); return; }
       const { s, r, lead } = got;
-      try { localStorage.setItem(MINE, JSON.stringify([s].concat(mine().filter(q => q.id !== s.id)).slice(0, 100))); } catch { /* storage blocked */ }
+      try { keep.setItem(MINE, JSON.stringify([s].concat(mine().filter(q => q.id !== s.id)).slice(0, 100))); } catch { /* storage blocked */ }
       routeCache.set(s.id, r);
       choices = [{ s, d: Math.hypot(s.x - me.x, s.z - me.z) }].concat(choices.filter(o => o.s.id !== s.id));
       listLines();
@@ -3358,8 +3422,8 @@ onmessage=async e=>{const m=e.data;
       listLines();
       say(tx(`Đường này giờ tên là “${lineName(o.s.id)}”.`, `This line is now called “${lineName(o.s.id)}”.`));
     }
-    const hasMemory = id => { try { return !!localStorage.getItem(STORE + id); } catch { return false; } };
-    const savedLine = id => { try { const m = JSON.parse(localStorage.getItem(STORE + id) || 'null'); return m && m.line && m.line.X ? m.line : null; } catch { return null; } };
+    const hasMemory = id => { try { return !!keep.getItem(STORE + id); } catch { return false; } };
+    const savedLine = id => { try { const m = JSON.parse(keep.getItem(STORE + id) || 'null'); return m && m.line && m.line.X ? m.line : null; } catch { return null; } };
 
     // Rides a lesson from elsewhere in this computer's simulation; it replaces the AI's plan only if it does better.
     const sharedSeen = new Map();
@@ -3493,8 +3557,8 @@ onmessage=async e=>{const m=e.data;
       const most = BRAIN_LINES, real = most - DRILLS - NEW_DRILLS;
       const testId = o ? o.s.id : null, got = new Map(), drills = [];
       try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
+        for (let i = 0; i < keep.length; i++) {
+          const key = keep.key(i);
           if (!key || !key.startsWith(STORE)) continue;
           const id = key.slice(STORE.length), L = savedLine(id);
           if (L && L.practice) drills.push(L);
@@ -3559,7 +3623,7 @@ onmessage=async e=>{const m=e.data;
           const plans = [];
           let key = '';
           brain.trainIdx.forEach(i => {
-            try { const m = JSON.parse(localStorage.getItem(STORE + brain.lines[i].id) || 'null'); if (m && m.plan && Array.isArray(m.plan.v)) { plans.push({ line: i, plan: m.plan }); key += `${brain.lines[i].id}:${m.gen};`; } } catch { /* skip it */ }
+            try { const m = JSON.parse(keep.getItem(STORE + brain.lines[i].id) || 'null'); if (m && m.plan && Array.isArray(m.plan.v)) { plans.push({ line: i, plan: m.plan }); key += `${brain.lines[i].id}:${m.gen};`; } } catch { /* skip it */ }
           });
           // only when the lessons have learned more since the last time
           if (plans.length && key !== distilledKey) {
@@ -3600,11 +3664,11 @@ onmessage=async e=>{const m=e.data;
     function drillLevel(v) {
       if (v === undefined) {
         let s = null;
-        try { s = localStorage.getItem(DRILL_KEY); } catch { /* storage blocked */ }
+        try { s = keep.getItem(DRILL_KEY); } catch { /* storage blocked */ }
         return s !== null && num(+s) ? clamp(+s, 0, 1) : 0.3;
       }
       v = +clamp(v, 0, 1).toFixed(2);
-      try { localStorage.setItem(DRILL_KEY, String(v)); } catch { /* storage blocked */ }
+      try { keep.setItem(DRILL_KEY, String(v)); } catch { /* storage blocked */ }
       return v;
     }
     function releaseDrill() {
@@ -3615,14 +3679,14 @@ onmessage=async e=>{const m=e.data;
     function dropOldDrills() {
       const all = [];
       try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
+        for (let i = 0; i < keep.length; i++) {
+          const key = keep.key(i);
           if (!key || !key.startsWith(STORE + 'practice-')) continue;
           let at = 0;
-          try { at = JSON.parse(localStorage.getItem(key)).savedAt || 0; } catch { /* unreadable: goes first */ }
+          try { at = JSON.parse(keep.getItem(key)).savedAt || 0; } catch { /* unreadable: goes first */ }
           all.push([at, key]);
         }
-        all.sort((a, b) => b[0] - a[0]).slice(DRILLS_KEPT).forEach(([, key]) => localStorage.removeItem(key));
+        all.sort((a, b) => b[0] - a[0]).slice(DRILLS_KEPT).forEach(([, key]) => keep.removeItem(key));
       } catch { /* storage blocked */ }
     }
     async function drillStart() {
@@ -3871,7 +3935,7 @@ onmessage=async e=>{const m=e.data;
         if (trainer.route && trainer.route.start.id === o.s.id && trainer.best && JSON.stringify(trainer.setup) === setup) ls = trainer.best;
         else {
           let m = null;
-          try { m = JSON.parse(localStorage.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
+          try { m = JSON.parse(keep.getItem(STORE + o.s.id) || 'null'); } catch { m = null; }
           if (m && planFits(m.plan, ctx.secs) && JSON.stringify(m.setup) === setup) ({ plan: P, run: ls } = await settleAir(ctx.pool, m.plan));
         }
         const better = (a, b) => a.prog > b.prog || (a.prog === b.prog && a.fit >= b.fit);
@@ -3909,7 +3973,7 @@ onmessage=async e=>{const m=e.data;
       chOn = false; chRun++; chLabel();
       if (why) say(why);
     }
-    const lessonOf = id => { try { return JSON.parse(localStorage.getItem(STORE + id) || 'null'); } catch { return null; } };
+    const lessonOf = id => { try { return JSON.parse(keep.getItem(STORE + id) || 'null'); } catch { return null; } };
     const PERIOD_WORD = { day: 'hôm nay', week: 'tuần này', event: 'sự kiện' }, PERIOD_EN = { day: 'today', week: 'this week', event: 'event' };
     // the challenges not done yet, soonest to end first, with what each asks for
     async function chList() {
@@ -3942,7 +4006,7 @@ onmessage=async e=>{const m=e.data;
     // last time the bike was on the trails.
     const WORLD_TRICKS = 'trailsai.worldtricks';
     const worldTricks = v => {
-      try { if (v !== undefined) localStorage.setItem(WORLD_TRICKS, String(v)); return +(localStorage.getItem(WORLD_TRICKS) || 0) || 0; } catch { return v || 0; }
+      try { if (v !== undefined) keep.setItem(WORLD_TRICKS, String(v)); return +(keep.getItem(WORLD_TRICKS) || 0) || 0; } catch { return v || 0; }
     };
     // the game's "Back to riding" (from Training to the trails), as you would press it
     function backToRiding() {
@@ -4358,7 +4422,7 @@ onmessage=async e=>{const m=e.data;
     // the language: the panel's labels change at once, the numbers as they are next shown (the log stays as it was said)
     $('.lang').onclick = () => {
       lang = lang === 'en' ? 'vi' : 'en';
-      try { localStorage.setItem(LANG, lang); } catch { /* storage blocked */ }
+      try { keep.setItem(LANG, lang); } catch { /* storage blocked */ }
       relabel(el);
       $('.lang').textContent = tx('EN', 'VI');
       // (each on its own: some have nothing to show yet, before the game has loaded or a line has been learned)
@@ -4414,7 +4478,7 @@ onmessage=async e=>{const m=e.data;
       // the training loop saves once more as it stops: wait for it before wiping
       for (let i = 0; i < 300 && trainer.running; i++) await new Promise(r => setTimeout(r, 100));
       const key = trainer.key();
-      try { localStorage.removeItem(key); } catch { /* ignore */ }
+      try { keep.removeItem(key); } catch { /* ignore */ }
       routeCache.delete(trainer.route.start.id);
       if (trainer.pool) trainer.pool.close();
       trainer.pool = null; trainer.route = null; trainer.best = null; trainer.hist = []; trainer.borrow = null;
@@ -4460,13 +4524,13 @@ onmessage=async e=>{const m=e.data;
       if (trainer.route && trainer.route.start.id === id && trainer.pool) { await useLesson(m, tx('file', 'the file')); return; }
       if (hasMemory(id)) { say(tx('Bài học này của một đường khác. Chọn đường đó, bấm “Học lái”, rồi mở file lại.', 'This lesson is for another line. Pick that line, press “Learn”, then open the file again.')); return; }
       // a line not learned here yet: the file becomes its memory, and starting on it rides the plan before trusting it
-      try { localStorage.setItem(STORE + id, JSON.stringify({ ...m, bestRun: null })); } catch { say(tx('Trình duyệt hết chỗ lưu.', 'The browser has no room left to save.')); return; }
+      try { keep.setItem(STORE + id, JSON.stringify({ ...m, bestRun: null })); } catch { say(tx('Trình duyệt hết chỗ lưu.', 'The browser has no room left to save.')); return; }
       say(tx('Đã nhập bài học. Đến gần đường đó, chọn nó trong danh sách rồi bấm “Học lái”.', 'Lesson imported. Get near that line, pick it in the list, then press “Learn”.'));
     };
     // another tab learning the same line saved a better plan
-    window.addEventListener('storage', e => {
-      if (!trainer.route || e.key !== trainer.key() || !e.newValue) return;
-      if (trainer.takeStored(e.newValue)) { log(tx(`Nhận bài học giỏi hơn từ một tab khác: ${trainer.best.prog} m, ${Math.round(trainer.best.fit)} điểm.`, `Got a better lesson from another tab: ${trainer.best.prog} m, ${Math.round(trainer.best.fit)} points.`)); showBest(trainer.best); }
+    keep.listen((key, value) => {
+      if (!trainer.route || key !== trainer.key() || !value) return;
+      if (trainer.takeStored(value)) { log(tx(`Nhận bài học giỏi hơn từ một tab khác: ${trainer.best.prog} m, ${Math.round(trainer.best.fit)} điểm.`, `Got a better lesson from another tab: ${trainer.best.prog} m, ${Math.round(trainer.best.fit)} points.`)); showBest(trainer.best); }
     });
     // while learning, look for a newer community lesson every 10 minutes (others may have shared a better one)
     setInterval(async () => {
@@ -4481,7 +4545,7 @@ onmessage=async e=>{const m=e.data;
     // learns now, or one it has a lesson for) is kept as the way they rode it (rideOn). Their tricks go into the trick
     // book, and the line learning now tries their way at once (Trainer.fromPlayer), whole and section by section.
     const WATCH = 'trailsai.watchme';
-    let watchOn = (() => { try { return localStorage.getItem(WATCH) !== '0'; } catch { return true; } })(), meRides = 0, meBusy = false;
+    let watchOn = (() => { try { return keep.getItem(WATCH) !== '0'; } catch { return true; } })(), meRides = 0, meBusy = false;
     seen.on = watchOn;
     function showMe() {
       $('.k-me').textContent = !watchOn ? tx('tắt', 'off') : meRides ? tx(`đã ghi ${meRides} lượt bạn lái`, `${meRides} ride(s) of yours noted`) : tx('đang xem bạn lái', 'watching you ride');
@@ -4490,7 +4554,7 @@ onmessage=async e=>{const m=e.data;
     $('.watchme').onclick = () => {
       watchOn = !watchOn; seen.on = watchOn;
       if (!watchOn) { seen.f = []; seen.ev = []; seen.done.length = 0; }
-      try { localStorage.setItem(WATCH, watchOn ? '1' : '0'); } catch { /* storage blocked */ }
+      try { keep.setItem(WATCH, watchOn ? '1' : '0'); } catch { /* storage blocked */ }
       showMe();
       say(watchOn ? 'AI sẽ xem bạn lái trên những đường nó biết và học theo.' : 'AI không xem bạn lái nữa.');
     };
@@ -4500,12 +4564,12 @@ onmessage=async e=>{const m=e.data;
       const out = new Map();
       if (trainer.route && !trainer.temp) out.set(baseId(trainer.route.start.id), { X: trainer.route.X, Z: trainer.route.Z });
       try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const key = localStorage.key(i);
+        for (let i = 0; i < keep.length; i++) {
+          const key = keep.key(i);
           if (!key || !key.startsWith(STORE) || out.has(baseId(key.slice(STORE.length)))) continue;
           if (!lineGeo.has(key)) {
             let m = null;
-            try { m = JSON.parse(localStorage.getItem(key)); } catch { m = null; }
+            try { m = JSON.parse(keep.getItem(key)); } catch { m = null; }
             const L = m && m.line;
             lineGeo.set(key, L && Array.isArray(L.X) && Array.isArray(L.Z) && L.X.length >= 20 ? { X: L.X, Z: L.Z } : null);
           }
@@ -4582,7 +4646,7 @@ onmessage=async e=>{const m=e.data;
       const su = m.setup || {};
       live.tricks = num(su.tricks) ? su.tricks : 0; live.bike = su.bike || 0; live.tunes = { ...(su.tunes || {}) };
       // the lesson is the line's memory here, so learning goes on from its plan
-      localStorage.setItem(STORE + m.line.start.id, JSON.stringify(m));
+      keep.setItem(STORE + m.line.start.id, JSON.stringify(m));
       trainer.library = await gatherJumps();
       trainer.brainW = null;
       await trainer.prepare(m.line, n || workers);
@@ -4606,5 +4670,7 @@ onmessage=async e=>{const m=e.data;
     setTimeout(findTracks, 1500);
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', main); else main();
+  // (the panel opens once what the AI keeps has been read, see keep)
+  const start = () => keep.ready.then(main);
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
 })();
