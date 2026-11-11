@@ -536,6 +536,25 @@
         const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
         if (sc < score) { score = sc; nxt = s; }
       }
+      // A takeoff laid on top of a flat, part way along it: the bike rides up it there, whatever lies past it. (The
+      // line takes the flat up to the takeoff's foot: cur.cut, how far along the flat that is.)
+      if (!back && cur.p.kind !== 'takeoff') {
+        let along = Infinity, on = null;
+        for (const s of segs) {
+          if (used.has(s) || s.p.kind !== 'takeoff') continue;
+          const [lx, lz, lh] = s.lead;
+          let run = 0;
+          for (let i = 1; i < cur.pts.length; i++) {
+            const [ax, az] = cur.pts[i - 1], [bx, bz] = cur.pts[i];
+            const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
+            const t = ((lx - ax) * dx + (lz - az) * dz) / L;
+            const off = Math.abs((lz - az) * dx - (lx - ax) * dz) / L;
+            if (t >= 0 && t <= L && off < 1.5 && Math.abs(wrapA(lh - Math.atan2(dz, dx))) < 0.65 && run + t > 1 && run + t < along) { along = run + t; on = s; }
+            run += L;
+          }
+        }
+        if (on) { cur.cut = along; nxt = on; }
+      }
       gapAfter.push(nxt && (back ? nxt : cur).p.kind === 'takeoff' ? 1 : 0);
       cur = nxt;
     }
@@ -561,6 +580,15 @@
         const kd = flip[s.p.kind] || s.p.kind;
         add(s.end[0], s.end[1], ci && gapAfter[ci - 1] ? 'air' : kd);
         for (let i = s.pts.length - 1; i >= 0; i--) add(s.pts[i][0], s.pts[i][1], kd);
+      } else if (s.cut !== undefined) {
+        // (a flat with a takeoff on top: up to the takeoff's foot)
+        let run = 0;
+        add(s.pts[0][0], s.pts[0][1], s.p.kind);
+        for (let i = 1; i < s.pts.length; i++) {
+          const [ax, az] = s.pts[i - 1], [bx, bz] = s.pts[i], L = Math.hypot(bx - ax, bz - az) || 1;
+          if (run + L >= s.cut) { const t = (s.cut - run) / L; add(ax + (bx - ax) * t, az + (bz - az) * t, s.p.kind); break; }
+          add(bx, bz, s.p.kind); run += L;
+        }
       } else {
         for (const q of s.pts) add(q[0], q[1], s.p.kind);
         add(s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind, s.end[2]);
