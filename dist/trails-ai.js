@@ -948,6 +948,7 @@ const me = { P, idx: 0, sec: 0, airSec: 0, off: 0, landed: false, wasAir: false,
 py: 0, pat: 0, lt: -1, pa: false, vy: null, va: 0, ay: null, gOff: 0, la: -1 };
 const look = d => Math.min(N - 1, me.idx + Math.max(1, Math.round(d)));
 const hAt = u => { const i = clamp(Math.floor(u), 0, N - 2), f = clamp(u - i, 0, 1); return H[i] + (H[i + 1] - H[i]) * f; };
+const slopeAt = u => { const i = clamp(Math.round(u), 2, N - 3); return Math.atan2(H[i + 2] - H[i - 2], 4); };
 const vAt = (P, k, i) => { const q = P.vs && P.vs[k]; return q && q.length ? q[Math.min(q.length - 1, Math.max(0, Math.floor((i - S[k].a) * q.length / (S[k].b - S[k].a + 1))))] : P.v[k]; };
 const near = (bx, bz) => {
 let bi = me.idx, bd = Infinity;
@@ -1001,11 +1002,11 @@ if (P.lg && P.lg[sec]) lean = P.lg[sec];
 const dp = wrapA(s[4] - me.prevP) * 30;
 me.rot += wrapA(s[4] - me.prevP);
 let aim = P.pt[me.airSec];
-if (P.la && me.vy !== null) {
+if (P.lp && typeof P.lp[me.airSec] === 'number' && me.vy !== null) {
 const ay = me.ay === null ? -9.8 : clamp(me.ay, -16, -3), h = 1 / 30;
 let y = by, u = me.at, vy = me.vy, hit = -1;
 for (let k = 0; k < 450 && hit < 0; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) break; if (vy < 0 && y - me.gOff <= hAt(u)) hit = u; }
-if (hit >= 0) { const i = clamp(Math.round(hit), 2, N - 3); aim += clamp(Math.atan2(H[i + 2] - H[i - 2], 4), -0.9, 0.3) - S[me.airSec].pt; me.la = hit; }
+if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.5, 0.5); me.la = hit; }
 }
 lean = clamp(2.2 * (s[4] - aim) + 0.35 * dp, -1, 1);
 me.aim = aim;
@@ -1340,9 +1341,9 @@ if(Object.keys(got).length)E.pending={got,t};
 const gr=s[15]|0;
 if(gr>0){const k=rider.airSec,gp=gamePoints(gr,s[44],s[43],s[41],E.streak),i=Math.min(N-3,Math.max(2,idx));
 E.streak=gp.streak;E.game+=gp.p;
-const dp=E.airP-Math.atan2(H[i+2]-H[i-2],4);
+const ls=Math.atan2(H[i+2]-H[i-2],4),dp=E.airP-ls;
 const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7),P=rider.P;
-E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
+E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),ls:+ls.toFixed(4),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
 t,wv:Math.round(s[41]||0),sv:Math.round(s[43]||0),fv:Math.round(s[44]||0)});
 if(rec)E.ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
 }
@@ -1641,17 +1642,16 @@ close() { this.closed = true; this.ws.forEach(w => w.terminate()); this.failAll(
 const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
 const clonePlan = p => JSON.parse(JSON.stringify(p));
 function freshPlan(secs) {
-return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0), as: 1, la: 1 };
+return { v: secs.map(() => 8), pt: secs.map(s => s.pt), mv: secs.map(() => 0), hr: secs.map(() => 1.5), pl: secs.map(() => 0), pu: secs.map(() => 0), as: 1 };
 }
 async function settleAir(pool, P) {
-if (P.as !== undefined && P.la !== undefined) return { plan: P, run: (await pool.evalAll([P]))[0] };
-const ways = P.as !== undefined ? [P.as] : [0, 1], two = [];
-for (const as of ways) for (const la of P.la !== undefined ? [P.la] : [0, 1]) two.push({ ...clonePlan(P), as, la });
+if (P.as !== undefined) return { plan: P, run: (await pool.evalAll([P]))[0] };
+const two = [{ ...clonePlan(P), as: 0 }, { ...clonePlan(P), as: 1 }];
 const runs = await pool.evalAll(two);
-let i = runs.length - 1;
-for (let j = runs.length - 2; j >= 0; j--) if (beats(runs[j], runs[i])) i = j;
+const i = beats(runs[1], runs[0]) ? 1 : 0;
 return { plan: two[i], run: runs[i] };
 }
+const landSlopes = (run, n) => { const lp = new Array(n).fill(null); for (const e of (run && run.jl) || []) if (typeof e.ls === 'number' && e.k >= 0 && e.k < n && lp[e.k] === null) lp[e.k] = e.ls; return lp; };
 const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
 const num = v => typeof v === 'number' && Number.isFinite(v);
 const partsOk = (P, n) => (P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num)))))
@@ -3175,7 +3175,7 @@ const R = { X: geo.X, Z: geo.Z, KIND: geo.KIND, length: geo.X.length, PZ: geo.PZ
 const plan = clonePlan(now ? trainer.plan : P);
 const rider = makeRider(R, geo.H, secs, plan);
 const d = { who: 'AI', route: now ? trainer.route : ctx.route, rider, expect, vEnd, tricks: 0, swaps: 0 };
-d.profP = (now ? trainer.pool : ctx.pool).replay(plan).then(r => profileOf(r, R.length)).catch(() => null);
+d.profP = (now ? trainer.pool : ctx.pool).replay(plan).then(r => { if (!plan.lp) plan.lp = landSlopes(r, secs.length); return profileOf(r, R.length); }).catch(() => null);
 if (now) d.takeNewer = swapper(trainer, plan, rider, secs, () => { d.swaps++; d.expect = trainer.best.prog; });
 ride(d, R);
 }
@@ -3189,11 +3189,12 @@ known = p;
 const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
 for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
 for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0)) return;
-for (const k of ['pz', 'pk', 'as', 'la']) if (!same(p[k], plan[k])) return;
+for (const k of ['pz', 'pk', 'as']) if (!same(p[k], plan[k])) return;
 for (const k of PLAN_KEYS) plan[k] = p[k].slice();
 if (p.vs) plan.vs = p.vs.map(q => (q ? q.slice() : null)); else delete plan.vs;
 if (p.lg) plan.lg = p.lg.slice(); else delete plan.lg;
 if (p.sa) plan.sa = p.sa.slice(); else delete plan.sa;
+plan.lp = landSlopes(T.best, secs.length);
 took();
 };
 }
@@ -3518,7 +3519,7 @@ const handOver = (leg, s) => {
 const T = leg.T, g = T.geo, R2 = { X: g.X, Z: g.Z, KIND: g.KIND, length: g.X.length, PZ: g.PZ };
 const plan = clonePlan(T.plan), r2 = makeRider(R2, g.H, T.secs, plan);
 d.takeNewer = swapper(T, plan, r2, T.secs, () => d.swaps++); d.who = 'AI';
-d.profP = T.pool.replay(plan).then(r => profileOf(r, R2.length)).catch(() => null);
+d.profP = T.pool.replay(plan).then(r => { if (!plan.lp) plan.lp = landSlopes(r, T.secs.length); return profileOf(r, R2.length); }).catch(() => null);
 let bi = 0, bd = Infinity;
 for (let i = 0; i < Math.min(R2.length, 80); i++) { const q = (R2.X[i] - s[0]) ** 2 + (R2.Z[i] - s[2]) ** 2; if (q < bd) { bd = q; bi = i; } }
 r2.idx = bi;
