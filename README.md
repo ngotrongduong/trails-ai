@@ -39,6 +39,8 @@ Trong bảng AI chỉ cần hai nút: **Học lái** (AI tự xoay vòng: học 
 
 Nút nhỏ **EN** ở góc trên bảng AI chuyển mọi thứ AI hiển thị sang tiếng Anh (nút đổi thành **VI** để chuyển lại tiếng Việt). Trình duyệt nhớ lựa chọn này cho những lần sau. Những dòng đã ghi trong nhật ký thì giữ nguyên ngôn ngữ lúc ghi.
 
+Những gì AI học (bài học, bộ não chung) được giữ trong IndexedDB của trình duyệt. Trước đây chúng nằm trong localStorage, chỉ chứa được 5 MB cho cả trang game: mỗi bài học nặng 100–400 kB vì có cả các chi tiết quanh đường. Khi localStorage đầy, extension không lưu được bản AI mới, nên AI cũ cứ chạy mãi (và sau một lần game cập nhật thì không bắt được xe nữa). Bản AI mới tự chuyển hết sang IndexedDB ở lần chạy đầu. localStorage giờ chỉ giữ ngôn ngữ và bản AI của extension.
+
 Vật lý của game cho kết quả giống hệt nhau mỗi lần chạy, nên những gì AI làm được trong mô phỏng thì ngoài game nó cũng làm được y như vậy. Đã kiểm tra: mô phỏng ngã ở mét 1096 thì AI lái thật ngã ở mét 1094.
 
 ### Vừa lái thật vừa học
