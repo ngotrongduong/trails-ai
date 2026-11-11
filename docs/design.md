@@ -273,6 +273,20 @@ tricks). New:
   Training drills do not count for challenges; with tricks locked, the AI asks the player
   to open the Trick line drill and learns and rides that, but never presses the game's
   "Unlock tricks".
+- **Looking ahead in the air.** Riding in the game, at every control in the air (every
+  other step) the rider flies the bike on from how it flies now: its height, how fast it
+  rises and goes along the line (both measured step to step), and the pull down on it
+  measured on this flight (gravity and the air together, about 7 m/s² on an 8 s flight),
+  to where it meets the ground. The angle it holds for the landing is turned by as much
+  as the slope there differs from the slope where that jump came down in the plan's own
+  ride in the simulation (P.lp, by section, filled in from that ride's landings before
+  driving and whenever a newer plan is taken on the way; at most 0.35 rad). Training never
+  sets P.lp, so every lesson is learned and scored as before; ridden with P.lp in the
+  simulation, the lesson of Đèo Nắng 79 rode the same (its landing angles within 0.015 rad).
+  The game's state cannot be put into a worker's simulation (each has its own world in
+  its memory), so this flies on by the measured motion instead of the physics. Measured
+  with a run-in 1 m/s slower than planned there: without it the bike cased the second
+  jump and fell, with it the line was ridden to the end for 1280 points.
 - **Later: correcting on the way.** If the real ride comes into a section much slower or
   faster than the plan expected, the rest of the line could be planned again from there
   (from a saved state made from the real bike's). Not done yet: the game and the

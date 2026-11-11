@@ -1006,7 +1006,7 @@ if (P.lp && typeof P.lp[me.airSec] === 'number' && me.vy !== null) {
 const ay = me.ay === null ? -9.8 : clamp(me.ay, -16, -3), h = 1 / 30;
 let y = by, u = me.at, vy = me.vy, hit = -1;
 for (let k = 0; k < 450 && hit < 0; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) break; if (vy < 0 && y - me.gOff <= hAt(u)) hit = u; }
-if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.5, 0.5); me.la = hit; }
+if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.35, 0.35); me.la = hit; }
 }
 lean = clamp(2.2 * (s[4] - aim) + 0.35 * dp, -1, 1);
 me.aim = aim;
@@ -1341,9 +1341,9 @@ if(Object.keys(got).length)E.pending={got,t};
 const gr=s[15]|0;
 if(gr>0){const k=rider.airSec,gp=gamePoints(gr,s[44],s[43],s[41],E.streak),i=Math.min(N-3,Math.max(2,idx));
 E.streak=gp.streak;E.game+=gp.p;
-const ls=Math.atan2(H[i+2]-H[i-2],4),dp=E.airP-ls;
+const sl=Math.atan2(H[i+2]-H[i-2],4),dp=E.airP-sl;
 const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7),P=rider.P;
-E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),ls:+ls.toFixed(4),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
+E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),sl:+sl.toFixed(4),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
 t,wv:Math.round(s[41]||0),sv:Math.round(s[43]||0),fv:Math.round(s[44]||0)});
 if(rec)E.ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
 }
@@ -1651,7 +1651,7 @@ const runs = await pool.evalAll(two);
 const i = beats(runs[1], runs[0]) ? 1 : 0;
 return { plan: two[i], run: runs[i] };
 }
-const landSlopes = (run, n) => { const lp = new Array(n).fill(null); for (const e of (run && run.jl) || []) if (typeof e.ls === 'number' && e.k >= 0 && e.k < n && lp[e.k] === null) lp[e.k] = e.ls; return lp; };
+const landSlopes = (run, n) => { const lp = new Array(n).fill(null); for (const e of (run && run.jl) || []) if (typeof e.sl === 'number' && e.k >= 0 && e.k < n && lp[e.k] === null) lp[e.k] = e.sl; return lp; };
 const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
 const num = v => typeof v === 'number' && Number.isFinite(v);
 const partsOk = (P, n) => (P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num)))))

@@ -1282,7 +1282,7 @@
             const ay = me.ay === null ? -9.8 : clamp(me.ay, -16, -3), h = 1 / 30;
             let y = by, u = me.at, vy = me.vy, hit = -1;
             for (let k = 0; k < 450 && hit < 0; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) break; if (vy < 0 && y - me.gOff <= hAt(u)) hit = u; }
-            if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.5, 0.5); me.la = hit; }
+            if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.35, 0.35); me.la = hit; }
           }
           lean = clamp(2.2 * (s[4] - aim) + 0.35 * dp, -1, 1);
           me.aim = aim;
@@ -1710,13 +1710,13 @@ function go(E,stop){
       if(gr>0){const k=rider.airSec,gp=gamePoints(gr,s[44],s[43],s[41],E.streak),i=Math.min(N-3,Math.max(2,idx));
         E.streak=gp.streak;E.game+=gp.p;
         // the bike's pitch just before it came down less the slope of the ground there (above 0: nose too high)
-        const ls=Math.atan2(H[i+2]-H[i-2],4),dp=E.airP-ls;
+        const sl=Math.atan2(H[i+2]-H[i-2],4),dp=E.airP-sl;
         // where on the landing the wheels came down, as the game's Training judges it: the back wheel past the knuckle
         // (0.8 m down the landing and 0.2 more) and the front no more than 1 m past its bottom, else short or overshot
         // (the wheels about half a metre either side of the bike; a metre to spare at the knuckle: real rides came down
         // up to a metre shorter than the simulation's, 0.3 m at the bottom)
         const rw=rider.at-0.45,fw=rider.at+0.55,ls=LS.find(q=>rw>=q[0]-4&&rw<=q[1]+3),spot=!!ls&&rw>=ls[0]+2&&(rw<=ls[1]-1.5||fw<=ls[1]+0.7),P=rider.P;
-        E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),ls:+ls.toFixed(4),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
+        E.jl.push({k,i:idx,spot,li:R.lands&&ls?LS.indexOf(ls):-1,u:ls?+(rw-ls[0]).toFixed(2):null,a:+s[14].toFixed(2),h:+s[20].toFixed(2),d:+s[21].toFixed(1),g:gr,dp:+dp.toFixed(3),sl:+sl.toFixed(4),mis:+(s[22]||0).toFixed(3),imp:+s[23].toFixed(2),tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m,mv:P&&P.mv?P.mv[k]|0:0,
           t,wv:Math.round(s[41]||0),sv:Math.round(s[43]||0),fv:Math.round(s[44]||0)});
         if(rec)E.ev.push({t,land:gr,tr:gp.tr,sp:gp.turn,p:gp.p,m:gp.m})}
     }
@@ -2090,7 +2090,7 @@ onmessage=async e=>{const m=e.data;
   }
   // For looking ahead in the game (P.lp, see makeRider): the slope where each jump came down in training, by section,
   // from the ride of the plan (its jl). A section with no landing in it (or a ride of an older AI) gets none.
-  const landSlopes = (run, n) => { const lp = new Array(n).fill(null); for (const e of (run && run.jl) || []) if (typeof e.ls === 'number' && e.k >= 0 && e.k < n && lp[e.k] === null) lp[e.k] = e.ls; return lp; };
+  const landSlopes = (run, n) => { const lp = new Array(n).fill(null); for (const e of (run && run.jl) || []) if (typeof e.sl === 'number' && e.k >= 0 && e.k < n && lp[e.k] === null) lp[e.k] = e.sl; return lp; };
   const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
   const num = v => typeof v === 'number' && Number.isFinite(v);
   // vs, a speed for every part of a section, is there only once learning has split a section
