@@ -4653,10 +4653,10 @@ onmessage=async e=>{const m=e.data;
         if (got.classList.contains('rp-error')) throw new Error(got.textContent);
         return 'https://' + got.textContent.trim();
       } finally {
-        const p = sharePanel(), x = p && p.querySelector('.rp-panel-close');
+        // (closing the panel closes the replay too; P, the game's Replay key, toggles it, so only when it stays open)
+        const p = sharePanel(), x = p && p.querySelector('.rp-panel-close'), shut = () => !document.body.classList.contains('replaying');
         if (x) x.click();
-        if (document.body.classList.contains('replaying')) press('KeyP', 'p');
-        await until(() => !document.body.classList.contains('replaying'), 3000);
+        if (!(await until(shut, 1500))) { press('KeyP', 'p'); await until(shut, 3000); }
       }
     }
     async function shareGood(d, m) {
@@ -4668,7 +4668,8 @@ onmessage=async e=>{const m=e.data;
         const ws = live.ws;
         let invited = false;
         if (ws && ws.readyState === 1 && st && num(st.x) && num(st.z)) {
-          ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`, invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
+          // (the game's chat takes 200 characters at most)
+          ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`.slice(0, 200), invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
           invited = true;
         }
         log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Đã mời mọi người trong chat vào chạy đường này.' : '. Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 10 phút nữa.`,
