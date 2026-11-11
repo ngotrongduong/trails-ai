@@ -1228,7 +1228,7 @@
       { const j = Math.min(N - 2, bi), dx = R.X[j + 1] - R.X[j], dz = R.Z[j + 1] - R.Z[j];
         me.at = j + clamp(((bx - R.X[j]) * dx + (bz - R.Z[j]) * dz) / (dx * dx + dz * dz || 1), -0.5, 1.5); }
       if (air && !me.wasAir) {
-        me.airSec = me.sec; me.rot = 0; me.let = false;
+        me.airSec = me.sec; me.rot = 0; me.let = false; me.p0 = s[4];
         // off a lip just passed (3 m or less behind) the jump is that lip's, even when the section after it ends at a lip
         // too. Plans learned before this (P.as not set) keep the old way: their angles were learned for those sections.
         const k0 = me.sec - 1;
@@ -1314,14 +1314,19 @@
             }
             // a backflip: let it go over, then bring it to the landing angle. On a long flight it may go round too
             // slowly to be over before it comes down (off the lip of a long drop it turned some 40° a second and came
-            // down at 340°, and fell): there it is pulled round, as hard as it needs to reach 5 rad (where the angle
-            // is taken back) a second before it lands. Only on flights of over 3 s: the backflips learned on shorter
-            // jumps go round as they did.
-            if (mv.flip && me.rot > -0.6 && me.rot < 5) {
-              free = true;
-              const f = s[12] > 0.3 ? flyOn() : null, tl = f && s[12] + f[1] > 3 ? f[1] - 1 : 0;
-              if (tl > 0) { const need = (5 - me.rot) / tl; if (dp < need) pull = clamp(-0.8 * (need - dp), -1, 0); }
-            }
+            // down at 340°, and fell; held only until 5 rad round, it was still turning to the landing angle as it
+            // came down, and fell too): there it is pulled the whole way round to the landing angle, as hard as it
+            // needs to be there 1.5 s before it lands, and then held at it. Only on flights of over 3 s: the
+            // backflips learned on shorter jumps go round as they did.
+            const f = mv.flip && s[12] > 0.3 && me.rot > -0.6 ? flyOn() : null, long = f && s[12] + f[1] > 3;
+            if (long) {
+              const rem = aim + 2 * Math.PI - (me.p0 + me.rot);
+              if (rem > 0.4) {
+                free = true;
+                const need = (rem - 0.2) / Math.max(0.25, f[1] - 1.5);
+                if (dp < need) pull = clamp(-0.8 * (need - dp), -1, 0);
+              }
+            } else if (mv.flip && me.rot > -0.6 && me.rot < 5) free = true;
             if (mv.wt && s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
             if (free) lean = pull;
           } else if (mv && !mv.man) {

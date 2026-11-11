@@ -969,7 +969,7 @@ me.off = Math.sqrt(bd);
 { const j = Math.min(N - 2, bi), dx = R.X[j + 1] - R.X[j], dz = R.Z[j + 1] - R.Z[j];
 me.at = j + clamp(((bx - R.X[j]) * dx + (bz - R.Z[j]) * dz) / (dx * dx + dz * dz || 1), -0.5, 1.5); }
 if (air && !me.wasAir) {
-me.airSec = me.sec; me.rot = 0; me.let = false;
+me.airSec = me.sec; me.rot = 0; me.let = false; me.p0 = s[4];
 const k0 = me.sec - 1;
 if (P.as && k0 >= 0 && S[k0].jump && S[k0].b >= me.idx - 3 && !(S[me.sec].jump && S[me.sec].b <= me.idx + 2)) me.airSec = k0;
 else for (let k = me.sec; k >= 0 && k >= me.sec - 1; k--) if (S[k].jump) { me.airSec = k; break; }
@@ -1028,11 +1028,15 @@ if (a >= P.hr[me.airSec] * 100) me.let = true;
 if (!me.let) whip = mv.spin;
 if (a > 5 && a < 320) free = true;
 }
-if (mv.flip && me.rot > -0.6 && me.rot < 5) {
+const f = mv.flip && s[12] > 0.3 && me.rot > -0.6 ? flyOn() : null, long = f && s[12] + f[1] > 3;
+if (long) {
+const rem = aim + 2 * Math.PI - (me.p0 + me.rot);
+if (rem > 0.4) {
 free = true;
-const f = s[12] > 0.3 ? flyOn() : null, tl = f && s[12] + f[1] > 3 ? f[1] - 1 : 0;
-if (tl > 0) { const need = (5 - me.rot) / tl; if (dp < need) pull = clamp(-0.8 * (need - dp), -1, 0); }
+const need = (rem - 0.2) / Math.max(0.25, f[1] - 1.5);
+if (dp < need) pull = clamp(-0.8 * (need - dp), -1, 0);
 }
+} else if (mv.flip && me.rot > -0.6 && me.rot < 5) free = true;
 if (mv.wt && s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
 if (free) lean = pull;
 } else if (mv && !mv.man) {
