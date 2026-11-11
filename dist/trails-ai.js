@@ -1004,11 +1004,16 @@ if (P.lg && P.lg[sec]) lean = P.lg[sec];
 const dp = wrapA(s[4] - me.prevP) * 30;
 me.rot += wrapA(s[4] - me.prevP);
 let aim = P.pt[me.airSec];
-if (P.lp && typeof P.lp[me.airSec] === 'number' && me.vy !== null) {
+const flyOn = () => {
+if (me.vy === null) return null;
 const ay = me.ay === null ? -9.8 : clamp(me.ay, -16, -3), h = 1 / 30;
-let y = by, u = me.at, vy = me.vy, hit = -1;
-for (let k = 0; k < 450 && hit < 0; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) break; if (vy < 0 && y - me.gOff <= hAt(u)) hit = u; }
-if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.35, 0.35); me.la = hit; }
+let y = by, u = me.at, vy = me.vy;
+for (let k = 0; k < 450; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) return null; if (vy < 0 && y - me.gOff <= hAt(u)) return [u, (k + 1) * h]; }
+return null;
+};
+if (P.lp && typeof P.lp[me.airSec] === 'number') {
+const f = flyOn();
+if (f) { aim += clamp(slopeAt(f[0]) - P.lp[me.airSec], -0.35, 0.35); me.la = f[0]; }
 }
 lean = clamp(2.2 * (s[4] - aim) + 0.35 * dp, -1, 1);
 me.aim = aim;
@@ -1016,16 +1021,20 @@ const mv = MOVES[P.mv[me.airSec] | 0];
 const sa = P.sa ? P.sa[me.airSec] || 0 : 0;
 if (sa && !(mv && mv.spin && Math.abs(s[48]) < 340)) st = clamp(sa * (2.2 * e1 + 0.6 * e2), -1, 1);
 if (mv && (mv.spin || mv.flip || mv.wt)) {
-let free = false;
+let free = false, pull = 0;
 if (mv.spin) {
 const a = Math.abs(s[48]);
 if (a >= P.hr[me.airSec] * 100) me.let = true;
 if (!me.let) whip = mv.spin;
 if (a > 5 && a < 320) free = true;
 }
-if (mv.flip && me.rot > -0.6 && me.rot < 5) free = true;
+if (mv.flip && me.rot > -0.6 && me.rot < 5) {
+free = true;
+const f = s[12] > 0.3 ? flyOn() : null, tl = f && s[12] + f[1] > 3 ? f[1] - 1 : 0;
+if (tl > 0) { const need = (5 - me.rot) / tl; if (dp < need) pull = clamp(-0.8 * (need - dp), -1, 0); }
+}
 if (mv.wt && s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
-if (free) lean = 0;
+if (free) lean = pull;
 } else if (mv && !mv.man) {
 const gnd = Math.max(H[look(3)], H[look(8)]);
 if (s[12] > 0.1 && by - gnd > P.hr[me.airSec]) { btn = mv.b || 0; if (mv.ln !== undefined) lean = mv.ln; if (mv.st) st = mv.st; if (mv.w) whip = mv.w; }
@@ -3141,6 +3150,11 @@ else if (Math.abs(m - e) > 15) log(tx(`Lượt thật lệch so với mô phỏn
 else log(tx(`Đúng như mô phỏng dự đoán (${e} m).`, `Just as the simulation expected (${e} m).`));
 }
 if (park && !byPlayer && shareOn && !sharing && Date.now() - shareAt() >= SHARE_EVERY) shareGood(d, m);
+try {
+const past = JSON.parse(keep.getItem(DRIVES) || '[]');
+past.push({ at: Date.now(), id: d.route && d.route.start ? d.route.start.id : null, why, m, expect: e, legs: d.legs, tricks: d.tricks, game: d.game || 0, lands: d.lands || [], coast: d.coastAt === undefined ? null : d.coastAt });
+keep.setItem(DRIVES, JSON.stringify(past.slice(-10)));
+} catch { /* the rides are only notes */ }
 if (looping) {
 say(tx(`${d.who} lái thật: ${why} sau ${m} m. Lái lại từ đầu đường sau 3 giây với những gì mới học được (bấm “Dừng AI lái” để dừng hẳn).`, `${d.who} rode for real: ${why} after ${m} m. Riding again from the start of the line in 3 seconds with what it has just learned (press “Stop AI riding” to stop for good).`));
 const rideAgain = () => {
@@ -3551,6 +3565,7 @@ if (s[16] !== seq) {
 seq = s[16];
 if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++;
 const gr = s[15] | 0;
+(d.lands = d.lands || []).push([rider.idx, +(rider.off || 0).toFixed(1), +(s[14] || 0).toFixed(2), gr]);
 if (gr > 0) {
 const gp = gamePoints(gr, s[44], s[43], s[41], d.streak || 0);
 d.streak = gp.streak; d.game = (d.game || 0) + gp.p; d.top = Math.max(d.top || 1, gp.m);
@@ -3579,6 +3594,7 @@ let inp;
 if (!coast && rider.idx >= R.length - 3) {
 const n = R.length, k = Math.max(0, n - 6);
 coast = { h: Math.atan2(R.Z[n - 1] - R.Z[k], R.X[n - 1] - R.X[k]), at: rider.idx, t0: t, halt: false };
+d.coastAt = rider.idx;
 }
 if (coast) {
 const v = s[8], air = s[12] > 0;
@@ -3766,7 +3782,7 @@ try { keep.setItem(WATCH, watchOn ? '1' : '0'); } catch { /* storage blocked */ 
 showMe();
 say(watchOn ? 'AI sẽ xem bạn lái trên những đường nó biết và học theo.' : 'AI không xem bạn lái nữa.');
 };
-const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3;
+const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3, DRIVES = 'trailsai.drives';
 let shareOn = (() => { try { return keep.getItem(SHARE) !== '0'; } catch { return true; } })(), sharing = false;
 const shareAt = () => +(keep.getItem(SHARE_AT) || 0) || 0;
 const press = (code, key) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true })); };

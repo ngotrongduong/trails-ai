@@ -1282,11 +1282,17 @@
           // down differs from the slope where it came down in training (P.lp, by section), so it still matches the
           // ground it meets.
           let aim = P.pt[me.airSec];
-          if (P.lp && typeof P.lp[me.airSec] === 'number' && me.vy !== null) {
+          // (flown on: where along the line it comes down and in how many seconds, or null)
+          const flyOn = () => {
+            if (me.vy === null) return null;
             const ay = me.ay === null ? -9.8 : clamp(me.ay, -16, -3), h = 1 / 30;
-            let y = by, u = me.at, vy = me.vy, hit = -1;
-            for (let k = 0; k < 450 && hit < 0; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) break; if (vy < 0 && y - me.gOff <= hAt(u)) hit = u; }
-            if (hit >= 0) { aim += clamp(slopeAt(hit) - P.lp[me.airSec], -0.35, 0.35); me.la = hit; }
+            let y = by, u = me.at, vy = me.vy;
+            for (let k = 0; k < 450; k++) { vy += ay * h; y += vy * h; u += me.va * h; if (u > N - 3) return null; if (vy < 0 && y - me.gOff <= hAt(u)) return [u, (k + 1) * h]; }
+            return null;
+          };
+          if (P.lp && typeof P.lp[me.airSec] === 'number') {
+            const f = flyOn();
+            if (f) { aim += clamp(slopeAt(f[0]) - P.lp[me.airSec], -0.35, 0.35); me.la = f[0]; }
           }
           lean = clamp(2.2 * (s[4] - aim) + 0.35 * dp, -1, 1);
           me.aim = aim;
@@ -1297,8 +1303,8 @@
           const sa = P.sa ? P.sa[me.airSec] || 0 : 0;
           if (sa && !(mv && mv.spin && Math.abs(s[48]) < 340)) st = clamp(sa * (2.2 * e1 + 0.6 * e2), -1, 1);
           if (mv && (mv.spin || mv.flip || mv.wt)) {
-            // (free: the bike's angle left alone while a trick turns it)
-            let free = false;
+            // (free: the bike's angle left alone while a trick turns it; pull: the lean that helps a backflip round)
+            let free = false, pull = 0;
             if (mv.spin) {
               // hold the whip until the bike is hr × 100° round, and leave its angle alone while it turns
               const a = Math.abs(s[48]);
@@ -1306,10 +1312,18 @@
               if (!me.let) whip = mv.spin;
               if (a > 5 && a < 320) free = true;
             }
-            // a backflip: let it go over, then bring it to the landing angle
-            if (mv.flip && me.rot > -0.6 && me.rot < 5) free = true;
+            // a backflip: let it go over, then bring it to the landing angle. On a long flight it may go round too
+            // slowly to be over before it comes down (off the lip of a long drop it turned some 40° a second and came
+            // down at 340°, and fell): there it is pulled round, as hard as it needs to reach 5 rad (where the angle
+            // is taken back) a second before it lands. Only on flights of over 3 s: the backflips learned on shorter
+            // jumps go round as they did.
+            if (mv.flip && me.rot > -0.6 && me.rot < 5) {
+              free = true;
+              const f = s[12] > 0.3 ? flyOn() : null, tl = f && s[12] + f[1] > 3 ? f[1] - 1 : 0;
+              if (tl > 0) { const need = (5 - me.rot) / tl; if (dp < need) pull = clamp(-0.8 * (need - dp), -1, 0); }
+            }
             if (mv.wt && s[12] < P.hr[me.airSec] * 0.25) whip = mv.wt;
-            if (free) lean = 0;
+            if (free) lean = pull;
           } else if (mv && !mv.man) {
             const gnd = Math.max(H[look(3)], H[look(8)]);
             if (s[12] > 0.1 && by - gnd > P.hr[me.airSec]) { btn = mv.b || 0; if (mv.ln !== undefined) lean = mv.ln; if (mv.st) st = mv.st; if (mv.w) whip = mv.w; }
@@ -3858,6 +3872,12 @@ onmessage=async e=>{const m=e.data;
       }
       // a ride to the end of the line without a fall (it stopped there, parked): shared, if it is time (see shareGood)
       if (park && !byPlayer && shareOn && !sharing && Date.now() - shareAt() >= SHARE_EVERY) shareGood(d, m);
+      // the last real rides, kept for finding out afterwards why one ended as it did
+      try {
+        const past = JSON.parse(keep.getItem(DRIVES) || '[]');
+        past.push({ at: Date.now(), id: d.route && d.route.start ? d.route.start.id : null, why, m, expect: e, legs: d.legs, tricks: d.tricks, game: d.game || 0, lands: d.lands || [], coast: d.coastAt === undefined ? null : d.coastAt });
+        keep.setItem(DRIVES, JSON.stringify(past.slice(-10)));
+      } catch { /* the rides are only notes */ }
       if (looping) {
         say(tx(`${d.who} lái thật: ${why} sau ${m} m. Lái lại từ đầu đường sau 3 giây với những gì mới học được (bấm “Dừng AI lái” để dừng hẳn).`, `${d.who} rode for real: ${why} after ${m} m. Riding again from the start of the line in 3 seconds with what it has just learned (press “Stop AI riding” to stop for good).`));
         const rideAgain = () => {
@@ -4360,6 +4380,8 @@ onmessage=async e=>{const m=e.data;
             if ((s[56] | 0) & 0x1f0 || Math.abs(s[44] || 0) >= 270 || Math.abs(s[43] || 0) >= 300 || Math.abs(s[41] || 0) >= 45) d.tricks++;
             // the landing as the game grades it, and its points as the game counts them
             const gr = s[15] | 0;
+            // (where it came down: metres along the line, metres off it, seconds in the air, the game's grade)
+            (d.lands = d.lands || []).push([rider.idx, +(rider.off || 0).toFixed(1), +(s[14] || 0).toFixed(2), gr]);
             if (gr > 0) {
               const gp = gamePoints(gr, s[44], s[43], s[41], d.streak || 0);
               d.streak = gp.streak; d.game = (d.game || 0) + gp.p; d.top = Math.max(d.top || 1, gp.m);
@@ -4393,6 +4415,7 @@ onmessage=async e=>{const m=e.data;
             // no way on taken: come down from the last jump and brake to a stop, as a rider does who sees no way on
             const n = R.length, k = Math.max(0, n - 6);
             coast = { h: Math.atan2(R.Z[n - 1] - R.Z[k], R.X[n - 1] - R.X[k]), at: rider.idx, t0: t, halt: false };
+            d.coastAt = rider.idx;
           }
           if (coast) {
             // (the same controls as the simulation's past the end, tailInp)
@@ -4616,7 +4639,7 @@ onmessage=async e=>{const m=e.data;
     // (the game bakes the run and its ground and uploads it, up to a minute or two) and closes the replay (P). Then it
     // invites everyone in the game's chat to the start of the line, the link in the message, as the game's own chat
     // invite sends it ({t: 'chat', text, invite}). The button in the details turns it off and on.
-    const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3;
+    const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3, DRIVES = 'trailsai.drives';
     let shareOn = (() => { try { return keep.getItem(SHARE) !== '0'; } catch { return true; } })(), sharing = false;
     const shareAt = () => +(keep.getItem(SHARE_AT) || 0) || 0;
     const press = (code, key) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true })); };
