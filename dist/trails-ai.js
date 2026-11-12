@@ -992,7 +992,7 @@ if (!air) {
 const va = vAt(P, sec, idx), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
 if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
 if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
-if (P.pu && P.pu[sec] > 0 && R.KIND[idx] !== 'start') {
+if (P.pu && P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || P.ph)) {
 if (P.pz && R.PZ) { const pk = P.pk || PUMP0, u = me.at; if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec]; }
 else if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
 }

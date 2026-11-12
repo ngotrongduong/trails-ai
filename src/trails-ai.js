@@ -1260,7 +1260,7 @@
           // zones R.PZ: from pk[0] m past where one starts to pk[1] m past where it ends); older plans where the ground
           // 1 to 3 m ahead falls away. Not on the start hill: there the real game throws you off where the simulation
           // does not.
-          if (P.pu && P.pu[sec] > 0 && R.KIND[idx] !== 'start') {
+          if (P.pu && P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || P.ph)) {
             if (P.pz && R.PZ) { const pk = P.pk || PUMP0, u = me.at; if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec]; }
             else if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
           }
