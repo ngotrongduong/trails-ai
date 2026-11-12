@@ -1,0 +1,271 @@
+  // ---------------------------------------------------------------- the line
+  // A line is the way from a start along the pieces the game has loaded: points a metre apart (X, Z), the kind of
+  // piece under each (KIND: start, takeoff, landing, air over a gap, pump, flat, berm) and half its width (W), with
+  // the pieces near it that the physics needs.
+  const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
+  const assets = () => {
+    const names = performance.getEntriesByType('resource').map(e => e.name);
+    const pick = re => names.find(n => re.test(n));
+    return {
+      wasm: pick(/trails-[^/]+\.wasm/),
+      land: [pick(/red-rock-study[^/]*\.bin/), pick(/grinnell-southeast-shoulder[^/]*\.bin/),
+        pick(/connected-assembly-residual[^/]*\.bin/), pick(/connected-assembly-influence[^/]*\.bin/)],
+    };
+  };
+  // the game's physics on the main thread, with no terrain: only for laying out pieces
+  let eng = null;
+  async function engine() {
+    if (eng) return eng;
+    const a = assets();
+    if (!a.wasm) throw new Error(tx('Không thấy file vật lý của game. Hãy tải lại trang game.', "The game's physics file was not found. Reload the game's page."));
+    const { instance } = await WAI(await (await fetch(a.wasm)).arrayBuffer(), {});
+    const l = instance.exports, g = l.trails_game_new(1);
+    const txt = n => { const b = l.trails_buf(g); return new TextDecoder().decode(new Uint8Array(l.memory.buffer, b, n)); };
+    const K = JSON.parse(txt(l.trails_kinds_json(g))), FF = l.trails_world_sizes() & 65535;
+    const wp = l.trails_world_flat(g, 1), fmt = new Float64Array(l.memory.buffer, wp, 1)[0];
+    const kidx = Object.fromEntries(K.map((k, i) => [k.key, i]));
+    const layout = f => {
+      const arr = [fmt, 2, 0, 0, 0], ki = kidx[f.kind];
+      const p = K[ki].params.map(q => { const v = f.params && f.params[q.key]; return Math.min(q.max, Math.max(q.min, v !== undefined ? v : q.default)); });
+      arr.push(1, ki, f.x, f.z, f.heading);
+      for (let h = 0; h < FF - 5; h++) arr.push(h < p.length ? p[h] : 0);
+      const h = arr.length * 8 + 8, c = l.trails_alloc(h), d = c + 7 & -8;
+      new Float64Array(l.memory.buffer, d, arr.length).set(arr);
+      const n = l.trails_layout_alone(g, d, arr.length);
+      l.trails_dealloc(c, h);
+      return JSON.parse(txt(n));
+    };
+    eng = { K, kidx, layout };
+    return eng;
+  }
+  // a piece as laid out on its own (kept: tracing a line lays out hundreds)
+  const layouts = new WeakMap();
+  function layOf(e, p) {
+    if (!layouts.has(p)) { let lay = null; try { lay = e.layout(p); } catch { lay = null; } layouts.set(p, lay); }
+    return layouts.get(p);
+  }
+  // points [x, z, kind, half width] along a line, from point k0 on, as one point every metre
+  function resample(raw, k0) {
+    const X = [], Z = [], KIND = [], W = [];
+    let px = raw[k0][0], pz = raw[k0][1];
+    X.push(px); Z.push(pz); KIND.push(raw[k0][2]); W.push(raw[k0][3] || 0);
+    for (let i = k0 + 1; i < raw.length; i++) {
+      const [qx, qz, kd, hw] = raw[i];
+      let d = Math.hypot(qx - px, qz - pz);
+      if (d < 1e-6) continue;
+      while (d >= 1) {
+        px += (qx - px) / d; pz += (qz - pz) / d;
+        X.push(px); Z.push(pz); KIND.push(kd); W.push(hw || 0);
+        d = Math.hypot(qx - px, qz - pz);
+      }
+    }
+    return { X, Z, KIND, W };
+  }
+  // The line from start (x, z, heading) along the pieces the game has loaded; back: ridden the wrong way round, from
+  // start back along the pieces that lead to it (a landing then ridden up as a takeoff, a takeoff down as a landing).
+  async function buildRoute(start, back) {
+    const e = await engine();
+    const near = allPieces().filter(p => e.kidx[p.kind] !== undefined && Math.hypot(p.x - start.x, p.z - start.z) < 2500);
+    const segs = [];
+    for (const p of near) {
+      if (!PHYS_KINDS.includes(p.kind)) continue;
+      const lay = layOf(e, p);
+      if (!lay || !lay.path || lay.path.length < 2) continue;
+      const ro = lay.runOut || lay.exit, li = lay.leadIn || [p.x, p.z, p.heading];
+      segs.push({ p, pts: lay.path.map(q => [q[1], q[2]]), end: [ro[0], ro[1], ro[2]], lead: [li[0], li[1], li[2]] });
+    }
+    // first piece: the one the start sits on
+    let cur = null, best = 6;
+    for (const s of segs) {
+      for (let i = 1; i < s.pts.length; i++) {
+        const [ax, az] = s.pts[i - 1], [bx, bz] = s.pts[i];
+        const dx = bx - ax, dz = bz - az, L2 = dx * dx + dz * dz || 1;
+        const t = clamp(((start.x - ax) * dx + (start.z - az) * dz) / L2, 0, 1);
+        const d = Math.hypot(start.x - (ax + dx * t), start.z - (az + dz * t));
+        const hd = Math.abs(wrapA(Math.atan2(dz, dx) + (back ? Math.PI : 0) - start.heading));
+        if (d + hd * 2 < best) { best = d + hd * 2; cur = s; }
+      }
+    }
+    if (!cur) return null;
+    const chain = [], used = new Set(), gapAfter = [];
+    while (cur && chain.length < 600) {
+      chain.push(cur); used.add(cur);
+      let nxt = null, score = Infinity;
+      for (const s of segs) {
+        if (used.has(s)) continue;
+        // (back: the piece s whose end leads onto this one, as forward this one would go on to s)
+        const a = back ? s : cur, b = back ? cur : s;
+        const [ex, ez, eh] = a.end, jump = a.p.kind === 'takeoff', [lx, lz, lh] = b.lead;
+        const dx = lx - ex, dz = lz - ez, f = dx * Math.cos(eh) + dz * Math.sin(eh), lat = -dx * Math.sin(eh) + dz * Math.cos(eh), dh = Math.abs(wrapA(lh - eh));
+        // (from a takeoff a landing up to 250 m on still joins, a big jump down a long hill flies that far; anything
+        // else only up to 40 m, and nearer pieces always win; a berm's way in and out lie over the flats beside it)
+        const maxF = jump ? (b.p.kind === 'landing' ? 250 : 40) : 3.5;
+        if (f < -3.5 || f > maxF) continue;
+        if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
+        if (dh > (jump ? 0.75 : 0.65)) continue;
+        const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
+        if (sc < score) { score = sc; nxt = s; }
+      }
+      // A takeoff laid on top of a flat, part way along it: the bike rides up it there, whatever lies past it
+      // (cur.cut: how far along the flat its foot is).
+      if (!back && cur.p.kind !== 'takeoff') {
+        let along = Infinity, on = null;
+        for (const s of segs) {
+          if (used.has(s) || s.p.kind !== 'takeoff') continue;
+          const [lx, lz, lh] = s.lead;
+          let run = 0;
+          for (let i = 1; i < cur.pts.length; i++) {
+            const [ax, az] = cur.pts[i - 1], [bx, bz] = cur.pts[i];
+            const dx = bx - ax, dz = bz - az, L = Math.hypot(dx, dz) || 1;
+            const t = ((lx - ax) * dx + (lz - az) * dz) / L, off = Math.abs((lz - az) * dx - (lx - ax) * dz) / L;
+            if (t >= 0 && t <= L && off < 1.5 && Math.abs(wrapA(lh - Math.atan2(dz, dx))) < 0.65 && run + t > 1 && run + t < along) { along = run + t; on = s; }
+            run += L;
+          }
+        }
+        if (on) { cur.cut = along; nxt = on; }
+      }
+      gapAfter.push(nxt && (back ? nxt : cur).p.kind === 'takeoff' ? 1 : 0);
+      cur = nxt;
+    }
+    const raw = [], flip = { takeoff: 'landing', landing: 'takeoff' };
+    let hw = 0, n0 = 0;
+    const add = (x, z, kd) => raw.push([x, z, kd, hw]);
+    chain.forEach((s, ci) => {
+      hw = s.p.params && s.p.params.width > 0 ? s.p.params.width / 2 : 0;
+      if (back) {
+        const kd = flip[s.p.kind] || s.p.kind;
+        add(s.end[0], s.end[1], ci && gapAfter[ci - 1] ? 'air' : kd);
+        for (let i = s.pts.length - 1; i >= 0; i--) add(s.pts[i][0], s.pts[i][1], kd);
+      } else if (s.cut !== undefined) {
+        let run = 0;
+        add(s.pts[0][0], s.pts[0][1], s.p.kind);
+        for (let i = 1; i < s.pts.length; i++) {
+          const [ax, az] = s.pts[i - 1], [bx, bz] = s.pts[i], L = Math.hypot(bx - ax, bz - az) || 1;
+          if (run + L >= s.cut) { const t = (s.cut - run) / L; add(ax + (bx - ax) * t, az + (bz - az) * t, s.p.kind); break; }
+          add(bx, bz, s.p.kind); run += L;
+        }
+      } else {
+        for (const q of s.pts) add(q[0], q[1], s.p.kind);
+        add(s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind);
+      }
+      if (!ci) n0 = raw.length;
+    });
+    // the line starts on the first piece, at the point nearest the start
+    let k0 = 0, d0 = Infinity;
+    raw.forEach((q, i) => { const d = Math.hypot(q[0] - start.x, q[1] - start.z); if (i < n0 && d < d0) { d0 = d; k0 = i; } });
+    const { X, Z, KIND, W } = resample(raw, k0);
+    if (X.length < 20) return null;
+    // the pieces the physics needs: everything close to the line
+    const cell = 32, grid = new Map();
+    for (let i = 0; i < X.length; i += 4) {
+      const key = Math.floor(X[i] / cell) + ',' + Math.floor(Z[i] / cell);
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(i);
+    }
+    const nearLine = (x, z, r) => {
+      const cx = Math.floor(x / cell), cz = Math.floor(z / cell), n = Math.ceil(r / cell);
+      for (let a = -n; a <= n; a++) for (let b = -n; b <= n; b++) for (const i of grid.get((cx + a) + ',' + (cz + b)) || []) if (Math.hypot(X[i] - x, Z[i] - z) < r) return true;
+      return false;
+    };
+    const pieces = near.filter(p => nearLine(p.x, p.z, p.kind === 'shape' || p.kind === 'ground' ? 70 : 35));
+    const kinds = {};
+    chain.forEach(s => { kinds[s.p.kind] = (kinds[s.p.kind] || 0) + 1; });
+    return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds };
+  }
+  // Half the width of the piece under each point of a line kept from before lines carried it: the widest piece whose
+  // way passes within 2 m of the point, else 0.
+  async function widthsOf(route) {
+    const e = await engine(), segs = [];
+    for (const p of route.pieces) {
+      if (!PHYS_KINDS.includes(p.kind) || !(p.params && p.params.width > 0)) continue;
+      const lay = layOf(e, p);
+      if (lay && lay.path && lay.path.length > 1) segs.push({ hw: p.params.width / 2, pts: lay.path.map(q => [q[1], q[2]]) });
+    }
+    return Array.from(route.X, (x, i) => {
+      const z = route.Z[i];
+      let w = 0;
+      for (const s of segs) {
+        if (s.hw <= w) continue;
+        for (let k = 1; k < s.pts.length; k++) {
+          const [ax, az] = s.pts[k - 1], [bx, bz] = s.pts[k], dx = bx - ax, dz = bz - az;
+          const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+          if (Math.hypot(x - ax - dx * t, z - az - dz * t) < 2) { w = s.hw; break; }
+        }
+      }
+      return w;
+    });
+  }
+  // A line is out of date when the game now holds the chunk one of its pieces sits in, and the piece is gone or moved.
+  function lineStale(line) {
+    for (const p of line.pieces) {
+      const got = cap.chunks.get(Math.floor(p.x / 256) + ',' + Math.floor(p.z / 256));
+      if (got && !got.some(q => q.kind === p.kind && Math.abs(q.x - p.x) < 0.05 && Math.abs(q.z - p.z) < 0.05)) return true;
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------------- which line the bike is at
+  // Where the bike is now and the way it faces (null before the game has a bike).
+  function bikeNow() {
+    if (!live.ex || !live.g) return null;
+    const s = liveState();
+    return Number.isFinite(s[0]) && Number.isFinite(s[2]) ? { x: s[0], z: s[2], heading: s[3], v: Math.abs(s[8]), air: s[12] > 0, down: s[13] > 0 } : null;
+  }
+  // The trail under the bike, the way it faces: of the pieces the game has loaded, the point nearest the bike (every
+  // 2 m along each piece, within 20 m), ridden the piece's way or the wrong way round, whichever is nearer its heading.
+  // The line starts there, or up to HERE_RUN metres back along it as far as no jump is in the way, so the bike has
+  // speed by where it stood (from a stop it fell short of a jump 9 m on); back on a start hill, on its deck, where the
+  // game's own start of it is. Its id: 'here-' and where it starts.
+  const HERE_RUN = 40;
+  async function lineHere(me) {
+    const e = await engine();
+    let c = null;
+    for (const p of allPieces()) {
+      if (!PHYS_KINDS.includes(p.kind) || e.kidx[p.kind] === undefined || Math.hypot(p.x - me.x, p.z - me.z) > 80) continue;
+      const lay = layOf(e, p);
+      if (!lay || !lay.path || lay.path.length < 2) continue;
+      for (let i = 1; i < lay.path.length; i++) {
+        const ax = lay.path[i - 1][1], az = lay.path[i - 1][2], bx = lay.path[i][1], bz = lay.path[i][2];
+        const h = Math.atan2(bz - az, bx - ax), n = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 2));
+        for (let q = 0; q <= n; q++) {
+          const x = ax + (bx - ax) * q / n, z = az + (bz - az) * q / n, d = Math.hypot(x - me.x, z - me.z);
+          if (d > 20) continue;
+          for (const back of [false, true]) {
+            const hh = wrapA(h + (back ? Math.PI : 0)), score = d + 8 * Math.abs(wrapA(hh - me.heading));
+            if (!c || score < c.score) c = { x, z, h: hh, back, score };
+          }
+        }
+      }
+    }
+    if (!c) return null;
+    let x = c.x, z = c.z, h = c.h, back = c.back;
+    const rb = await buildRoute({ id: 'back', x: c.x, z: c.z, heading: wrapA(c.h + Math.PI) }, !c.back);
+    if (rb) {
+      let k = 0;
+      while (k + 1 < Math.min(rb.length, HERE_RUN + 1) && !['takeoff', 'landing', 'air', 'start'].includes(rb.KIND[k + 1])) k++;
+      const gate = rb.KIND[k + 1] === 'start' && cap.starts
+        .filter(o => Math.hypot(o.x - rb.X[k + 1], o.z - rb.Z[k + 1]) < 25 && Math.abs(wrapA(o.heading - c.h)) < 0.6)
+        .sort((a, b) => Math.hypot(a.x - c.x, a.z - c.z) - Math.hypot(b.x - c.x, b.z - c.z))[0];
+      if (gate) { x = gate.x; z = gate.z; h = gate.heading; back = false; }
+      else if (k >= 3) { x = rb.X[k]; z = rb.Z[k]; h = Math.atan2(rb.Z[k - 1] - rb.Z[k], rb.X[k - 1] - rb.X[k]); }
+    }
+    const s = { id: gateId(x, z, h) || `here-${Math.round(x)}_${Math.round(z)}_${back ? 'b' : 'f'}`, x, z, heading: h };
+    const r = await buildRoute(s, back);
+    if (r) r.back = back;
+    return r && r.length >= 25 ? r : null;
+  }
+  // the game's start a line from (x, z) going h starts at, if it is one: its id
+  const gateId = (x, z, h) => { const o = cap.starts.find(o => Math.hypot(o.x - x, o.z - z) < 1 && Math.abs(wrapA(o.heading - h)) < 0.1); return o ? o.id : null; };
+  // The line the bike is at (me: bikeNow): a line of the library whose start is within START_NEAR m of the bike and
+  // faces its way (the nearest), else one of the game's starts there, else the trail under the bike (lineHere).
+  // Gives back { id, route (null for one of the library: its memory has it), how }.
+  const START_NEAR = 15;
+  async function lineAt(me, library) {
+    const close = (s, r) => Math.hypot(s.x - me.x, s.z - me.z) < r && Math.abs(wrapA(s.heading - me.heading)) < 1.2;
+    const known = library.filter(o => close(o.start, START_NEAR)).sort((a, b) => Math.hypot(a.start.x - me.x, a.start.z - me.z) - Math.hypot(b.start.x - me.x, b.start.z - me.z))[0];
+    if (known) return { id: known.id, route: null, how: 'library' };
+    const gate = cap.starts.filter(s => close(s, START_NEAR)).sort((a, b) => Math.hypot(a.x - me.x, a.z - me.z) - Math.hypot(b.x - me.x, b.z - me.z))[0];
+    if (gate) { const r = await buildRoute(gate); if (r) return { id: gate.id, route: r, how: 'start' }; }
+    const r = await lineHere(me);
+    return r ? { id: r.start.id, route: r, how: 'here' } : null;
+  }

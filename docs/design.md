@@ -1,324 +1,131 @@
-# Trails AI v3: design
+# Trails AI v4: design
 
-This is the plan for the rewrite of the AI's core (learning and driving). What already
-matches the game exactly is kept: capturing the world and the live engine, building lines
-from the game's pieces, reading the Training drills, the rider's low-level controller, and
-the judges (the game's grades, its points with the streak, the drills' goals).
+One aim: learn to ride **one fixed line** for as many points as possible, on the player's own computer, and ride it in
+the game. Everything else the earlier versions did is gone:
+- the shared neural brain;
+- training on GitHub;
+- Training drills, challenges and tours joined from several lines;
+- finding other routes;
+- learning from the player's own riding.
 
-## What v2 did, and why it stalls
+## The parts
 
-- A line's plan was learned by riding the **whole line** for every try, from the start:
-  a change at metre 280 cost a ride of 280 m to see. Most of the time went into riding
-  parts that did not change.
-- Which part to change was chosen by a scheduler of seven modes (ride, other, fix, land,
-  trick, pump, manual) with many hand-set rules and counters. Every new problem added a
-  rule (stuck counters, follow-ups for 40 rounds, records, failure counts...).
-- One plan was kept: the single best ride. A choice that is worse now but leads somewhere
-  better later (slower here, so the next jump is reachable) was thrown away at once.
+| file | what it does |
+|---|---|
+| `src/00-head.js` | the browser memory (IndexedDB, mirrored between tabs), the language, small helpers |
+| `src/10-hook.js` | catches the game's physics (`WebAssembly.instantiate`) to get its exports and state. Replaces the player's inputs with the AI's while it drives. Captures the map chunks the game loads. Notices the player's own key presses. |
+| `src/20-line.js` | builds the route from the map pieces at the bike: a point a metre along it, each with the ground's kind and width. Gives the route's id. Says whether the bike is at a known line's start. |
+| `src/sim/rider.js` | the rider: from a plan and the bike's state it gives the controls. The same code runs in the page and in every worker, so a plan rides the same in both. Also counts a landing's points (`landPoints`). |
+| `src/sim/worker.js` | one simulation: the game's own WebAssembly, the line's pieces, rides of a plan, saved states and the try rolls of the search |
+| `src/30-pool.js` | the workers (cores − 2, 2 to 8) |
+| `src/40-learn.js` | the learner (beam search over the plan) and the trick book |
+| `src/50-library.js` | one memory per line, the library index, migration of the old AI's memories |
+| `src/60-drive.js` | the session: open a line, learn it, ride it in the game, switch lines, update the AI |
+| `src/70-share.js` | share a clean finished ride every 5 minutes: video cuts, 720p video, title, link, chat invite |
+| `src/80-ui.js` | the panel |
 
-## The physics can be saved and restored
+`tools/build.js` joins `src/NN-*.js` in order. `sim/rider.js` goes in once after `20-line.js` for the page. A second copy goes, together with `sim/worker.js`, into the workers' source (the `/*@WORKER_SRC@*/''` place in `30-pool.js`). The build writes `dist/trails-ai.js`, `docs/index.html` and the extension zip.
 
-The game's physics is WebAssembly with a single linear memory. Measured on a real line
-with the game's terrain loaded (46 MB of memory): a ride of 445 steps changes only 11
-pages of 4 KB, and the memory does not grow. Copying those pages back puts the game in
-exactly the same state: a ride restored this way and ridden on with the same inputs ends
-bit for bit where the first one did. So a state is a snapshot of a few dozen KB, taken and
-restored in microseconds.
+## The plan
 
-A first version kept a fixed list of the pages rides change, found by comparing the
-memory every 300 steps of a few rides. It was not enough: a list inside the game that
-grows (a vector reallocated by the allocator) moves into memory no calibration ride had
-touched, and a state put back then left the allocator's own records out of step with
-the memory around them. On one line the game's code crashed inside the allocator; on
-another, two rides out of a few hundred ended differently from the start.
+The line is cut into sections: one per jump (run-up, takeoff and lip), and 40 m pieces elsewhere. A plan holds, per
+section:
 
-So each worker keeps its memory as it is right after loading the line (the **base**;
-pages of zeros are not stored). A state is every page that differs from the base, so
-putting one back makes the whole memory exactly as it was. The pages rides write (KP)
-are learned on the way: after each lot of tries the pages outside KP are compared with
-the base (about 18 ms for 48 MB); when a ride wrote there, those pages join KP and the
-lot is ridden again. A try in which the game's code fails counts as a fall, and its lot
-is ridden again too. Saved states move between workers: the base is the same in every
-worker, which the hash of it checks, and a state taken in one worker and ridden on in
-another is compared with the same ride straight through.
+- `v` the speed to hold (`vs`: one per equal part of the section). 17.5 and up means no limit: pedal while it helps, never brake.
+- `pt` the bike's angle to hold in the air.
+- `pl` pull up that many metres before the lip.
+- `pu` how hard to pump, `pc` how to pump: through the dips the game's Training marks (0), or wherever the ground 1 to 3 m ahead falls away (1, as the old AI did). `ph` pump down the start hill too.
+- `lg` the rider's weight on the ground, `sa` steering in the air.
+- `tk` the trick program of a jump:
+  - `f` backflip;
+  - `s` spin left/right, let go at `sr` × 100°;
+  - `w` whip, let go at `wt` × 0.25 s;
+  - `q` button tricks one after another, `[code, n, gap]`:
+    - T tailwhip, B barspin: `n` turns;
+    - L table, G T-bog, X X-up: `n` tenths of a second held;
+  - `m` seconds of air kept before landing;
+  - `lf` throw to the left;
+  - `h` the first button trick's buttons held up the takeoff.
 
-A section's state is saved just before the step that first rides into it (the rider is asked where that step will
-put the bike): the rider works out its controls every other step, and a state saved one step later already held
-controls worked out from the old plan's values for the new section, so a try that changed them rode its first steps
-the old way. The best ride of a sweep then ended otherwise from the start in one or two sweeps of every ten to
-twenty; since, in none.
+A button trick starts only once the one before has been caught (frame, bars and lay back within 0.06 rad), after its
+gap, and only if the bike's flight, flown on from how it flies now, leaves the trick's time plus `m` before landing
+(measured: a tailwhip turn 0.6 s, a barspin 0.37 s, a held trick comes back in about 0.35 s). A trick pressed while
+another still turns is ignored by the game, so this is what lets one jump take several tricks and the same trick
+several times.
 
-Measured: a state is 13 to 40 pages (50 to 160 KB); rides from saved states and from the
-start end the same in every check since; a worker rides about 25 tries a second on a
-line with few pieces around it, and about 6 times fewer where hundreds of pieces are
-close to the line (the game's physics is slower there, not the saved states).
+## Points
 
-## Learning: a search over sections with saved states
+A landing counts once the bike has been 0.5 s on the ground without a crash. Its worth is the game's Train points and skill points:
 
-The line is cut into sections as before (one per jump, else every 40 m). A plan holds the
-same values per section (speed, or speeds by part, angle in the air, pull, pump, trick and
-its timing), so v2 lessons still load.
+- **Train:** base 160 buttery, 140 clean, 100 sketchy, 50 flat or cased (those two end the streak). Add 300 for a backflip, 100 per half turn from a 360 up, 100 for a whip. All of it × the streak, up to 5.
+- **Skill points**, each kind once a landing: whip 2, 360 4, flip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, +10 for a 360 table.
 
-There is no speed limit: a planned speed at the top of the range (18, or 17.5 and up,
-`VFREE`) means pedal while it helps and never brake, however fast the bike goes (40 m/s and
-more down a big hill). The brain's speed output at its top means the same. Every section
-gets one try with no limit among its first tries, and a quarter of the speeds drawn anew
-are no limit. A route joins a takeoff to a landing up to 250 m on (a big jump down a long
-hill), anything else to at most 40 m, and nearer pieces always win. A takeoff laid on top of
-a flat, part way along it (its foot within 1.5 m of the flat's middle, facing the same way),
-is where the route leaves that flat: the bike rides up it whatever lies past it. A route carries half the
-width of the piece under each metre (`W`): a ride is off the line when the bike is more than
-7 m from the middle and past the edge of a wider trail (a 20 m wide run-out lets it be 11 m
-off after a 100 m jump). For 40 m after a flight of over 2 s the limit is 15 m (18 m when the
-AI rides in the game, 12 m elsewhere there): a 100 m jump comes down a few metres to one side
-of a landing at most 8 m wide, and the bike steers back onto the line.
+The AI's points for a landing: Train + 25 × skill points + 15 for every turn a trick went round more than once.
 
-The search goes along the line section by section, keeping a **beam** of the best few
-partial rides. Each one is a saved state at the start of section k with the plan so far
-and its score so far (the game's points with the streak, the drill's progress).
+Rides are compared in this order:
+1. Finished beats not finished.
+2. Then the further.
+3. Then the points (each cased landing costs 200 more).
+4. Then the faster.
 
-For each partial ride, the values for section k are tried many ways at once, in two
-rounds (a cross entropy search): first the plan as it is, changed copies of it, and
-tries that draw the section anew over the whole range (any speed from 3 to 18 m/s, often
-by parts; any angle in the air; a pull or none), plus, on a jump, a grid of take-off
-speeds by angles in the air, the values of similar jumps of other lines, and the tricks
-chosen per airtime (the trick book); then values taken from the best fifth of the first
-round and changed as much as those differ from each other. Tries drawn anew are half of
-the tries where the best ride falls, a third once the search has backed up past a
-section, a tenth elsewhere (one jump needed 0.94 rad more nose down than the angle worked
-out for it, which small changes never reach). A try rides on from the saved state until
-the bike has been on the ground 0.75 s in the next section (a jump's landing and how it
-rides away decide whether the jump was right), so it costs about a section, not the line.
+## The search
 
-Tries are compared at that point: first the drill's goal, then whether the bike is still
-riding, then (riding) the game's points so far, or (fallen) how far it got. In these
-points a cased landing counts 200 less than the game's 50 for it (the game only ends the
-streak): without that, a jump the search found no speed for was cased, the bike riding
-slow over the flat of the table, and kept so. On Trảng Sương 29, two sweeps after the
-change, its fifth jump went from cased to buttery and the line from 5690 to 8100 points.
+The worker can save the whole physics state (the WebAssembly memory pages a ride changes, checked bit for bit against a
+ride from the start) at a section's start and ride on from it in any worker.
 
-The best tries become the beam at section k+1, kept different from each other (a fast and
-a slow way in to a jump are both kept). When no try of any partial ride gets through
-section k, the search **backs up**: it goes back one, two, up to six sections and widens
-the tries there (above all the speed), as a rider who keeps failing a jump changes the
-way they come at it.
+One sweep goes along the line:
 
-A sweep reaches the end of the line with a full plan (or gives up after 12 backs; the
-ride that got furthest is then kept, if it beats the plan held). Every ride that ended
-during the sweep (fell, or got to the end) is a full ride from the start; the best of
-them is ridden once more from the start, and kept if it beats the plan held so far,
-compared as the game would (the drill's goal, how far, the game's points, then the
-speed). The plan held always rides through the beam unchanged, so a sweep never loses
-it. Further sweeps start from it, as wide again after an improvement, and 1.35 times
-wider (up to 2.5) after each sweep that found nothing better.
+1. **Beam.** At section `k` there are up to 6 partial rides, each a saved state and the plan that got there.
+2. **First round.** From each partial ride, about 72 tries in all ride section `k`:
+   - the plan as it is;
+   - no speed limit;
+   - the other pump way;
+   - pumping down the start hill;
+   - on a jump, a grid of 5 speeds × 3 angles, and no tricks;
+   - changed copies of the plan (part drawn anew, more of them at the furthest place reached).
+   Each try rides until the bike has been on the ground 0.75 s in section `k + 1`.
+3. **Second round.** Values are taken from the best fifth of the first round and changed by as much as those differ from each other.
+4. **Next beam.** The best tries, kept different in speed, become the beam at `k + 1`. The plan held so far always stays in it, so a sweep never loses it.
+5. **Backing up.** If no try gets through, the sweep backs up 1, 2, 4, then 6 sections (12 times at most) and tries those wider.
+6. **Check.** The best full ride is ridden again from the start and kept if it beats the held plan. A sweep that finds nothing makes the next one wider.
 
-This replaces all the v2 modes: the first sweep gets through the line, the next ones
-make the landings and tricks better, and pumping and manuals are values of the sections
-like the rest.
+**Trick book.** Every trick tried off a jump writes a row `[air seconds, trick, landed]` (the last 6000 rows, kept per
+unlock mask). A jump's tricks are drawn like a multi-armed bandit: each trick's worth × how often it was landed with about that much air, plus a bonus for tricks tried little. Only tricks the account has unlocked are drawn, as many as the air takes.
 
-### Combos and steering in the air
+**Fragile sections.** A section is marked fragile when the real ride, on the same plan, did worse than the simulation there:
+- it fell where the simulation did not, or
+- it came down flat or cased where the simulation landed sketchy or better.
 
-Measured in the game's physics on the longest jumps of the shared lessons (1.8 to 2.3 s
-in the air), with the plan's controls changed only in that flight:
+There every try is also ridden 0.3 m/s faster, 0.3 m/s slower and with its tricks 0.06 s later. A try is judged by its worst ride.
 
-- The game counts two tricks of one jump: a backflip with a whip (on Trảng Sương 29's
-  2.1 s jump, landed clean for 1620 points, the backflip alone 1200) and a backflip with
-  a 360 (counted, up to 1800, but every such try fell soon after it landed). A 360 with a
-  whip cannot be done: both are the whip control, held through the turn for a 360.
-- So there are four combo moves (22 to 25, after the manual, so the ids of older moves keep
-  their meaning): a backflip with a whip either way, a backflip with a 360 either way. The
-  rider does each part as the single trick does it (the pedals held up the takeoff for the
-  backflip, the whip held up it for the 360, the whip let go hr × 0.25 s after the lip),
-  and leaves the bike's angle alone while either turns it. The trick book weighs a combo
-  as both its tricks and counts it as landed before only when both were; it draws no move
-  of a trick the account has not unlocked. The Trick line drill counts one trick a jump,
-  so only challenges of several tricks try combos.
-- Steering in the air turns the bike and the way it flies alike: about 30° a second at
-  full lock, linear in the input (0.5 s at half lock: 7.2°; at full: 14.9°; 1 s: 30.7°),
-  the same at 5 m/s as at 11. The rider used to let go of the bars in the air. A plan now
-  holds sa per section (0 to 1): in the air off that jump it steers toward the line ahead
-  as on the ground, times sa (not while a 360 goes round). The search tries 0, 0.15, 0.3,
-  0.5, 0.8 and 1 on jumps. Steering every jump of a lesson learned without it set the bike
-  down nearer the line but made the lesson fall early, so it is learned jump by jump like
-  the rest. Plans without sa ride exactly as before.
-- The shared brain (version 3) steers in the air too: a fifth output, times the same
-  steering toward the line, learned from the lessons' sa. It is bigger than version 2
-  (28 inputs, 32 hidden, 5 outputs, 1061 weights; was 22, 16, 4, 420) and sees how far off
-  the line's heading it is near and far, how far left or right of the line, how much the
-  line turns 10 to 30 m ahead, how long it has flown and how far the next landing is.
-  Both learned from nothing (distilled from the lessons, then 6 min of evolution) on 20
-  lines and tested on 11 unseen ones, twice: version 3 rode 40.5 % / 33.1 % of the unseen
-  lines, version 2 31.9 % / 32.3 % (39.6 / 37.6 % against 36.2 / 36.0 % on the training
-  lines). It is stored under a new key (trailsai.brain3), so everyone's brain starts over.
+## Lines and the library
 
-## Learning from the player
+- **Opening a line.** Start finds the route at the bike: a known line whose start is within 15 m, or the route from the start hill or piece at the bike, run back up to 40 m.
+- **Memory.** Each line has one memory (`trailsai.line.<id>`, format `trails-ai-line` v3). It holds the route, the plan, the best simulated ride, the real rides, the fragile sections and the learning history. The index `trailsai.lines` has one row per line for the library list.
+- **Switching lines.** When the bike stands still 2.5 s at least 25 m from the current line's start, the AI saves the line and opens the one at the bike, from the library or fresh, and learns on there.
+- **Old memories.** The old AI's memories (`trailsai.v2.*` plain lines) are converted once into the new shape, and the originals are kept:
+  - its trick moves become trick programs;
+  - a plan without `pz` gets `pc` 1 everywhere;
+  - a plan without `as` keeps its old way of picking a jump's section.
+  Converted plans ride in the new simulation as they did in the old one (checked: gf6cqjb3rr crashes at the same metre with the same 520 points).
 
-While the player rides (the AI not driving), the engine hook (watchStep) keeps a frame of
-each step: x, z, pitch, speed, airtime, the pump, button, whip, pedal and brake inputs,
-the spin angle and the heading, plus the game's landing grades and crashes as events. A
-ride ends when the bike stands still for 2 s, 30 frames after a crash, on a jump of more
-than 8 m (a reset) or after 3 minutes. Each ride is laid on every line the AI knows (the
-one learning now and those with a lesson) whose points it comes near: rideOn follows the
-line point by point (within 3 m, heading within 1.2 rad on the ground) and keeps the
-longest stretch of at least 30 m. For each metre of it, it keeps the speed the player
-aimed for (the speed ridden, raised while they pedal, lowered while they brake), the pump
-and the pull; for each jump, one whose air ends at a landing the game graded, the pitch
-over the last 8 frames in the air, the angles turned (flip, 360, whip), the whip's
-direction, when the trick was let go, and whether they rode away from it. The newest 3
-rides of a line are kept in the browser (trailsai.player), and their tricks go into the
-trick book.
+## Riding in the game
 
-Trainer.playerSecs turns those rides into values of the plan for every section the player
-rode whole (and came down from its jump): speed by parts, pull, pump, pitch (not off a
-flip), trick and its hold. fromPlayer rides the plan with all of them, and with only the
-jumps' (pull, pitch, trick) at the AI's speeds, and keeps the better one if it beats the
-plan held; prepare does this whenever the line is learned, and a ride seen while it is
-learning does it at once. Each sweep also tries the player's way at each section
-(firstTries), from that section's saved state, so a good jump of theirs is kept even when
-their whole ride is not. Plans found by search are finely balanced: one section changed
-often costs the next jumps, which the sweep's later sections then make up for.
+The page runs the same rider on the live game:
+1. **Start.** The AI gets up (the game's own R), spawns at the line's start and rides the best plan.
+2. **Better plans mid-ride.** A better plan found during the ride is swapped in if it rides everything already passed the same way.
+3. **End of a ride.** It ends at the end of the line (coast and brake), on a crash, more than 12 m off the line, or after 3 s stuck.
+4. **After it.** The ride is logged and recorded, its fragile sections are marked, the memory is saved, and it is shared if one is due. Then the next ride starts.
 
-## Learning on GitHub's computers
+Any key the player presses hands the bike back; the learning goes on.
 
-The shared lessons (lessons/) are learned on further by the workflow cloud-learn, twice a
-day: 4 lines a run, 4 runners at once, 40 minutes each, in turn through every lesson.
-tools/cloud-learn.js finds the game's physics (its WebAssembly) and the four terrain files
-from the game's home page and the scripts it loads, as a browser does, and downloads them
-into the runner's temporary folder (never into the repo: .gitignore keeps *.wasm and *.bin
-out too). A local page holds them under the same names, so the AI finds them among the
-files the page loaded as it does in the game, and runs as it does there, in Chromium with
-no window (Playwright), with window.__taiDirect set. TrailsAI.learnLesson takes the lesson
-as the line's memory, learns on from its plan for the minutes given on every thread of the
-runner, and gives back the lesson and whether its best ride now beats the one it started
-from (both ridden in this simulation). The lessons that got better are committed together
-by one last job, which also gathers the jumps (experience/). A player's AI takes a shared
-lesson only when it rides better in their own simulation too.
+## Updating
 
-## Driving: on and on
+The extension's loader keeps the AI's code in localStorage and runs it on every visit.
+- Every 20 minutes the AI checks the code on GitHub.
+- When it is newer, the AI saves the line and marks it to resume (`trailsai.resume`, good for 5 minutes). Then it reloads the page between rides and carries on with the same line.
 
-The rider follows the plan as before (steering, speed, the angle in the air, pumps,
-tricks). New:
+## Testing outside the browser
 
-- **Trail finder.** Every 2 s while riding (the game loads the ground ahead as the bike
-  goes), every piece the game has loaded is laid out, and each one's easiest point to get
-  onto (every 2 m along it) is found, ridden its own way or the wrong way round. The bike
-  can turn off the line it rides at its end (to a line within 60 m) or, more than 30 m
-  ahead of the bike, at any point every 5 m where the plan has it on the ground off the
-  ramps (to a line within 30 m: one that crosses or passes near it). The way onto a line
-  is a curve from there, the way the bike goes, to that point, the way the line goes, with
-  no turn tighter than 2.5 m (Hermite curves, the widest of a few). Lines mostly over ground
-  already ridden in this run are left out, and so are jump lines ridden the wrong way
-  round, unless nothing else is found (the bike would come at the back of each take-off).
-  This replaced a finder that joined lines only at their end and only roughly straight on:
-  in the game, a line that ended facing a ramp of another line, joined in its middle, was
-  "no trail ahead".
-- **Trying the ways on.** Up to three ways on are searched for in the background at once
-  (a search of their own each, sharing half the threads). Each starts 25 m before its
-  curve, at a point where the plan has the bike on the ground, at the speed the plan has
-  there (the simulation starts the bike there with that speed). Its search then also
-  learns how fast to come at the curve, and whether the slope or the jump after it needs
-  more speed. Speed, turns and slopes are judged by the game's own physics, not guessed.
-  Starting at the end of the line, with no run-up, every way on from one line fell within
-  23 m: the bike came into a dip and a step 4 m on at the speed the plan ended at.
-- **Choosing at the turn-off.** When the bike gets to where a way on starts, it goes that
-  way if the simulation rides it further than the plan rides on along this line: 15 m
-  further for a turn-off before the end, and for any, at least 20 m past its curve. Of
-  several, the one ridden furthest (to its end counts 50 m more). The search goes on
-  while the bike rides it, a better plan is taken on the way when it rides the part
-  already passed the same way, and the ways on from it are looked for.
-- **No way on.** With none taken, the bike comes down from the last jump and, after half
-  a second on the ground, brakes to a stop, says whether it saw no line or saw some that
-  all fell in the simulation, holds the brakes 3 s and rides the line again from its
-  start (as after a fall). Only the "Dừng AI lái" button ends driving; the player's keys
-  do not. It brakes only going forwards, and hard only where it is level: braking
-  while it rolls back tips it over backwards. Two real rides flipped so, one held on the
-  brakes on the way up a ramp, one braking gently rolling back at 4 m/s. The simulation
-  rides every line's end the same way, and a ride counts as finished only once the bike
-  has stopped where it is level and stayed up a second on the brakes. Before, it stopped
-  counting at the line's end, and a lesson that "finished" crashed right after it in the
-  game (it pedalled on up the back of a landing, rolled back and fell). A ride goes on
-  until a fall, or until there is no way on; then the next one starts.
-- **Stuck.** A bike nosed gently into a wall of earth does not fall: it stays there, the
-  wheel pushing on, for ever. A ride with no metre more along the line in 3 s (in the air
-  aside) is over, in the game (and ridden again from the start) as in the simulation
-  (before, 8 s there, and nothing in the game), so learning drops such tries at once and
-  counts them as falls. Past the end, a bike that never gets level (its nose up a wall)
-  counts as stopped after 7 s, as the simulation's 420 steps.
-- **The line where the player is (📍).** The piece nearest the player (within 20 m), the
-  way they face, starts a line of its own, saved with the lines found. It starts up to
-  40 m back along it so the bike has speed by there, never back over a jump; back to a
-  start hill, it starts on its deck, at the game's own start there. The first try went
-  back over a start hill and set the bike down behind it: every try stuck 3 m up its back.
-- **The game's challenges (🏆).** The client asks for `{t:'levels'}` as the game's
-  Challenges page does (at most once a minute) and reads the open challenges (day, week,
-  event: id, have, need, done) from the reply, and their progress from each `moved` the
-  server sends after a run it counts. Each challenge's rule (what it counts, how many, in
-  one run or added up) is read from the game's own scripts. Challenges about building
-  lines or days played are left to the player. The rest become an aim (landings, clean or
-  buttery landings, whips one way or the other, 360s, backflips, manual metres, a row of
-  landings each with a trick...), which the simulation counts the way the game does (a
-  landing after 0.5 s up, a whip from 45°, a 360 from 300°, a backflip from 270°, a
-  manual held 1 s). The line for it is the one nearby whose lesson does most of it in a ride (one added up:
-  most a minute), then one learned, then more jumps, then the nearest; a copy of
-  that line is learned with the aim as its goal, the way a drill is. Once the simulation
-  meets it (or, for one added up over runs, makes some), the bike rides it, learning on in
-  the background; 6 minutes with no progress from the server and the line is set aside, as
-  is one that cannot be laid out from where the bike is or that no try rides 30 m along
-  in a minute (a 📍 line saved before its start was fixed stuck every try at 3 m). "Your
-  other way" is guessed until the server's stats say which way the player whips (it did
-  after the first few whips, all left); then it is learned again the other way. Measured
-  on the live account: Manual 100 m, Land 31 whips and the other way's whips were all
-  counted by the server as the simulation rode them.
-  Tricks count on the trails only once the account has unlocked them, and tricks in the
-  Training drills do not count for challenges; with tricks locked, the AI asks the player
-  to open the Trick line drill and learns and rides that, but never presses the game's
-  "Unlock tricks".
-- **Looking ahead in the air.** Riding in the game, at every control in the air (every
-  other step) the rider flies the bike on from how it flies now: its height, how fast it
-  rises and goes along the line (both measured step to step), and the pull down on it
-  measured on this flight (gravity and the air together, about 7 m/s² on an 8 s flight),
-  to where it meets the ground. The angle it holds for the landing is turned by as much
-  as the slope there differs from the slope where that jump came down in the plan's own
-  ride in the simulation (P.lp, by section, filled in from that ride's landings before
-  driving and whenever a newer plan is taken on the way; at most 0.35 rad). Training never
-  sets P.lp, so every lesson is learned and scored as before; ridden with P.lp in the
-  simulation, the lesson of Đèo Nắng 79 rode the same (its landing angles within 0.015 rad).
-  The game's state cannot be put into a worker's simulation (each has its own world in
-  its memory), so this flies on by the measured motion instead of the physics. Measured
-  with a run-in 1 m/s slower than planned there: without it the bike cased the second
-  jump and fell, with it the line was ridden to the end for 1280 points.
-- **A backflip on a long flight.** Left alone in the air, the game turns the bike with
-  the way it flies ("Follow the arc"). On the 8.6 s flight of Đèo Nắng 79 a backflip went
-  over in about a second, then hung nose down along the fall (-1.1 rad) for 4 s; held
-  only until 5 rad round (the old rule), the bike came down that way and fell. On flights
-  of over 3 s (now in the air plus the time left, flown on as above) the bike is let go
-  only until π + 0.5 rad round, pulled round if it turns too slowly to get there 2.5 s
-  before it lands, and then held at the plan's landing angle. Shorter backflips are as
-  before, so the lessons that have them ride as they did. That jump drops 157 m onto a
-  66° face: in the simulation every trick there still falls (landing impact 8.4 to 8.7
-  against 5.0 for the one landing that holds, no trick and the nose 62° up the face), and
-  "Air control strength" at its top (60, from 18) learned nothing better in 2.5 minutes.
-- **Pumping down the start hill.** The rider never pumped on the start hill (the real game
-  once threw the rider off there where the simulation did not). It is now a choice learned
-  by section, P.ph (only where the section has some of the start hill): every first round
-  on such a section tries pumping all the way down it (pu 1, ph 1), and changed and drawn
-  tries switch it now and then. Pumped down the start hill of Đèo Nắng 79 the bike went
-  23.3 m/s 80 m down instead of 21.4 (27.8 against 27.0 at its foot: the game's pump boosts
-  up to 20 m/s). Plans without P.ph ride as before.
-- **Sharing for the Creator score.** Before the link is made, the run is cut into a video
-  in the game's replay editor (+5 a camera cut, +5 slow motion in an edit, as the game
-  counts them on `made` messages): "Edit", "Auto edit", then up to 6 cuts in all spread
-  over the video with the editor's keys (Shift + arrows a second at a time, K to cut: the
-  video does not play on its own in a hidden window), then "Video" and "Make video" at 720p,
-  30 a second (the quickest: half a minute or so, drawn frame by frame, so a hidden window
-  is no matter), and the editor's "Share". The game counts the +10 a video once it is made
-  (`made` 'export'), so "Save video" is not pressed and no file comes down. Shares are now
-  5 minutes apart at least.
-- **Notes of the real rides.** The last 10 rides in the game are kept (`trailsai.drives`:
-  the line, why it stopped, metres ridden and expected, and each landing's place along
-  the line, metres off it, seconds in the air and grade), to find out afterwards why one
-  ended as it did.
-- **Later: correcting on the way.** If the real ride comes into a section much slower or
-  faster than the plan expected, the rest of the line could be planned again from there
-  (from a saved state made from the real bike's). Not done yet: the game and the
-  simulation have matched to the metre so far.
+- `node tools/sim-test.js line.json [plan.json]` loads the game's files into memory (never to disk). It checks the saved states, then rides a plan without and with button tricks.
+- `node tools/learn-test.js line.json [sweeps] [workers] [plan.json]` runs the learner in node (its workers share one thread there, so it is slower than in the browser).

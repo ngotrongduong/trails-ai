@@ -12,11 +12,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: AI code parses
-        run: node --check src/trails-ai.js
+      # (the numbered parts of src/ are pieces of one script: they are checked joined, as dist/trails-ai.js)
+      - name: The workers' code, the tools and the extension parse
+        run: |
+          for f in src/sim/*.js tools/*.js extension/*.js; do node --check "$f"; done
       - name: Built files are up to date (run "node tools/build.js" after changing src)
         run: |
           node tools/build.js
+          node --check dist/trails-ai.js
           git diff --exit-code -- dist docs
-      - name: Lesson and brain files are valid
-        run: node tools/check-lessons.js

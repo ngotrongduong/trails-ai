@@ -1,0 +1,355 @@
+  // ---------------------------------------------------------------- learning: trial and error on the plan
+  const gauss = () => { let u = 0, v = 0; while (!u) u = Math.random(); while (!v) v = Math.random(); return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v); };
+  const pick = a => a[Math.floor(Math.random() * a.length)];
+  const clonePlan = p => JSON.parse(JSON.stringify(p));
+  const clampV = v => clamp(v, 2, 18);
+  const planFits = (p, secs) => !!p && ['v', 'pt', 'pl', 'pu', 'tk'].every(k => Array.isArray(p[k]) && p[k].length === secs.length)
+    && ['vs', 'lg', 'sa', 'ph', 'pc'].every(k => p[k] === undefined || (Array.isArray(p[k]) && p[k].length === secs.length));
+  // Ride a beats ride b: all the way first; then the further; at the end, the more points (a cased landing counts
+  // CASED_COST less: a search that cannot find the speed for a jump would settle for casing it); then the faster.
+  const CASED_COST = 200;
+  const done = r => r.end === 'finish';
+  const far = r => (done(r) ? Infinity : r.prog);
+  const judged = r => (r.game || 0) - CASED_COST * (r.jl || []).filter(e => e.g === 5).length;
+  const beats = (a, b) => !b || far(a) > far(b) || (far(a) === far(b) && (judged(a) !== judged(b) ? judged(a) > judged(b)
+    : Math.abs((a.vAvg || 0) - (b.vAvg || 0)) > 0.05 ? a.vAvg > b.vAvg : a.fit > b.fit + 0.01));
+  const aliveAt = r => r.end === 'riding' || r.end === 'finish';
+  // The search: partial rides kept at each section (BEAM), tries per section in its first round, how many times a sweep
+  // may back up before it gives up for this time; the rider's weight on the ground and the steering in the air a try
+  // may give a section.
+  const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12;
+  const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6], AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
+  const setPer = (p, key, k, v) => { if (!p[key]) { if (!v) return; p[key] = p.v.map(() => 0); } p[key][k] = v; };
+  // How a section the real game went otherwise than the simulation is ridden in tries: each try also a little faster
+  // and slower, its tricks a little later, and judged by the worst of those (see roll in the worker).
+  const JITS = [{ dv: 0.3, dt: 0 }, { dv: -0.3, dt: 0 }, { dv: 0, dt: 0.06 }];
+
+  // ---- the trick book
+  // What every trick tried off a jump did: rows [air seconds, trick, landed 0/1]. A trick is one part of a trick
+  // program: F a backflip, S a 360, S2 a 720, W a whip, or a button trick (BTRICKS: T, B, L, G, X). The AI draws the
+  // tricks of a program by what they are worth and how often they were landed with that much air (as a bandit picks its
+  // arms: a trick little tried gets tries), so it tries everything it may, and more of what works.
+  const BOOK_ROWS = 6000;
+  // what a trick is worth (Train points and skill points, as landPoints counts them) and the least air it takes
+  const TRICK_PARTS = {
+    F: { unlock: UNLOCK.flip, worth: 300 + 6 * XP_W, air: 0.8 }, S: { unlock: UNLOCK.spin, worth: 200 + 4 * XP_W, air: 0.7 },
+    S2: { unlock: UNLOCK.spin, worth: 400 + 4 * XP_W + EXTRA_W, air: 1.2 }, W: { unlock: UNLOCK.whip, worth: 100 + 2 * XP_W, air: 0.45 },
+    T: { unlock: UNLOCK.tailwhip, worth: 5 * XP_W, air: 0.85 }, B: { unlock: UNLOCK.barspin, worth: 3 * XP_W, air: 0.6 },
+    L: { unlock: UNLOCK.table, worth: 5 * XP_W, air: 0.8 }, G: { unlock: UNLOCK.tbog, worth: 3 * XP_W, air: 0.6 }, X: { unlock: UNLOCK.xup, worth: 4 * XP_W, air: 0.7 },
+  };
+  // the parts of a trick program, and whether a landing (jl entry, landPoints' got) counted each
+  const partsOf = tk => {
+    if (!tk) return [];
+    const out = [];
+    if (tk.f) out.push('F');
+    if (tk.s) out.push((tk.sr || 3.3) > 5.5 ? 'S2' : 'S');
+    if (tk.w) out.push('W');
+    for (const [c] of tk.q || []) if (!out.includes(c)) out.push(c);
+    return out;
+  };
+  const GOT_KEY = { F: 'flip', S: 'spin', S2: 'spin', W: 'whip', T: 'tailwhip', B: 'barspin', L: 'table', G: 'tbog', X: 'xup' };
+  function bookWeights(rows, air, mask) {
+    const w = {}, near = rows.filter(r => Math.abs(r[0] - air) <= 0.25);
+    for (const [c, d] of Object.entries(TRICK_PARTS)) {
+      if ((mask & d.unlock) !== d.unlock) continue;
+      let n = 0, ok = 0;
+      for (const r of near) if (r[1] === c) { n++; if (r[2]) ok++; }
+      const prior = air >= d.air ? 1 : 0.35;
+      w[c] = d.worth * (ok + prior) / (n + 1 + (1 - prior)) + 120 * Math.sqrt(Math.log(near.length + 2) / (n + 1));
+    }
+    return w;
+  }
+  // A trick program for a jump with air seconds of flight, drawn by the book: some of a backflip, a spin and a whip (a
+  // spin and a whip are the same control, so one or the other), then button tricks one after another (each kind once
+  // or more: two barspins, three tailwhips), as many as the air may take.
+  function drawTricks(rows, air, mask) {
+    const w = bookWeights(rows, air, mask), has = c => w[c] > 0;
+    const sum = Object.values(w).reduce((a, x) => a + x, 0) || 1, want = c => has(c) && Math.random() < Math.min(0.85, 1.6 * w[c] / sum + 0.08);
+    const tk = {};
+    let left = air - 0.35;
+    if (want('F') && left > 0.6) { tk.f = 1; left -= 0.35; }
+    if (want('S2') && left > 0.9) { tk.s = Math.random() < 0.5 ? -1 : 1; tk.sr = +(6.6 + Math.random() * 0.6).toFixed(2); left -= 0.6; }
+    else if (want('S') && left > 0.5) { tk.s = Math.random() < 0.5 ? -1 : 1; tk.sr = +(3.0 + Math.random() * 0.6).toFixed(2); left -= 0.3; }
+    else if (want('W')) { tk.w = Math.random() < 0.5 ? -1 : 1; tk.wt = +(0.6 + Math.random() * 2).toFixed(2); }
+    const q = [];
+    for (const c of ['T', 'B', 'L', 'G', 'X'].sort(() => Math.random() - 0.5)) {
+      if (!want(c)) continue;
+      const turnT = BTRICKS[c].turn, n = turnT ? 1 + (Math.random() < 0.35 ? 1 + (Math.random() < 0.3 ? 1 : 0) : 0) : 2 + Math.floor(Math.random() * 5);
+      const need = btrickTime(c, n);
+      if (need > left) continue;
+      q.push([c, n, +(Math.random() < 0.6 ? 0 : Math.random() * 0.15).toFixed(2)]);
+      left -= need;
+    }
+    if (q.length) { tk.q = q; tk.m = +(0.1 + Math.random() * 0.25).toFixed(2); if (Math.random() < 0.3) tk.lf = 1; if (Math.random() < 0.15) tk.h = 1; }
+    return Object.keys(tk).length ? tk : null;
+  }
+  // a trick program changed a little: its timings, the margin it keeps, a part more or less
+  function nudgeTricks(tk, rows, air, mask) {
+    if (!tk || Math.random() < 0.15) return drawTricks(rows, air, mask);
+    const t = JSON.parse(JSON.stringify(tk));
+    if (t.s && Math.random() < 0.5) t.sr = +clamp(t.sr + gauss() * 0.25, 2.8, 11).toFixed(2);
+    if (t.w && Math.random() < 0.5) t.wt = +clamp(t.wt + gauss() * 0.4, 0.3, 3).toFixed(2);
+    if (t.q && Math.random() < 0.5) t.m = +clamp((t.m === undefined ? 0.2 : t.m) + gauss() * 0.08, 0, 0.6).toFixed(2);
+    if (t.q && Math.random() < 0.3) { const i = Math.floor(Math.random() * t.q.length), it = t.q[i]; it[2] = +clamp(it[2] + gauss() * 0.06, 0, 0.4).toFixed(2); if (Math.random() < 0.4) it[1] = Math.max(1, it[1] + (Math.random() < 0.5 ? -1 : 1)); }
+    if (Math.random() < 0.15) {
+      const more = drawTricks(rows, air, mask);
+      if (more && more.q) t.q = (t.q || []).concat(more.q.slice(0, 1)), t.m = t.m === undefined ? 0.2 : t.m;
+    }
+    if (t.q && t.q.length > 1 && Math.random() < 0.1) t.q.splice(Math.floor(Math.random() * t.q.length), 1);
+    return t;
+  }
+
+  // ---- the learner
+  // One line: a pool of workers with the line, the plan learned so far and its best ride (best), the trick book (book:
+  // rows, kept by the caller), and the sections a real ride has shown to be fragile (fragile: section numbers).
+  // on.progress(info) while it searches, on.better(best) when it has a better plan, on.saved() after each sweep.
+  class Learner {
+    constructor(on) { this.on = on || {}; this.running = false; this.pool = null; this.fragile = new Set(); this.book = []; }
+    async prepare(route, setup, files, workers, mem, make) {
+      this.stop();
+      if (this.pool) this.pool.close();
+      this.route = route; this.setup = setup;
+      this.pool = new Pool(workers, make);
+      const meta = await this.pool.init(route, setup, files);
+      this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
+      const ok = mem && planFits(mem.plan, this.secs);
+      this.plan = ok ? clonePlan(mem.plan) : freshPlan(this.secs);
+      this.gen = ok ? mem.gen || 0 : 0;
+      this.hist = ok ? (mem.hist || []).slice(-400) : [];
+      this.fragile = new Set(ok ? mem.fragile || [] : []);
+      this.best = (await this.pool.evalAll([this.plan]))[0];
+      // (a fresh line, or one whose memory no longer rides: a plan from nothing may do better)
+      if (!done(this.best)) { const f = freshPlan(this.secs), r = (await this.pool.evalAll([f]))[0]; if (beats(r, this.best)) { this.plan = f; this.best = r; } }
+      // the pages of memory a ride changes, from rides that fall, jump and throw tricks
+      const slow = freshPlan(this.secs), wild = clonePlan(this.plan);
+      this.secs.forEach((s, k) => { if (s.jump) wild.tk[k] = { f: 1, q: [['B', 1, 0], ['T', 1, 0], ['L', 3, 0]] }; });
+      wild.v = wild.v.map(v => clampV(v + 2));
+      await this.pool.calib([this.plan, slow, wild]);
+      return { fromMemory: !!ok, best: this.best };
+    }
+    stop() { this.running = false; }
+    close() { this.stop(); if (this.pool) this.pool.close(); this.pool = null; }
+    // how long the best ride is in the air off the jump of section j (0: it does not jump there)
+    airOf(j) { return Math.max(0, ...((this.best && this.best.jl) || []).filter(e => e.k === j).map(e => e.a)); }
+    onHill(k) { const s = this.secs[k], K = this.geo && this.geo.KIND; if (!K) return false; for (let i = s.a; i <= s.b; i++) if (K[i] === 'start') return true; return false; }
+    // try a against try b at the same place in the line (> 0: a better); on a fragile section, by their worst first
+    horizon(a, b, fragile) {
+      if (fragile) {
+        const wa = a.worst ? aliveAt(a.worst) && !a.worst.crash : aliveAt(a), wb = b.worst ? aliveAt(b.worst) && !b.worst.crash : aliveAt(b);
+        if (wa !== wb) return wa ? 1 : -1;
+      }
+      const la = aliveAt(a), lb = aliveAt(b);
+      if (la !== lb) return la ? 1 : -1;
+      if (!la) return a.prog !== b.prog ? a.prog - b.prog : a.fit - b.fit;
+      const ja = judged(a), jb = judged(b);
+      if (ja !== jb) return ja - jb;
+      return a.fit - b.fit;
+    }
+    // the trick program a try gives jump section k: drawn anew, changed a little, or kept
+    trickFor(p, k, wide) {
+      const air = this.airOf(k), mask = this.setup.tricks;
+      if (!air || Math.random() > 0.45 * Math.min(1.5, wide)) return;
+      p.tk[k] = Math.random() < 0.5 ? drawTricks(this.book, air, mask) : nudgeTricks(p.tk[k], this.book, air, mask);
+    }
+    // Section k of base changed about as much as wide says: its speed (one, or by parts), the angle held in the air,
+    // the pull, the pump, the weight on the ground, the steering in the air and the tricks off a jump.
+    secTry(base, k, wide) {
+      const s = this.secs[k], p = clonePlan(base);
+      if (!p.vs) p.vs = p.v.map(() => null);
+      const sd = wide, u = p.vs[k];
+      if (u && u.length) {
+        if (Math.random() < 0.15) { p.v[k] = clampV(u[u.length - 1] + gauss() * sd); p.vs[k] = null; }
+        else { for (let i = 0; i < u.length; i++) if (Math.random() < 0.7) u[i] = clampV(u[i] + gauss() * sd); p.v[k] = u[u.length - 1]; }
+      } else if (Math.random() < 0.15 && s.b - s.a >= 12) {
+        const n = 2 + (Math.random() < 0.4 ? 1 : 0);
+        p.vs[k] = Array.from({ length: n }, () => +clampV(p.v[k] + gauss() * sd).toFixed(2));
+        p.v[k] = p.vs[k][n - 1];
+      } else if (Math.random() < 0.85) p.v[k] = clampV(p.v[k] + gauss() * sd);
+      if (Math.random() < (s.jump ? 0.8 : 0.3)) p.pt[k] += gauss() * (s.jump ? 0.12 : 0.04) * wide;
+      if (s.jump && Math.random() < 0.2 * wide) p.pl[k] = Math.random() < 0.4 ? 0 : 1 + Math.floor(Math.random() * 5);
+      if (Math.random() < 0.2 * wide) p.pu[k] = pick([0, 0.5, 0.8, 1]);
+      if (Math.random() < 0.08 * wide) setPer(p, 'pc', k, p.pc && p.pc[k] ? 0 : 1);
+      if (this.onHill(k) && Math.random() < 0.2 * wide) { setPer(p, 'ph', k, p.ph && p.ph[k] ? 0 : 1); if (p.ph && p.ph[k] && !p.pu[k]) p.pu[k] = 1; }
+      if (Math.random() < 0.12 * wide) setPer(p, 'lg', k, pick(LEANS));
+      if (s.jump) {
+        if (Math.random() < 0.25 * wide) setPer(p, 'sa', k, pick(AIR_STEERS));
+        this.trickFor(p, k, wide);
+        if (p.tk[k] && p.tk[k].f && Math.random() < 0.4) p.pl[k] = 1 + Math.floor(Math.random() * 5);
+      }
+      return p;
+    }
+    // Section k drawn anew, whatever the plan had: speeds anywhere from 3 to 18 m/s (often by parts; a quarter of them
+    // 18, no limit at all), any angle in the air, a pull or none, a pump or none. A place no ride has got past yet may
+    // need what is far from anything tried.
+    wildTry(base, k) {
+      const s = this.secs[k], p = clonePlan(base), r = (a, b) => a + Math.random() * (b - a);
+      const rv = () => (Math.random() < 0.25 ? 18 : +r(3, 18).toFixed(2));
+      if (!p.vs) p.vs = p.v.map(() => null);
+      if (Math.random() < 0.5 && s.b - s.a >= 12) { const n = 2 + Math.floor(Math.random() * 3); p.vs[k] = Array.from({ length: n }, rv); p.v[k] = p.vs[k][n - 1]; }
+      else { p.vs[k] = null; p.v[k] = rv(); }
+      if (s.jump) {
+        p.pt[k] = Math.random() < 0.5 ? s.pt + r(-0.6, 0.4) : r(-1.2, 0.6);
+        p.pl[k] = Math.random() < 0.6 ? 1 + Math.floor(Math.random() * 6) : 0;
+        if (Math.random() < 0.5) setPer(p, 'sa', k, pick(AIR_STEERS));
+        p.tk[k] = Math.random() < 0.6 ? null : p.tk[k];
+      }
+      p.pu[k] = Math.random() < 0.3 ? pick([0.5, 0.8, 1]) : 0;
+      setPer(p, 'pc', k, Math.random() < 0.3 ? 1 : 0);
+      if (this.onHill(k)) setPer(p, 'ph', k, p.pu[k] && Math.random() < 0.5 ? 1 : 0);
+      if (Math.random() < 0.4) setPer(p, 'lg', k, pick(LEANS));
+      return p;
+    }
+    // First round from partial ride nd: the plan as it is, one with no speed limit, a grid of take-off speeds by angles
+    // on a jump, the plan with no tricks there (a trick that costs the landing), and n changed copies, part drawn anew.
+    firstTries(nd, k, wide, n, wild) {
+      const s = this.secs[k], out = [{ p: clonePlan(nd.plan), same: true }];
+      if (nd.plan.v[k] < VFREE || (nd.plan.vs && nd.plan.vs[k])) { const p = clonePlan(nd.plan); if (p.vs) p.vs[k] = null; p.v[k] = 18; out.push({ p }); }
+      if (this.onHill(k) && !(nd.plan.ph && nd.plan.ph[k] && nd.plan.pu[k] >= 1)) { const p = clonePlan(nd.plan); setPer(p, 'ph', k, 1); p.pu[k] = 1; out.push({ p }); }
+      // (pumped the other way: through the dips, or wherever the ground falls away)
+      { const p = clonePlan(nd.plan); setPer(p, 'pc', k, p.pc && p.pc[k] ? 0 : 1); if (!p.pu[k]) p.pu[k] = 1; out.push({ p }); }
+      if (s.jump) {
+        for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
+          const p = clonePlan(nd.plan), u = p.vs && p.vs[k];
+          if (u) { u[u.length - 1] = clampV(u[u.length - 1] + dv * wide); p.v[k] = u[u.length - 1]; } else p.v[k] = clampV(p.v[k] + dv * wide);
+          p.pt[k] += da;
+          out.push({ p });
+        }
+        if (nd.plan.tk[k]) { const p = clonePlan(nd.plan); p.tk[k] = null; out.push({ p }); }
+      }
+      for (let i = 0; i < n; i++) out.push({ p: Math.random() < wild ? this.wildTry(nd.plan, k) : this.secTry(nd.plan, k, wide) });
+      return out;
+    }
+    // Second round: values of section k taken from the best tries of the first (each value from one of them at random)
+    // and changed a little, as much as those tries differ from each other.
+    eliteTry(el, k) {
+      const one = () => pick(el), p = clonePlan(one());
+      const spread = f => { const xs = el.map(f), m = xs.reduce((a, x) => a + x, 0) / xs.length; return Math.sqrt(xs.reduce((a, x) => a + (x - m) ** 2, 0) / xs.length); };
+      const sv = Math.max(0.15, spread(q => q.v[k])), sp = Math.max(0.015, spread(q => q.pt[k]));
+      const from = one();
+      if (!p.vs) p.vs = p.v.map(() => null);
+      p.vs[k] = from.vs && from.vs[k] ? from.vs[k].map(v => +clampV(v + gauss() * sv).toFixed(2)) : null;
+      p.v[k] = p.vs[k] ? p.vs[k][p.vs[k].length - 1] : clampV(from.v[k] + gauss() * sv);
+      p.pt[k] = one().pt[k] + gauss() * sp;
+      p.pl[k] = one().pl[k]; p.pu[k] = one().pu[k];
+      const t = one().tk[k]; p.tk[k] = t && Math.random() < 0.4 ? nudgeTricks(t, this.book, this.airOf(k), this.setup.tricks) : t ? clonePlan(t) : null;
+      for (const key of ['lg', 'sa', 'ph', 'pc']) { const w = one(); if (w[key] || p[key]) setPer(p, key, k, w[key] ? w[key][k] : 0); }
+      return { p };
+    }
+    // Rides tries cs (each {nd, p}) from their partial rides, spread over the workers
+    async rollAll(cs, a1, a2, jits) {
+      const pool = this.pool, W = pool.ws.length, per = Math.ceil(cs.length / W), jobs = [];
+      for (let wi = 0; wi < W; wi++) {
+        const part = cs.slice(wi * per, (wi + 1) * per);
+        if (!part.length) continue;
+        jobs.push((async () => {
+          for (let i = 0; i < part.length;) {
+            let j = i; while (j < part.length && part[j].nd === part[i].nd) j++;
+            const bid = `${++this.bid}`, group = part.slice(i, j);
+            const out = await pool.roll(wi, { node: group[0].nd.n, plans: group.map(c => c.p), a1, a2, bid, jits });
+            group.forEach((c, q) => { c.r = out[q]; c.wi = wi; c.key = `${bid}:${q}`; });
+            i = j;
+          }
+        })());
+      }
+      await Promise.all(jobs);
+      this.tries += cs.length;
+    }
+    // Writes into the trick book what each trick program tried off jump j did.
+    learnBook(j, cs) {
+      const ref = this.airOf(j);
+      for (const c of cs) {
+        const tk = c.p.tk[j], r = c.r;
+        if (!tk || c.same || !r) continue;
+        const e = r.jl.find(q => q.k === j), fell = !e || (r.crash && r.crashSec === j);
+        if (!e && !ref) continue;
+        for (const part of partsOf(tk)) this.book.push([e ? e.a : ref, part, !fell && e && e.got[GOT_KEY[part]] ? 1 : 0]);
+      }
+      if (this.book.length > BOOK_ROWS) this.book.splice(0, this.book.length - BOOK_ROWS);
+      this.bookDirty = true;
+    }
+    // A sweep goes along the line keeping a beam of the best partial rides, each a saved state at the start of section
+    // k with the plan that got there. From each, section k is ridden many ways (two rounds: around the plan, then
+    // around the best tries of the first round), each try riding on until the bike has been on the ground 0.75 s in
+    // section k+1. The best tries, kept different from each other in speed, are the beam at section k+1. When no try
+    // gets into section k+1 the sweep backs up one, two, four, then six sections and tries those more widely. At the
+    // end the best full ride is checked from the start and kept if it beats the plan held so far.
+    async sweep(wide) {
+      const S = this.secs, K = S.length, pool = this.pool;
+      let beam = [{ n: null, plan: clonePlan(this.plan), inc: true }], k = 0, backs = 0, bestEnd = null;
+      const beams = [beam], widen = new Map(), fails = {}, t0 = performance.now();
+      this.tries = 0; this.bid = this.bid || 0;
+      while (k < K && this.running) {
+        const a1 = k + 1 < K ? S[k + 1].a : -1, a2 = k + 2 < K ? S[k + 2].a : this.N + 10, w = wide * (widen.get(k) || 1);
+        const fr = this.fragile.has(k), jits = fr ? JITS : null;
+        const n1 = Math.max(12, Math.ceil(SWEEP_TRIES / beam.length)), cs = [];
+        const front = done(this.best) ? K : this.best.crashSec, wild = k >= front - 1 && k <= front ? 0.5 : widen.has(k) ? 0.3 : 0.1;
+        for (const nd of beam) for (const c of this.firstTries(nd, k, w, n1, wild)) cs.push({ nd, ...c });
+        await this.rollAll(cs, a1, a2, jits);
+        if (!this.running) return null;
+        const more = [];
+        for (const nd of beam) {
+          const mine = cs.filter(c => c.nd === nd).sort((x, y) => this.horizon(y.r, x.r, fr));
+          const el = mine.slice(0, Math.max(2, Math.ceil(mine.length / 5))).map(c => c.p);
+          for (let i = 0; i < Math.ceil(n1 / 2); i++) more.push({ nd, ...this.eliteTry(el, k) });
+        }
+        await this.rollAll(more, a1, a2, jits);
+        if (!this.running) return null;
+        const all = cs.concat(more);
+        if (S[k].jump) this.learnBook(k, all);
+        for (const c of all) if (c.r.end !== 'riding' && (!bestEnd || beats(c.r, bestEnd.r))) bestEnd = c;
+        if (this.on.progress) this.on.progress({ k, K, backs, tries: this.tries, ms: performance.now() - t0 });
+        if (a1 < 0) break;
+        const ok = all.filter(c => c.r.kid).sort((x, y) => this.horizon(y.r, x.r, fr));
+        if (!ok.length) {
+          if (backs >= MAX_BACKS) break;
+          const f = (fails[k] = (fails[k] || 0) + 1), back = Math.min(k, [1, 2, 4, 6][Math.min(3, f - 1)]);
+          for (let q = k - back; q <= k; q++) widen.set(q, Math.min(4, (widen.get(q) || 1) * 1.8));
+          backs++; k -= back; beam = beams[k]; beams.length = k + 1;
+          await pool.clearKids();
+          continue;
+        }
+        const sel = [], speeds = new Set(), own = ok.find(c => c.nd.inc && c.same);
+        if (own) { sel.push(own); speeds.add(Math.round(own.r.v)); }
+        for (const c of ok) { if (sel.length >= BEAM) break; const v = Math.round(c.r.v); if (!sel.includes(c) && !speeds.has(v)) { speeds.add(v); sel.push(c); } }
+        for (const c of ok) { if (sel.length >= BEAM) break; if (!sel.includes(c)) sel.push(c); }
+        const nodes = new Array(sel.length);
+        await Promise.all([...new Set(sel.map(c => c.wi))].map(async wi => {
+          const mine = sel.map((c, i) => [c, i]).filter(([c]) => c.wi === wi);
+          const got = await pool.take(wi, mine.map(([c]) => c.key));
+          mine.forEach(([c, i], q) => { nodes[i] = { n: got[q], plan: c.p, inc: !!(c.nd.inc && c.same), r: c.r }; });
+        }));
+        await pool.clearKids();
+        beam = nodes.filter(nd => nd.n);
+        k++; beams[k] = beam;
+      }
+      if (!this.running || !bestEnd) return { improved: false };
+      // checked from the start, as everything else is compared
+      const full = (await pool.evalAll([bestEnd.p]))[0];
+      const improved = beats(full, this.best);
+      if (improved) { this.plan = bestEnd.p; this.best = full; }
+      return { improved, full, backs, ms: performance.now() - t0 };
+    }
+    async run() {
+      if (this.running || !this.pool) return;
+      this.running = true;
+      try {
+        if (!this.pool.snapOk) throw new Error(tx('trạng thái vật lý không lưu lại được trên máy này', 'the physics state cannot be saved on this computer'));
+        let wide = 1;
+        while (this.running) {
+          const r = await this.sweep(wide);
+          if (!this.running) break;
+          const improved = r && r.improved;
+          wide = improved ? 1 : Math.min(2.5, wide * 1.35);
+          this.gen++;
+          this.hist.push([this.gen, Math.round(this.best.game), this.best.prog, done(this.best) ? 1 : 0]);
+          if (improved && this.on.better) this.on.better(this.best);
+          if (this.on.saved) this.on.saved();
+        }
+      } catch (err) {
+        if (this.running && !(this.pool && this.pool.closed)) throw err;
+      } finally { this.running = false; }
+    }
+    // A real ride of the line fell (or came down worse) where the simulation of the same plan did not: that section is
+    // fragile from now on, and its best ride is checked again with the jitters.
+    markFragile(k) { if (k >= 0 && k < this.secs.length) this.fragile.add(k); }
+  }
