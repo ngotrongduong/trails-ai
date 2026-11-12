@@ -23,6 +23,13 @@ Bảng AI gọn trong một khung:
 
 Phần Cài đặt (thu gọn) có: bật/tắt AI lái xe thật, tự chia sẻ, tiếng Việt/English, thư viện đường.
 
+**Xem AI tập** (nút 👁 trên đầu bảng): một màn hình nổi trên game phát lại cùng lúc mọi chiếc xe của lượt thử gần nhất ở đoạn đang học, mỗi xe đi theo cách của riêng nó:
+- vàng: những xe được giữ lại để học đoạn sau; đỏ: ngã; tím: đi vòng né cú nhảy; xanh nhạt: các xe khác;
+- nhìn ngang (độ cao phóng to tới 4 lần) hoặc nhìn từ trên xuống (đường xoay cho chạy từ trái sang phải, các mảnh đường vẽ đúng bề rộng);
+- dải dưới cùng là cả con đường: phần đang học và chỗ xa nhất mà lượt tốt nhất đi tới;
+- tốc độ phát 1×/2×/4× và nút phóng to.
+Các luồng chỉ ghi đường đi của xe khi màn hình này đang mở, nên lúc đóng nó AI học nhanh như cũ.
+
 ## AI học thế nào
 
 Chi tiết ở [docs/design.md](docs/design.md). Tóm tắt:
@@ -99,6 +106,7 @@ Bài học của bản AI cũ được tự chuyển vào thư viện ở lần 
   - `60-drive`: lái xe thật, đổi đường, tự cập nhật;
   - `70-share`: chia sẻ;
   - `80-ui`: bảng AI;
+  - `85-watch`: màn hình Xem AI tập;
   - `99-tail`.
 - `node tools/build.js` ghép chúng thành `dist/trails-ai.js`, trang `docs/index.html` và `docs/trails-ai-extension.zip`.
 - `tools/sim-test.js` và `tools/learn-test.js` chạy mô phỏng và việc học ngoài trình duyệt (bằng node) để kiểm tra.

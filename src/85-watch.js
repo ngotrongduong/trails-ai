@@ -16,7 +16,7 @@
 `;
   // (the worker records a point of 4 numbers every 3 steps: TR_EVERY)
   const TR_STEP = 3, TR_N = 4, SPEEDS = [1, 2, 4], TRAIL = 36, HOLD = 40;
-  const KIND_COLOR = { start: '#8a948a', takeoff: '#e8a548', air: '#e8a548', landing: '#5aa6e8', pump: '#6fc777', berm: '#b58be0', flat: '#7d887c' };
+  const KIND_COLOR = { start: '#8a948a', takeoff: '#e8a548', air: '#e8a548', landing: '#5aa6e8', pump: '#6fc777', berm: '#c49a6c', flat: '#7d887c' };
   const RIDE_COLOR = { kept: '#ffd34d', crash: '#ff5a4f', round: '#c27dff', other: 'rgba(160,208,255,.55)' };
   // half the width of the line where a piece does not say (as HALF_W in the worker)
   const VIEW_HALF_W = { start: 2, takeoff: 0.75, air: 0.75, landing: 1.7, pump: 1.2, flat: 1, berm: 2.5 };

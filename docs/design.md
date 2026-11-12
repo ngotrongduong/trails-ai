@@ -17,12 +17,13 @@ the game. Everything else the earlier versions did is gone:
 | `src/20-line.js` | builds the route from the map pieces at the bike: a point a metre along it, each with the ground's kind and width. Gives the route's id. Says whether the bike is at a known line's start. |
 | `src/sim/rider.js` | the rider: from a plan and the bike's state it gives the controls. The same code runs in the page and in every worker, so a plan rides the same in both. Also counts a landing's points (`landPoints`). |
 | `src/sim/worker.js` | one simulation: the game's own WebAssembly, the line's pieces, rides of a plan, saved states and the try rolls of the search |
-| `src/30-pool.js` | the workers (cores − 2, 2 to 8) |
+| `src/30-pool.js` | the workers (cores − 2, at least 2) |
 | `src/40-learn.js` | the learner (beam search over the plan) and the trick book |
 | `src/50-library.js` | one memory per line, the library index, migration of the old AI's memories |
 | `src/60-drive.js` | the session: open a line, learn it, ride it in the game, switch lines, update the AI |
 | `src/70-share.js` | share a clean finished ride every 5 minutes: video cuts, 720p video, title, link, chat invite |
 | `src/80-ui.js` | the panel |
+| `src/85-watch.js` | the "watch the AI learn" screen (👁). While it is open the roll messages carry `trace: true`, and the worker records `[place along the line, height, x, z]` every 3 steps of each try. After each section's selection the learner hands the round to `on.round` (`{gen, k, K, backs, tries, best, rides: [{tr, end, kid, prog, round, game, kept}]}`) and drops the paths. The screen replays all rides at once, side view or from above (the map turned so the section runs left to right, pieces at their width), with the whole line in a strip below. |
 
 `tools/build.js` joins `src/NN-*.js` in order. `sim/rider.js` goes in once after `20-line.js` for the page. A second copy goes, together with `sim/worker.js`, into the workers' source (the `/*@WORKER_SRC@*/''` place in `30-pool.js`). The build writes `dist/trails-ai.js`, `docs/index.html` and the extension zip.
 

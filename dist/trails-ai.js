@@ -1553,7 +1553,7 @@ font:12px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8ece6;backgr
 #taiw canvas{flex:1;width:100%;min-height:0;display:block}
 `;
 const TR_STEP = 3, TR_N = 4, SPEEDS = [1, 2, 4], TRAIL = 36, HOLD = 40;
-const KIND_COLOR = { start: '#8a948a', takeoff: '#e8a548', air: '#e8a548', landing: '#5aa6e8', pump: '#6fc777', berm: '#b58be0', flat: '#7d887c' };
+const KIND_COLOR = { start: '#8a948a', takeoff: '#e8a548', air: '#e8a548', landing: '#5aa6e8', pump: '#6fc777', berm: '#c49a6c', flat: '#7d887c' };
 const RIDE_COLOR = { kept: '#ffd34d', crash: '#ff5a4f', round: '#c27dff', other: 'rgba(160,208,255,.55)' };
 const VIEW_HALF_W = { start: 2, takeoff: 0.75, air: 0.75, landing: 1.7, pump: 1.2, flat: 1, berm: 2.5 };
 const watch = { on: false, el: null, cv: null, cur: null, next: null, t: 0, last: 0, raf: 0, speed: 0, top: false };
