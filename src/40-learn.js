@@ -5,12 +5,26 @@
   const clampV = v => clamp(v, 2, 18);
   const planFits = (p, secs) => !!p && ['v', 'pt', 'pl', 'pu', 'tk'].every(k => Array.isArray(p[k]) && p[k].length === secs.length)
     && ['vs', 'lg', 'sa', 'ph', 'pc'].every(k => p[k] === undefined || (Array.isArray(p[k]) && p[k].length === secs.length));
-  // Ride a beats ride b: all the way first; then the further; at the end, the more points (a cased landing counts
-  // CASED_COST less: a search that cannot find the speed for a jump would settle for casing it); then the faster.
-  const CASED_COST = 200;
+  // Ride a beats ride b: all the way first; then the further; at the end, the more it is worth (judged); then the
+  // faster. What a ride is worth: its points, and on top of them
+  // - TRICK_W for every trick landed (a 720 two, a double barspin two);
+  // - COMBO_W × the combo at every landing (the game's streak: the 1st good landing in a row 1, the 5th 5, so a long
+  //   combo is worth more than the same landings broken up);
+  // - less TIME_COST a second the ride took (to the end, or to where it is);
+  // - less CASED_COST a cased landing (a search that cannot find the speed for a jump would settle for casing it);
+  // - less OFF_COST a metre ridden off the line (one that cannot clear a jump would ride round it; riding round a
+  //   jump's lip ends the ride there: see the worker).
+  const CASED_COST = 200, OFF_COST = 60, TRICK_W = 30, COMBO_W = 15, TIME_COST = 20;
   const done = r => r.end === 'finish';
   const far = r => (done(r) ? Infinity : r.prog);
-  const judged = r => (r.game || 0) - CASED_COST * (r.jl || []).filter(e => e.g === 5).length;
+  const tricksOf = got => (got ? (got.flip || 0) + (got.spin ? Math.round(got.spin / 360) : 0) + (got.whip || 0) + (got.tailwhip || 0) + (got.barspin || 0) + (got.table || 0) + (got.tbog || 0) + (got.xup || 0) : 0);
+  const rideTricks = r => (r.jl || []).reduce((a, e) => a + tricksOf(e.got), 0);
+  const rideCombo = r => Math.max(0, ...(r.jl || []).map(e => e.st || 0));
+  const judged = r => {
+    let v = (r.game || 0) - OFF_COST * (r.offM || 0) - TIME_COST * (r.ticks || 0) / 60;
+    for (const e of r.jl || []) v += TRICK_W * tricksOf(e.got) + COMBO_W * (e.st || 0) - (e.g === 5 ? CASED_COST : 0);
+    return v;
+  };
   const beats = (a, b) => !b || far(a) > far(b) || (far(a) === far(b) && (judged(a) !== judged(b) ? judged(a) > judged(b)
     : Math.abs((a.vAvg || 0) - (b.vAvg || 0)) > 0.05 ? a.vAvg > b.vAvg : a.fit > b.fit + 0.01));
   const aliveAt = r => r.end === 'riding' || r.end === 'finish';
@@ -19,6 +33,9 @@
   // may give a section.
   const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12;
   const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6], AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
+  // the ways to pump (pc, see the rider): through the dips, where the ground falls away, where it rises (drawn anew
+  // twice as often: it gains the most speed)
+  const PUMP_WAYS = [0, 1, 2], PUMP_PICK = [0, 1, 2, 2];
   const setPer = (p, key, k, v) => { if (!p[key]) { if (!v) return; p[key] = p.v.map(() => 0); } p[key][k] = v; };
   // How a section the real game went otherwise than the simulation is ridden in tries: each try also a little faster
   // and slower, its tricks a little later, and judged by the worst of those (see roll in the worker).
@@ -180,8 +197,8 @@
       } else if (Math.random() < 0.85) p.v[k] = clampV(p.v[k] + gauss() * sd);
       if (Math.random() < (s.jump ? 0.8 : 0.3)) p.pt[k] += gauss() * (s.jump ? 0.12 : 0.04) * wide;
       if (s.jump && Math.random() < 0.2 * wide) p.pl[k] = Math.random() < 0.4 ? 0 : 1 + Math.floor(Math.random() * 5);
-      if (Math.random() < 0.2 * wide) p.pu[k] = pick([0, 0.5, 0.8, 1]);
-      if (Math.random() < 0.08 * wide) setPer(p, 'pc', k, p.pc && p.pc[k] ? 0 : 1);
+      if (Math.random() < 0.3 * wide) p.pu[k] = pick([0, 0.5, 0.8, 1, 1]);
+      if (Math.random() < 0.15 * wide) { const now = p.pc ? p.pc[k] || 0 : 0; setPer(p, 'pc', k, pick(PUMP_WAYS.filter(w => w !== now))); if (!p.pu[k]) p.pu[k] = 1; }
       if (this.onHill(k) && Math.random() < 0.2 * wide) { setPer(p, 'ph', k, p.ph && p.ph[k] ? 0 : 1); if (p.ph && p.ph[k] && !p.pu[k]) p.pu[k] = 1; }
       if (Math.random() < 0.12 * wide) setPer(p, 'lg', k, pick(LEANS));
       if (s.jump) {
@@ -207,8 +224,8 @@
         const r0 = Math.random();
         p.tk[k] = r0 < 0.45 ? null : r0 < 0.65 ? heldMove() : p.tk[k];
       }
-      p.pu[k] = Math.random() < 0.3 ? pick([0.5, 0.8, 1]) : 0;
-      setPer(p, 'pc', k, Math.random() < 0.3 ? 1 : 0);
+      p.pu[k] = Math.random() < 0.7 ? pick([0.5, 0.8, 1, 1]) : 0;
+      setPer(p, 'pc', k, pick(PUMP_PICK));
       if (this.onHill(k)) setPer(p, 'ph', k, p.pu[k] && Math.random() < 0.5 ? 1 : 0);
       if (Math.random() < 0.4) setPer(p, 'lg', k, pick(LEANS));
       return p;
@@ -219,8 +236,8 @@
       const s = this.secs[k], out = [{ p: clonePlan(nd.plan), same: true }];
       if (nd.plan.v[k] < VFREE || (nd.plan.vs && nd.plan.vs[k])) { const p = clonePlan(nd.plan); if (p.vs) p.vs[k] = null; p.v[k] = 18; out.push({ p }); }
       if (this.onHill(k) && !(nd.plan.ph && nd.plan.ph[k] && nd.plan.pu[k] >= 1)) { const p = clonePlan(nd.plan); setPer(p, 'ph', k, 1); p.pu[k] = 1; out.push({ p }); }
-      // (pumped the other way: through the dips, or wherever the ground falls away)
-      { const p = clonePlan(nd.plan); setPer(p, 'pc', k, p.pc && p.pc[k] ? 0 : 1); if (!p.pu[k]) p.pu[k] = 1; out.push({ p }); }
+      // (pumped hard each other way: through the dips, where the ground rises, where it falls away)
+      for (const w of PUMP_WAYS) if (w !== (nd.plan.pc ? nd.plan.pc[k] || 0 : 0) || nd.plan.pu[k] < 1) { const p = clonePlan(nd.plan); setPer(p, 'pc', k, w); p.pu[k] = 1; out.push({ p }); }
       if (s.jump) {
         for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
           const p = clonePlan(nd.plan), u = p.vs && p.vs[k];

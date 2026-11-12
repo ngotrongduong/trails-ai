@@ -13,8 +13,8 @@
   };
   const workerCount = () => clamp((navigator.hardwareConcurrency || 4) - 2, 2, 8);
   // the best ride in the simulation, as the memory keeps it (its landings without what only the search needs)
-  const keepBest = b => b && { end: b.end, prog: b.prog, game: b.game, train: b.train, xp: b.xp, vAvg: b.vAvg, crashSec: b.crashSec,
-    jl: b.jl.map(e => ({ k: e.k, a: e.a, g: e.g, p: e.p, got: e.got })) };
+  const keepBest = b => b && { end: b.end, prog: b.prog, game: b.game, train: b.train, xp: b.xp, vAvg: b.vAvg, crashSec: b.crashSec, ticks: b.ticks, offM: b.offM || 0,
+    jl: b.jl.map(e => ({ k: e.k, a: e.a, g: e.g, p: e.p, st: e.st || 0, got: e.got })) };
   function saveMem() {
     const L = ses.learner, m = ses.mem;
     if (!L || !m || !L.best) return;
@@ -48,7 +48,11 @@
       const L = ses.learner = new Learner({
         // (the learner counts its tries from 0 again every sweep)
         progress: p => { const was = ses.lastTries || 0; ses.tries += p.tries >= was ? p.tries - was : p.tries; ses.lastTries = p.tries; ui.update(); },
-        better: b => { ui.log(tx(`Tìm được cách đi tốt hơn: <b>${b.game} điểm</b>${b.end === 'finish' ? ', về đích' : `, tới ${b.prog} m`}.`, `Found a better way: <b>${b.game} points</b>${b.end === 'finish' ? ', to the end' : `, to ${b.prog} m`}.`)); },
+        better: b => {
+          const n = rideTricks(b), c = rideCombo(b), sec = (b.ticks / 60).toFixed(1);
+          ui.log(tx(`Tìm được cách đi tốt hơn: <b>${b.game} điểm</b>${b.end === 'finish' ? `, về đích trong ${sec} s` : `, tới ${b.prog} m`}, ${n} trick, combo dài nhất ×${c}.`,
+            `Found a better way: <b>${b.game} points</b>${b.end === 'finish' ? `, to the end in ${sec} s` : `, to ${b.prog} m`}, ${n} tricks, longest combo ×${c}.`));
+        },
         saved: () => { ses.lastTries = 0; saveMem(); ui.update(); },
       });
       const setup = riderSetup();

@@ -76,7 +76,7 @@ const trickText = got => Object.keys(TRICK_WORDS).filter(k => got && got[k]).map
 //   m: seconds of air to keep before landing: a button trick is begun only when it will be caught by then
 //   lf: tailwhips and barspins thrown to the left
 //   h: the first button trick's buttons held up the takeoff (thrown harder)
-const freshPlan = secs => ({ v: secs.map(() => 8), pt: secs.map(s => s.pt), pl: secs.map(() => 0), pu: secs.map(() => 0), tk: secs.map(() => null) });
+const freshPlan = secs => ({ v: secs.map(() => 8), pt: secs.map(s => s.pt), pl: secs.map(() => 0), pu: secs.map(() => 1), tk: secs.map(() => null) });
 
 // Rides line R (points every metre, ground heights H, sections S) with plan P. me.step(state, tick) gives back the
 // controls [pedal, brake, steer, lean, pump, buttons, whip]. The plan is me.P, which may be changed between steps;
@@ -148,11 +148,14 @@ function makeRider(R, H, S, P, jit) {
       if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
       const onT = R.KIND[idx] === 'takeoff';
       if (P.pl[sec] > 0 && onT && idx >= S[sec].b - P.pl[sec]) btn |= BTN.UP;
-      // pump, as hard as the section says, through the dips (R.PZ) or, where pc says so, wherever the ground 1 to 3 m
-      // ahead falls away (as the old AI did); on the start hill only where the plan says so
+      // pump, as hard as the section says, through the dips (R.PZ, pc 0), wherever the ground 1 to 3 m ahead rises (pc
+      // 2: a dip's far side, a roller's or a lip's face) or falls away (pc 1, as the old AI did); on the start hill only
+      // where the plan says so. (Measured on 6 lines: pumped where it rises or in the dips the bike gains 0.5-2 m/s;
+      // where it falls away, or all the time, it soon goes over.)
       if (P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || (P.ph && P.ph[sec]))) {
-        const pk = P.pk || PUMP0, u = me.at;
-        if ((P.pc && P.pc[sec]) || !R.PZ) { if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec]; }
+        const pk = P.pk || PUMP0, u = me.at, pm = P.pc ? P.pc[sec] || 0 : 0, rise = (H[look(3)] - H[look(1)]) / 2;
+        if (pm === 2) { if (rise > 0.03) pump = P.pu[sec]; }
+        else if (pm || !R.PZ) { if (-rise > 0.03) pump = P.pu[sec]; }
         else if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec];
       }
       // tricks that start up the takeoff: a spin wound up with the whip held, a backflip popped with the pedals, the

@@ -26,6 +26,7 @@ function addLine(route, setup) {
     R.W = R.W ? W.concat(Array.from(R.W)) : null;
   }
   R.length = R.X.length;
+  R.HW = Float32Array.from(R.KIND, (k, i) => (R.W && R.W.length === R.length && R.W[i] > 0 ? R.W[i] : HALF_W[k] || 1.5));
   const arr = [fmt, 2, 0, 0, 0];
   let c = 0;
   for (const f of R.pieces) {
@@ -86,6 +87,13 @@ function pumpZones() {
 function spawn() { l.trails_set_spawn_at(g, R.start.x, R.start.z, R.start.heading, 0); l.trails_game_reset(g); }
 // steps without a metre more along the line before a ride is stuck (the AI driving in the game gives up as soon)
 const STUCK = 180;
+// Staying on the line. Half the width of the line at each point (R.HW): the piece's own, else the game's default for
+// its kind (start 4 m wide, a lip 1.5, a landing 3.4, a pump 2.4, a flat 2). On the ground the bike may be OFF_EDGE m
+// past the edge (the line's points are a metre apart, and the bike has its length); further off is off the line. Off
+// the line by a lip (a takeoff, or the gap after it) the bike is riding round the jump: the ride ends there, as a fall
+// would. Anywhere else each metre ridden off the line costs OFF_COST points (see judged in the learner).
+const HALF_W = { start: 2, takeoff: 0.75, air: 0.75, landing: 1.7, pump: 1.2, flat: 1, berm: 2.5 };
+const OFF_EDGE = 1;
 // Past the end of the line the bike rides on straight at about 6 m/s, in the air at the plan's angle, and once on the
 // ground half a second (halt) brakes to a stop; braking only going forwards, hard only where level (braking while
 // rolling back tips the bike over backwards).
@@ -104,7 +112,7 @@ function Ep(P, jit) {
   const s = state(), N = R.length;
   const E = { P, jit: jit || null, N, t: 0, idx: 0, prog: 0, seq: s[16], stall: 0, crash: 0, end: 'timeout', done: null,
     maxT: Math.min(120000, Math.round(N / 2.5 * 60) + 600), vr: new Float32Array(N), pending: null, landT: -1e9,
-    progAt: 0, progT: 0, jl: [], game: 0, train: 0, xp: 0, streak: 0, airP: 0, tail: -1, calm: 0, halt: 0, held: -1, vTail: 0, bigLand: -1 };
+    progAt: 0, progT: 0, offM: 0, round: 0, jl: [], game: 0, train: 0, xp: 0, streak: 0, airP: 0, tail: -1, calm: 0, halt: 0, held: -1, vTail: 0, bigLand: -1 };
   E.rider = makeRider(R, H, S, P, E.jit);
   return E;
 }
@@ -120,7 +128,9 @@ function go(E, stop) {
     let inp = rider.step(s, t);
     const idx = E.idx = rider.idx;
     if (rider.landed && s[14] > 2) E.bigLand = idx;
-    if (idx > E.prog) { for (let i = E.prog + 1; i <= idx; i++) E.vr[i] = Math.abs(s[8]); E.prog = idx; }
+    const outside = !air && E.tail < 0 && rider.off > R.HW[idx] + OFF_EDGE;
+    if (outside && (R.KIND[idx] === 'takeoff' || R.KIND[idx] === 'air')) { E.end = 'off'; E.round = 1; return fin(E, s); }
+    if (idx > E.prog) { for (let i = E.prog + 1; i <= idx; i++) E.vr[i] = Math.abs(s[8]); if (outside) E.offM += idx - E.prog; E.prog = idx; }
     E.calm = air ? 0 : E.calm + 1;
     // past the end: ridden on, braked to a stop and held a second: only a bike that stays up there has finished
     if (idx >= N - 3 && E.tail < 0) { E.tail = t; E.vTail = +Math.abs(s[8]).toFixed(2); }
@@ -142,7 +152,7 @@ function go(E, stop) {
         const k = rider.airSec, lp = landPoints(s, E.streak), i = Math.min(N - 3, Math.max(2, idx)), sl = Math.atan2(H[i + 2] - H[i - 2], 4);
         E.streak = lp.streak;
         // (dp: the bike's pitch just before it came down less the slope there; imp, mis: how hard and how far off)
-        E.pending = { t, e: { k, i: idx, a: +s[14].toFixed(2), h: +s[20].toFixed(2), g: lp.g, p: lp.p, train: lp.train, m: lp.m, xp: lp.xp, extra: lp.extra, got: lp.got,
+        E.pending = { t, e: { k, i: idx, a: +s[14].toFixed(2), h: +s[20].toFixed(2), g: lp.g, p: lp.p, train: lp.train, m: lp.m, st: lp.streak, xp: lp.xp, extra: lp.extra, got: lp.got,
           dp: +(E.airP - sl).toFixed(3), sl: +sl.toFixed(4), imp: +s[23].toFixed(2), mis: +(s[22] || 0).toFixed(3), t } };
       }
     }
@@ -160,7 +170,7 @@ function summary(E, s, final) {
   const pace = 0.05 * Math.min(20, E.vr[Math.max(0, prog - 5)]);
   const vEnd = E.tail >= 0 ? E.vTail : +Math.abs(s[8]).toFixed(2), vAvg = +(prog / Math.max(1, t) * 60).toFixed(2);
   return { fit: prog + pace + E.game / 1000, prog, crash: E.crash, end: final ? E.end : 'riding', ticks: t, sec, crashSec,
-    game: E.game, train: E.train, xp: E.xp, streak: E.streak, jl: E.jl.slice(), vEnd, vAvg };
+    game: E.game, train: E.train, xp: E.xp, streak: E.streak, jl: E.jl.slice(), vEnd, vAvg, offM: E.offM, round: E.round };
 }
 function fin(E, s) { return E.done = summary(E, s, true); }
 

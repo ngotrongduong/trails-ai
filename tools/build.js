@@ -108,6 +108,9 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <tr><td>Chuỗi tiếp đất đẹp liên tiếp (Flat/Cased làm mất chuỗi)</td><td>× tới 5</td></tr>
 <tr><td>Điểm kỹ năng mỗi loại trick (mỗi loại một lần mỗi cú nhảy)</td><td>whip 2 · 360 4 · backflip 6 · barspin 3 · T-bog 3 · X-up 4 · tailwhip 5 · table 5 · 360 table +10</td></tr>
 <tr><td>AI tính: điểm Train + 25 × điểm kỹ năng + 15 cho mỗi vòng trick lặp thêm</td><td></td></tr>
+<tr><td>Thưởng thêm khi so hai cách đi: mỗi trick đáp được · mỗi cú đáp trong combo</td><td>+30 · +15 × độ dài combo</td></tr>
+<tr><td>Phạt: mỗi giây chạy · mỗi cú cased · mỗi mét lệch ra ngoài đường</td><td>−20 · −200 · −60</td></tr>
+<tr><td>Lệch khỏi mép nhảy để né cú nhảy</td><td>lượt đó dừng, như bị ngã</td></tr>
 </table>
 <p class="note">Về đích luôn được ưu tiên trước điểm. Ở đoạn mà lượt thật ngã còn mô phỏng thì không, AI học cách đi chắc hơn: mỗi cách được thử thêm khi nhanh hơn, chậm hơn và trick muộn hơn một chút, và chỉ giữ cách vẫn qua được trong mọi trường hợp đó.</p>
 </div>

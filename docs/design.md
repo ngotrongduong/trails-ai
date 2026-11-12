@@ -34,7 +34,7 @@ section:
 - `v` the speed to hold (`vs`: one per equal part of the section). 17.5 and up means no limit: pedal while it helps, never brake.
 - `pt` the bike's angle to hold in the air.
 - `pl` pull up that many metres before the lip.
-- `pu` how hard to pump, `pc` how to pump: through the dips the game's Training marks (0), or wherever the ground 1 to 3 m ahead falls away (1, as the old AI did). `ph` pump down the start hill too.
+- `pu` how hard to pump (a fresh plan: 1), `pc` how to pump: through the dips the game's Training marks (0), wherever the ground 1 to 3 m ahead falls away (1, as the old AI did), or wherever it rises (2: a dip's far side, a roller's or a lip's face). `ph` pump down the start hill too. Measured on 6 lines with the pedals on: pumped where the ground rises or in the dips the bike gains 0.5-2 m/s; where it falls away, or all the time, it soon goes over.
 - `lg` the rider's weight on the ground, `sa` steering in the air.
 - `tk` the trick program of a jump:
   - `f` backflip;
@@ -71,8 +71,17 @@ The AI's points for a landing: Train + 25 × skill points + 15 for every turn a 
 Rides are compared in this order:
 1. Finished beats not finished.
 2. Then the further.
-3. Then the points (each cased landing costs 200 more).
+3. Then what it is worth: its points, + 30 for every trick landed (a 720 two, a double barspin two), + 15 × the combo
+   at every landing (the game's streak: the 5th good landing in a row 5, so a long combo is worth more than the same
+   landings broken up), − 20 a second the ride took, − 200 a cased landing, − 60 a metre ridden off the line.
 4. Then the faster.
+
+**Staying on the line.** Each point of the line knows half the width of the piece under it: the piece's own width,
+else the game's default for its kind (start 4 m, lip 1.5, landing 3.4, pump 2.4, flat 2). On the ground the bike may be
+up to 1 m past the edge. Further off by a takeoff (or the gap after it) means riding round the jump: the ride ends
+there, as a fall would, so a try that cannot clear a jump never beats one that tries it. Further off anywhere else
+costs the 60 points a metre. (The old AI allowed 7 m everywhere: its best rides on n458teqth2 and 8hs9rltonr went
+round jumps.)
 
 ## The search
 
@@ -85,7 +94,7 @@ One sweep goes along the line:
 2. **First round.** From each partial ride, about 72 tries in all ride section `k`:
    - the plan as it is;
    - no speed limit;
-   - the other pump way;
+   - pumping hard each other way;
    - pumping down the start hill;
    - on a jump, a grid of 5 speeds × 3 angles, and no tricks;
    - changed copies of the plan (part drawn anew, more of them at the furthest place reached).

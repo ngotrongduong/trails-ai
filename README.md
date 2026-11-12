@@ -30,6 +30,9 @@ Chi tiết ở [docs/design.md](docs/design.md). Tóm tắt:
 - **Đọc đường.** AI đọc các chi tiết của đường từ dữ liệu game: dốc xuất phát, mép nhảy, dốc đáp, mô pump, cua. Nó nối chúng thành một lộ trình chia từng mét. Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
 - **Mô phỏng thật.** Mỗi luồng chạy đúng file vật lý (WebAssembly) của game, nên cách đi nào chạy được trong mô phỏng thì ngoài game cũng chạy y như vậy. Trạng thái của xe được lưu ở đầu mỗi đoạn. Nhờ vậy thử một cách mới ở mét 800 chỉ tốn vài mét chạy.
 - **Kế hoạch.** Mỗi đoạn có vài con số: tốc độ (có thể chia phần), góc xe khi bay, nhấc xe trước mép, pump mạnh bao nhiêu và pump kiểu nào, dồn người, đánh lái trên không. Cú nhảy có thêm **chương trình trick**.
+
+- **Pump để lấy tốc độ.** AI pump ngay từ đầu, rồi thử ba kiểu pump: qua các chỗ trũng (như phần Training của game chỉ), ở mặt dốc đi lên (bờ bên kia chỗ trũng, mặt mô, mặt mép nhảy), hoặc ở chỗ đất đổ xuống. Đo trên 6 đường: pump ở mặt dốc lên hoặc qua chỗ trũng giúp xe nhanh thêm 0,5–2 m/s, đủ để bay qua những cú nhảy dài hơn.
+- **Không đi đường vòng.** Mỗi điểm trên đường biết bề rộng thật của chi tiết đường ở đó. Xe chạy lệch ra ngoài mép quá 1 m ngay cạnh mép nhảy là bị coi như né cú nhảy: lượt đó dừng ở đó, như bị ngã. Lệch ra ngoài ở chỗ khác thì bị trừ 60 điểm cho mỗi mét.
 - **Dò từng đoạn.** Tới đầu mỗi đoạn AI giữ 6 cách đi tốt nhất. Nó thử đoạn đó hàng chục kiểu từ mỗi cách, rồi giữ 6 kiểu tốt nhất cho đoạn sau. Không qua được thì AI lùi lại vài đoạn và thử rộng hơn. Cách tốt nhất cả đường được chạy lại từ đầu để kiểm tra rồi mới giữ.
 - **So như game chấm.** Đi hết đường được ưu tiên trước, rồi đi xa hơn, rồi nhiều điểm hơn. Mỗi cú Cased bị trừ thêm 200 điểm khi so, để AI không chọn cách an toàn là bay hụt.
 - **Rút kinh nghiệm từ lượt thật.** Có đoạn lượt thật ngã (hoặc đáp Flat hay Cased) mà mô phỏng thì không. AI đánh dấu đoạn đó là “mong manh”. Ở đó mỗi cách thử được chạy thêm ba lần: nhanh hơn 0,3 m/s, chậm hơn 0,3 m/s, và trick muộn hơn 0,06 s. AI chỉ giữ cách nào qua được cả bốn lần.
@@ -53,6 +56,17 @@ AI tập mọi trick mà tài khoản của bạn đã mở: **backflip, 360/720
 | Chuỗi đáp đẹp liên tiếp (Flat/Cased làm mất chuỗi) | × tới 5 |
 | Điểm kỹ năng của game, mỗi loại trick một lần mỗi cú: whip 2, 360 4, backflip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, 360 table +10 | × 25 |
 | Mỗi vòng trick lặp thêm (barspin ×2, tailwhip ×3…) | +15 |
+
+Khi so hai cách đi, AI còn tính thêm những khoản thưởng/phạt riêng của nó (không cộng vào điểm game):
+
+| Thưởng / phạt | Giá trị |
+|---|---|
+| Mỗi trick đáp được (720 tính 2, barspin ×2 tính 2) | +30 |
+| Combo: mỗi cú đáp đẹp liên tiếp × độ dài combo lúc đó (cú thứ 5 liên tiếp +75) | +15 × combo |
+| Mỗi giây chạy (về đích càng nhanh càng tốt) | −20 |
+| Mỗi cú đáp cased | −200 |
+| Mỗi mét chạy lệch ra ngoài đường | −60 |
+| Lệch khỏi mép nhảy (né cú nhảy) | lượt đó dừng ở đó |
 
 ## Tự cập nhật và chia sẻ
 

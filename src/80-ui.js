@@ -123,7 +123,7 @@
     $('.mn').title = tx('Thu gọn', 'Fold'); $('.ren').title = tx('Đổi tên', 'Rename');
     set('.name', m ? m.name : tx('Chưa chọn đường', 'No line yet'));
     set('.len', m ? `${m.line.length} m` : '');
-    set('.v-sim', b ? `${pts(b.game)}${b.end === 'finish' ? '' : ` · ${b.prog} m`}` : '–');
+    set('.v-sim', b ? `${pts(b.game)}${b.end === 'finish' ? '' : ` · ${b.prog} m`}${rideTricks(b) ? ` · ${rideTricks(b)} trick` : ''}` : '–');
     set('.v-real', m && m.realBest ? pts(m.realBest) : m && m.realFar ? `${pts(m.realFar.game)} · ${m.realFar.m} m` : '–');
     set('.v-gen', L ? String(L.gen) : '–');
     // tries a second over the last half minute
