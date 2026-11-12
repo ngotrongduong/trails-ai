@@ -135,7 +135,8 @@
     // try a against try b at the same place in the line (> 0: a better); on a fragile section, by their worst first
     horizon(a, b, fragile) {
       if (fragile) {
-        const wa = a.worst ? aliveAt(a.worst) && !a.worst.crash : aliveAt(a), wb = b.worst ? aliveAt(b.worst) && !b.worst.crash : aliveAt(b);
+        // (a try not ridden with the jitters has not shown it holds)
+        const wa = !!a.worst && aliveAt(a.worst) && !a.worst.crash, wb = !!b.worst && aliveAt(b.worst) && !b.worst.crash;
         if (wa !== wb) return wa ? 1 : -1;
       }
       const la = aliveAt(a), lb = aliveAt(b);
@@ -235,8 +236,9 @@
       for (const key of ['lg', 'sa', 'ph', 'pc']) { const w = one(); if (w[key] || p[key]) setPer(p, key, k, w[key] ? w[key][k] : 0); }
       return { p };
     }
-    // Rides tries cs (each {nd, p}) from their partial rides, spread over the workers
-    async rollAll(cs, a1, a2, jits) {
+    // Rides tries cs (each {nd, p}) from their partial rides, spread over the workers. jitOnly: each c is a try c.of
+    // ridden again with jitters jits only, and the worst of those goes to c.of.r.worst.
+    async rollAll(cs, a1, a2, jits, jitOnly) {
       const pool = this.pool, W = pool.ws.length, per = Math.ceil(cs.length / W), jobs = [];
       for (let wi = 0; wi < W; wi++) {
         const part = cs.slice(wi * per, (wi + 1) * per);
@@ -245,14 +247,15 @@
           for (let i = 0; i < part.length;) {
             let j = i; while (j < part.length && part[j].nd === part[i].nd) j++;
             const bid = `${++this.bid}`, group = part.slice(i, j);
-            const out = await pool.roll(wi, { node: group[0].nd.n, plans: group.map(c => c.p), a1, a2, bid, jits });
-            group.forEach((c, q) => { c.r = out[q]; c.wi = wi; c.key = `${bid}:${q}`; });
+            const out = await pool.roll(wi, { node: group[0].nd.n, plans: group.map(c => c.p), a1, a2, bid, jits, jitOnly: !!jitOnly });
+            if (jitOnly) group.forEach((c, q) => { c.of.r.worst = out[q].worst; });
+            else group.forEach((c, q) => { c.r = out[q]; c.wi = wi; c.key = `${bid}:${q}`; });
             i = j;
           }
         })());
       }
       await Promise.all(jobs);
-      this.tries += cs.length;
+      if (!jitOnly) this.tries += cs.length;
     }
     // Writes into the trick book what each trick program tried off jump j did.
     learnBook(j, cs) {
@@ -280,11 +283,20 @@
       this.tries = 0; this.bid = this.bid || 0;
       while (k < K && this.running) {
         const a1 = k + 1 < K ? S[k + 1].a : -1, a2 = k + 2 < K ? S[k + 2].a : this.N + 10, w = wide * (widen.get(k) || 1);
-        const fr = this.fragile.has(k), jits = fr ? JITS : null;
+        const fr = this.fragile.has(k);
         const n1 = Math.max(12, Math.ceil(SWEEP_TRIES / beam.length)), cs = [];
         const front = done(this.best) ? K : this.best.crashSec, wild = k >= front - 1 && k <= front ? 0.5 : widen.has(k) ? 0.3 : 0.1;
         for (const nd of beam) for (const c of this.firstTries(nd, k, w, n1, wild)) cs.push({ nd, ...c });
-        await this.rollAll(cs, a1, a2, jits);
+        await this.rollAll(cs, a1, a2, null);
+        if (!this.running) return null;
+        // on a fragile section, the best tries of a round are ridden again with the jitters (the others would not be
+        // picked whatever their worst)
+        const jitTop = async list => {
+          if (!fr) return;
+          const top = list.filter(c => c.r.kid).sort((x, y) => this.horizon(y.r, x.r, false)).slice(0, 3 * BEAM);
+          await this.rollAll(top.map(c => ({ nd: c.nd, p: c.p, of: c })), a1, a2, JITS, true);
+        };
+        await jitTop(cs);
         if (!this.running) return null;
         const more = [];
         for (const nd of beam) {
@@ -292,7 +304,9 @@
           const el = mine.slice(0, Math.max(2, Math.ceil(mine.length / 5))).map(c => c.p);
           for (let i = 0; i < Math.ceil(n1 / 2); i++) more.push({ nd, ...this.eliteTry(el, k) });
         }
-        await this.rollAll(more, a1, a2, jits);
+        await this.rollAll(more, a1, a2, null);
+        if (!this.running) return null;
+        await jitTop(more);
         if (!this.running) return null;
         const all = cs.concat(more);
         if (S[k].jump) this.learnBook(k, all);

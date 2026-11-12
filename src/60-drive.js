@@ -46,7 +46,8 @@
       if (!mem.line.W) mem.line.W = await widthsOf(mem.line);
       ses.mem = mem;
       const L = ses.learner = new Learner({
-        progress: p => { ses.tries += p.tries - (ses.lastTries || 0); ses.lastTries = p.tries; ui.update(); },
+        // (the learner counts its tries from 0 again every sweep)
+        progress: p => { const was = ses.lastTries || 0; ses.tries += p.tries >= was ? p.tries - was : p.tries; ses.lastTries = p.tries; ui.update(); },
         better: b => { ui.log(tx(`Tìm được cách đi tốt hơn: <b>${b.game} điểm</b>${b.end === 'finish' ? ', về đích' : `, tới ${b.prog} m`}.`, `Found a better way: <b>${b.game} points</b>${b.end === 'finish' ? ', to the end' : `, to ${b.prog} m`}.`)); },
         saved: () => { ses.lastTries = 0; saveMem(); ui.update(); },
       });
@@ -61,7 +62,7 @@
       ui.log(got.fromMemory ? tx(`Mở <b>${esc(mem.name)}</b> từ thư viện: ${L.best.game} điểm trong mô phỏng${L.best.end === 'finish' ? ', về đích' : ''}. Học tiếp.`, `Opened <b>${esc(mem.name)}</b> from the library: ${L.best.game} points in the simulation${L.best.end === 'finish' ? ', to the end' : ''}. Learning on.`)
         : tx(`Đường mới <b>${esc(mem.name)}</b> (${mem.line.length} m, ${L.secs.filter(s => s.jump).length} cú nhảy). Bắt đầu học.`, `New line <b>${esc(mem.name)}</b> (${mem.line.length} m, ${L.secs.filter(s => s.jump).length} jumps). Learning starts.`));
       if (!L.pool.snapOk) throw new Error(tx('Trạng thái vật lý không lưu lại được trên máy này, AI không học được.', 'The physics state cannot be saved on this computer, so the AI cannot learn.'));
-      ses.t0 = Date.now(); ses.tries = 0;
+      ses.t0 = Date.now(); ses.tries = 0; ses.lastTries = 0; ses.rs = [];
       if (ses.want) L.run().catch(err => { console.error(err); ui.log(tx('Lỗi khi học: ', 'Error while learning: ') + esc(err.message || err)); });
     } finally { ses.busy = false; ui.update(); }
   }
@@ -175,7 +176,9 @@
     ses.rides++;
     const rec = { at: Date.now(), end: why, m, game: d.game, train: d.train, xp: d.xp, lands: d.lands.map(e => [e.k, e.g, e.p, trickText(e.got)]), swaps: d.swaps };
     ses.last = rec;
-    if (ses.mem) { ses.mem.rides = (ses.mem.rides || []).concat([rec]).slice(-10); if (why === 'finish') ses.mem.realBest = Math.max(ses.mem.realBest || 0, d.game); }
+    if (ses.mem) { ses.mem.rides = (ses.mem.rides || []).concat([rec]).slice(-10); if (why === 'finish') ses.mem.realBest = Math.max(ses.mem.realBest || 0, d.game);
+      // (and the furthest real ride that did not get there, while none has)
+      else if (why !== 'player') { const f = ses.mem.realFar; if (!f || m > f.m || (m === f.m && d.game > f.game)) ses.mem.realFar = { m, game: d.game }; } }
     ui.log(tx(`<b>Lái thật:</b> ${END_WORDS[why][0]} sau ${m} m, <b>${d.game} điểm</b> (Train ${d.train}, kỹ năng ${d.xp}).`, `<b>Real ride:</b> ${END_WORDS[why][1]} after ${m} m, <b>${d.game} points</b> (Train ${d.train}, skill ${d.xp}).`));
     // What the real ride shows: where it fell (or came down flat or cased) and the simulation of the same plan did not,
     // the simulation was too hopeful there: that section is fragile from now on (learned with room to spare).

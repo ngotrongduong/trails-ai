@@ -17,12 +17,25 @@
     rename(id, name) { const m = lib.get(id); if (m) { m.name = String(name).slice(0, 40); lib.put(m); } },
     // (the player's own choice, from the panel, after asking)
     forget(id) { keep.removeItem(LINE + id); writeJSON(LIB, lib.list().filter(o => o.id !== id)); },
-    nextName: () => tx(`Đường ${lib.list().length + 1}`, `Line ${lib.list().length + 1}`),
   };
+  // A line's name: the one the player gave it in the old AI, else one made from its id, the same on every computer and
+  // as the old AI named it (place, what is there, a number: "Đồi Thông 37").
+  const NAME_PLACE = ['Đồi', 'Dốc', 'Suối', 'Rừng', 'Đèo', 'Bãi', 'Cồn', 'Gò', 'Núi', 'Lũng', 'Ghềnh', 'Bờ', 'Trảng', 'Truông', 'Động', 'Mỏm'];
+  const NAME_WHAT = ['Thông', 'Gió', 'Mây', 'Sương', 'Nắng', 'Trăng', 'Cát', 'Rêu', 'Sỏi', 'Lau', 'Tre', 'Đá', 'Hoa', 'Sao', 'Mưa', 'Sóc'];
+  const NAME_PLACE_EN = ['Hill', 'Slope', 'Creek', 'Forest', 'Pass', 'Flat', 'Dune', 'Mound', 'Peak', 'Valley', 'Rapids', 'Bank', 'Meadow', 'Heath', 'Cave', 'Crag'];
+  const NAME_WHAT_EN = ['Pine', 'Wind', 'Cloud', 'Mist', 'Sun', 'Moon', 'Sand', 'Moss', 'Pebble', 'Reed', 'Bamboo', 'Stone', 'Flower', 'Star', 'Rain', 'Squirrel'];
+  function nameOf(id) {
+    const given = (readJSON('trailsai.names', null) || {})[id];
+    if (given) return String(given).slice(0, 40);
+    let h = 2166136261;
+    for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 16777619) >>> 0;
+    const p = h & 15, w = (h >>> 4) & 15, n = 10 + ((h >>> 8) % 90);
+    return tx(`${NAME_PLACE[p]} ${NAME_WHAT[w]} ${n}`, `${NAME_WHAT_EN[w]} ${NAME_PLACE_EN[p]} ${n}`);
+  }
   // A new memory for line route (see buildRoute).
   function newMemory(route) {
     const { start, X, Z, KIND, W, pieces, kinds, length, back } = route;
-    return { format: LINE_FORMAT, version: 3, id: start.id, name: lib.nextName(), line: { start, X: Array.from(X), Z: Array.from(Z), KIND: Array.from(KIND), W: W ? Array.from(W) : null, pieces, kinds, length, back: !!back },
+    return { format: LINE_FORMAT, version: 3, id: start.id, name: nameOf(String(start.id)), line: { start, X: Array.from(X), Z: Array.from(Z), KIND: Array.from(KIND), W: W ? Array.from(W) : null, pieces, kinds, length, back: !!back },
       plan: null, best: null, sim: null, gen: 0, hist: [], fragile: [], rides: [], realBest: 0, setup: null, createdAt: Date.now() };
   }
   // The trick book: what every trick tried off a jump did (see the learner), kept for each set of unlocked tricks
@@ -35,6 +48,8 @@
   // challenges are left out: this AI rides one line of the map at a time.
   function migrateOld() {
     let n = 0;
+    // (the first test build named lines by number: they get their own names)
+    for (const row of lib.list()) if (/^(Đường cũ|Old line|Đường|Line) \d+$/.test(row.name || '')) lib.rename(row.id, nameOf(String(row.id)));
     for (const k of keep.keys()) {
       if (!k.startsWith('trailsai.v2.')) continue;
       const id = k.slice(12);
@@ -42,7 +57,7 @@
       const m = readJSON(k, null), L = m && m.line, P = m && m.plan;
       if (!L || !P || !Array.isArray(L.X) || L.practice || L.drill || L.aim || L.tour !== undefined || !Array.isArray(P.v)) continue;
       const mem = newMemory({ ...L, W: L.W || null });
-      mem.name = tx(`Đường cũ ${++n}`, `Old line ${n}`);
+      n++;
       const hr = i => (Array.isArray(P.hr) ? P.hr[i] : 1.5);
       const TK = { 16: i => ({ s: -1, sr: hr(i) }), 17: i => ({ s: 1, sr: hr(i) }), 18: () => ({ f: 1 }), 19: i => ({ w: -1, wt: hr(i) }), 20: i => ({ w: 1, wt: hr(i) }),
         22: i => ({ f: 1, w: -1, wt: hr(i) }), 23: i => ({ f: 1, w: 1, wt: hr(i) }), 24: () => ({ f: 1, s: -1, sr: 3.3 }), 25: () => ({ f: 1, s: 1, sr: 3.3 }) };

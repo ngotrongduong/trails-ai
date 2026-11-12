@@ -240,6 +240,10 @@ function selftest(P, Q) {
 // A try the game's code fails in (its memory written where KP did not say) counts as a fall there, and the lot is
 // ridden again.
 const kids = new Map();
+// The check of the whole memory (rogue) reads all of it (70 MB, 60-90 ms): after every lot until 30 lots in a row
+// found nothing, then every 6th lot (a page missed in between only makes a few tries ride on from a state not quite
+// right; every ride the AI keeps is ridden again from the start).
+let quiet = 0, lots = 0;
 function rollOne(node, P, jit, a1, a2, keep) {
   let kid = null, kt = 0;
   const E = node ? load(node, P, jit) : (putMem(null), Ep(P, jit));
@@ -260,7 +264,8 @@ function roll(m) {
     m.plans.forEach((P, i) => {
       let r;
       try {
-        const one = rollOne(m.node, P, null, m.a1, m.a2, true);
+        // (jitOnly: a try already ridden, ridden again with the jitters only)
+        const one = m.jitOnly ? { r: { kid: true }, kid: null } : rollOne(m.node, P, null, m.a1, m.a2, true);
         r = one.r;
         if (one.kid) got.push([m.bid + ':' + i, one.kid]);
         if (m.jits && m.jits.length && r.kid) {
@@ -271,8 +276,9 @@ function roll(m) {
       } catch (err) { broke = true; clean = false; r = failed(err); }
       out.push(r);
     });
-    const bad = rogue();
+    const look = broke || quiet < 30 || ++lots % 6 === 0, bad = look ? rogue() : [];
     for (const p of bad) KP.add(p);
+    quiet = bad.length || broke ? 0 : quiet + (look ? 1 : 0);
     if ((!bad.length && !broke) || lot >= 3) { for (const [k, v] of got) kids.set(k, v); return out; }
     for (const [k] of got) kids.delete(k);
   }

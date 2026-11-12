@@ -124,10 +124,12 @@
     set('.name', m ? m.name : tx('Chưa chọn đường', 'No line yet'));
     set('.len', m ? `${m.line.length} m` : '');
     set('.v-sim', b ? `${pts(b.game)}${b.end === 'finish' ? '' : ` · ${b.prog} m`}` : '–');
-    set('.v-real', m && m.realBest ? pts(m.realBest) : '–');
+    set('.v-real', m && m.realBest ? pts(m.realBest) : m && m.realFar ? `${pts(m.realFar.game)} · ${m.realFar.m} m` : '–');
     set('.v-gen', L ? String(L.gen) : '–');
-    const secs = ses.t0 ? (Date.now() - ses.t0) / 1000 : 0;
-    set('.v-rate', L && secs > 5 && L.running ? String(Math.round(ses.tries / secs)) : '–');
+    // tries a second over the last half minute
+    const now = Date.now(), rs = ses.rs = (ses.rs || []).filter(q => now - q[0] <= 30e3).concat([[now, ses.tries]]);
+    const span = (now - rs[0][0]) / 1000, dn = ses.tries - rs[0][1];
+    set('.v-rate', L && L.running && span >= 4 && dn >= 0 ? String(Math.round(dn / span)) : '–');
     const go = $('.go');
     go.textContent = ses.busy ? tx('Đang chuẩn bị…', 'Getting ready…') : ses.want ? tx('■ Dừng', '■ Stop') : tx('▶ Bắt đầu', '▶ Start');
     go.classList.toggle('stop', ses.want); go.disabled = ses.busy;
