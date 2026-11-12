@@ -287,6 +287,21 @@ tricks). New:
   its memory), so this flies on by the measured motion instead of the physics. Measured
   with a run-in 1 m/s slower than planned there: without it the bike cased the second
   jump and fell, with it the line was ridden to the end for 1280 points.
+- **A backflip on a long flight.** Left alone in the air, the game turns the bike with
+  the way it flies ("Follow the arc"). On the 8.6 s flight of Đèo Nắng 79 a backflip went
+  over in about a second, then hung nose down along the fall (-1.1 rad) for 4 s; held
+  only until 5 rad round (the old rule), the bike came down that way and fell. On flights
+  of over 3 s (now in the air plus the time left, flown on as above) the bike is let go
+  only until π + 0.5 rad round, pulled round if it turns too slowly to get there 2.5 s
+  before it lands, and then held at the plan's landing angle. Shorter backflips are as
+  before, so the lessons that have them ride as they did. That jump drops 157 m onto a
+  66° face: in the simulation every trick there still falls (landing impact 8.4 to 8.7
+  against 5.0 for the one landing that holds, no trick and the nose 62° up the face), and
+  "Air control strength" at its top (60, from 18) learned nothing better in 2.5 minutes.
+- **Notes of the real rides.** The last 10 rides in the game are kept (`trailsai.drives`:
+  the line, why it stopped, metres ridden and expected, and each landing's place along
+  the line, metres off it, seconds in the air and grade), to find out afterwards why one
+  ended as it did.
 - **Later: correcting on the way.** If the real ride comes into a section much slower or
   faster than the plan expected, the rest of the line could be planned again from there
   (from a saved state made from the real bike's). Not done yet: the game and the
