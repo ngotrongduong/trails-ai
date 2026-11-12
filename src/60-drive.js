@@ -55,7 +55,9 @@
             `Found a better way: <b>${b.game} points</b>${b.end === 'finish' ? `, to the end in ${sec} s` : `, to ${b.prog} m`}, ${n} tricks, longest combo ×${c}.`));
         },
         saved: () => { ses.lastTries = 0; saveMem(); ui.update(); },
+        round: r => watchRound(r),
       });
+      L.watch = watch.on;
       const setup = riderSetup();
       L.book = loadBook(setup.tricks);
       ses.files = ses.files || await gameFiles();

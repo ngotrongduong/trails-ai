@@ -53,7 +53,7 @@
     panel = document.createElement('div');
     panel.id = 'tai';
     panel.innerHTML = `
-<div class="h"><span class="dot"></span><b>AI Trails</b><button class="mn" title="">–</button></div>
+<div class="h"><span class="dot"></span><b>AI Trails</b><button class="eye" title="">👁</button><button class="mn" title="">–</button></div>
 <div class="b">
   <div class="line"><span class="name"></span><span class="len"></span><button class="sw ren" title="">✎</button></div>
   <div class="stats">
@@ -78,6 +78,7 @@
     document.body.appendChild(panel);
     $('.go').onclick = () => { if (ses.want) stop(); else start(); };
     $('.mn').onclick = () => panel.classList.toggle('min');
+    $('.eye').onclick = () => setWatch(!watch.on);
     $('.drive').onclick = () => setAiDrive(!ses.aiDrive);
     $('.shr').onclick = () => { setShare(!share.on); update(); };
     $('.lang').onclick = () => { lang = lang === 'vi' ? 'en' : 'vi'; try { keep.setItem(LANG, lang); } catch { /* storage blocked */ } update(); };
@@ -120,7 +121,8 @@
     set('.l-share', tx('Chia sẻ video (5 phút/lần)', 'Share a video (every 5 min)'));
     set('.l-lang', tx('Ngôn ngữ', 'Language'));
     set('.l-lib', tx('Thư viện đường', 'Library of lines'));
-    $('.mn').title = tx('Thu gọn', 'Fold'); $('.ren').title = tx('Đổi tên', 'Rename');
+    $('.mn').title = tx('Thu gọn', 'Fold'); $('.ren').title = tx('Đổi tên', 'Rename'); $('.eye').title = tx('Xem AI tập', 'Watch the AI learn');
+    $('.eye').style.color = watch.on ? '#ffd34d' : '';
     set('.name', m ? m.name : tx('Chưa chọn đường', 'No line yet'));
     set('.len', m ? `${m.line.length} m` : '');
     set('.v-sim', b ? `${pts(b.game)}${b.end === 'finish' ? '' : ` · ${b.prog} m`}${rideTricks(b) ? ` · ${rideTricks(b)} trick` : ''}` : '–');

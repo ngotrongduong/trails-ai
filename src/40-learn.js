@@ -277,7 +277,7 @@
           for (let i = 0; i < part.length;) {
             let j = i; while (j < part.length && part[j].nd === part[i].nd) j++;
             const bid = `${++this.bid}`, group = part.slice(i, j);
-            const out = await pool.roll(wi, { node: group[0].nd.n, plans: group.map(c => c.p), a1, a2, bid, jits, jitOnly: !!jitOnly });
+            const out = await pool.roll(wi, { node: group[0].nd.n, plans: group.map(c => c.p), a1, a2, bid, jits, jitOnly: !!jitOnly, trace: !!this.watch && !jitOnly });
             if (jitOnly) group.forEach((c, q) => { c.of.r.worst = out[q].worst; });
             else group.forEach((c, q) => { c.r = out[q]; c.wi = wi; c.key = `${bid}:${q}`; });
             i = j;
@@ -342,9 +342,16 @@
         if (S[k].jump) this.learnBook(k, all);
         for (const c of all) if (c.r.end !== 'riding' && (!bestEnd || beats(c.r, bestEnd.r))) bestEnd = c;
         if (this.on.progress) this.on.progress({ k, K, backs, tries: this.tries, ms: performance.now() - t0 });
-        if (a1 < 0) break;
-        const ok = all.filter(c => c.r.kid).sort((x, y) => this.horizon(y.r, x.r, fr));
+        const ok = a1 < 0 ? [] : all.filter(c => c.r.kid).sort((x, y) => this.horizon(y.r, x.r, fr));
+        // (for the viewer: this section's tries, where each went and how it ended, the ones kept for the next one)
+        const show = kept => {
+          if (this.on.round && this.watch) this.on.round({ gen: this.gen, k, K, backs, tries: this.tries, best: this.best,
+            rides: all.filter(c => c.r.tr).map(c => ({ tr: c.r.tr, end: c.r.end, kid: !!c.r.kid, prog: c.r.prog, round: !!c.r.round, game: c.r.game, kept: kept.includes(c) })) });
+          for (const c of all) delete c.r.tr;
+        };
+        if (a1 < 0) { show(bestEnd ? [bestEnd] : []); break; }
         if (!ok.length) {
+          show([]);
           if (backs >= MAX_BACKS) break;
           const f = (fails[k] = (fails[k] || 0) + 1), back = Math.min(k, [1, 2, 4, 6][Math.min(3, f - 1)]);
           for (let q = k - back; q <= k; q++) widen.set(q, Math.min(4, (widen.get(q) || 1) * 1.8));
@@ -356,6 +363,7 @@
         if (own) { sel.push(own); speeds.add(Math.round(own.r.v)); }
         for (const c of ok) { if (sel.length >= BEAM) break; const v = Math.round(c.r.v); if (!sel.includes(c) && !speeds.has(v)) { speeds.add(v); sel.push(c); } }
         for (const c of ok) { if (sel.length >= BEAM) break; if (!sel.includes(c)) sel.push(c); }
+        show(sel);
         const nodes = new Array(sel.length);
         await Promise.all([...new Set(sel.map(c => c.wi))].map(async wi => {
           const mine = sel.map((c, i) => [c, i]).filter(([c]) => c.wi === wi);

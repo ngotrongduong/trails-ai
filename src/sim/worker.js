@@ -255,10 +255,14 @@ const kids = new Map();
 // found nothing, then every 6th lot (a page missed in between only makes a few tries ride on from a state not quite
 // right; every ride the AI keeps is ridden again from the start).
 let quiet = 0, lots = 0;
-function rollOne(node, P, jit, a1, a2, keep) {
+// tr: where the bike went (the viewer's): every TR_EVERY steps its place along the line, its height and where it is
+// on the map (x, z), four numbers a point
+const TR_EVERY = 3;
+function rollOne(node, P, jit, a1, a2, keep, tr) {
   let kid = null, kt = 0;
-  const E = node ? load(node, P, jit) : (putMem(null), Ep(P, jit));
+  const E = node ? load(node, P, jit) : (putMem(null), Ep(P, jit)), t0 = E.t;
   const stop = (E, s) => {
+    if (tr && E.t > t0 && (E.t - t0) % TR_EVERY === 0) tr.push(+E.rider.at.toFixed(2), +s[1].toFixed(2), +s[0].toFixed(2), +s[2].toFixed(2));
     if (keep && !kid && a1 >= 0 && E.rider.peek(s) >= a1) { kid = save(E); kt = E.t; }
     if (E.rider.idx >= a2) return true;
     return (keep ? !!kid : a1 >= 0 && E.rider.idx >= a1) && !(s[12] > 0) && E.t - Math.max(E.landT, kt) >= 45 && !E.pending;
@@ -276,8 +280,10 @@ function roll(m) {
       let r;
       try {
         // (jitOnly: a try already ridden, ridden again with the jitters only)
-        const one = m.jitOnly ? { r: { kid: true }, kid: null } : rollOne(m.node, P, null, m.a1, m.a2, true);
+        const tr = m.trace && !m.jitOnly ? [] : null;
+        const one = m.jitOnly ? { r: { kid: true }, kid: null } : rollOne(m.node, P, null, m.a1, m.a2, true, tr);
         r = one.r;
+        if (tr) r.tr = tr;
         if (one.kid) got.push([m.bid + ':' + i, one.kid]);
         if (m.jits && m.jits.length && r.kid) {
           let worst = null;
