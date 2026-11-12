@@ -119,12 +119,13 @@ function makeRider(R, H, S, P, jit) {
     { const j = Math.min(N - 2, bi), dx = R.X[j + 1] - R.X[j], dz = R.Z[j + 1] - R.Z[j];
       me.at = j + Math.max(-0.5, Math.min(1.5, ((bx - R.X[j]) * dx + (bz - R.Z[j]) * dz) / (dx * dx + dz * dz || 1))); }
     if (air && !me.wasAir) {
-      // off a lip just passed (3 m or less behind) the jump is that lip's
+      // off a lip just passed (3 m or less behind) the jump is that lip's; else the jump of this section or the one
+      // before (a hop on a landing is still the last jump's). (A plan from the old AI without as: always the latter,
+      // its angles were learned for those sections.)
       me.airSec = me.sec; me.rot = 0; me.let = false; me.qi = 0; me.qc = 0; me.qn = 0; me.qp = -1; me.qo = false;
-      // (a plan from the old AI without as keeps its old way: its angles were learned for those sections)
       const k0 = me.sec - 1;
-      if (P.as === false) { for (let k = me.sec; k >= 0 && k >= me.sec - 1; k--) if (S[k].jump) { me.airSec = k; break; } }
-      else if (k0 >= 0 && S[k0].jump && S[k0].b >= me.idx - 3 && !(S[me.sec].jump && S[me.sec].b <= me.idx + 2)) me.airSec = k0;
+      if (P.as !== false && k0 >= 0 && S[k0].jump && S[k0].b >= me.idx - 3 && !(S[me.sec].jump && S[me.sec].b <= me.idx + 2)) me.airSec = k0;
+      else for (let k = me.sec; k >= 0 && k >= me.sec - 1; k--) if (S[k].jump) { me.airSec = k; break; }
     }
     me.landed = !air && me.wasAir;
     me.wasAir = air;
@@ -157,10 +158,10 @@ function makeRider(R, H, S, P, jit) {
       // tricks that start up the takeoff: a spin wound up with the whip held, a backflip popped with the pedals, the
       // first button trick's buttons held (thrown harder)
       const tk = P.tk[sec];
-      if (tk && onT && S[sec].jump) {
+      if (tk && onT) {
         if (tk.s) whip = tk.s;
         if (tk.f) { pedal = 1; brake = 0; }
-        if (tk.h && tk.q && tk.q.length && idx >= S[sec].b - 2) btn |= BTRICKS[tk.q[0][0]].b | (tk.lf ? BTN.LEFT : 0);
+        if (tk.h && tk.q && tk.q.length && S[sec].jump && idx >= S[sec].b - 2) btn |= BTRICKS[tk.q[0][0]].b | (tk.lf ? BTN.LEFT : 0);
       }
       if (P.lg && P.lg[sec]) lean = P.lg[sec];
     } else {
@@ -179,7 +180,7 @@ function makeRider(R, H, S, P, jit) {
           const a = Math.abs(s[S_.SPIN]);
           if (a >= (tk.sr || 3.3) * 100) me.let = true;
           if (!me.let) whip = tk.s;
-          if (a > 5 && a < (tk.sr || 3.3) * 100 + 20) free = true;
+          if (a > 5 && a < (tk.sf || (tk.sr || 3.3) * 100 + 20)) free = true;
         }
         if (tk.f) {
           // a backflip: let it go over, then bring it to the landing angle. On a flight of over 3 s it is let go only
@@ -192,6 +193,13 @@ function makeRider(R, H, S, P, jit) {
         }
         if (tk.w && s[12] < (tk.wt || 1.5) * 0.25 + J.dt) whip = tk.w;
         if (free) lean = pull;
+        // a held move: buttons held (and a lean, a steer or a whip) while the bike is more than hm.h m above the ground
+        // ahead, as the old AI's moves did
+        const hm = tk.hm;
+        if (hm && !tk.s && !tk.f && !tk.w) {
+          const gnd = Math.max(H[look(3)], H[look(8)]);
+          if (s[12] > 0.1 && by - gnd > hm.h) { btn |= hm.b || 0; if (hm.ln !== undefined) lean = hm.ln; if (hm.st) st = hm.st; if (hm.w) whip = hm.w; }
+        }
         // the button tricks, one after another: each begun once the one before is caught, gap seconds after, and
         // only when it will be caught m seconds before the bike comes down
         const q = tk.q;

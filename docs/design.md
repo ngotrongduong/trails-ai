@@ -38,14 +38,20 @@ section:
 - `lg` the rider's weight on the ground, `sa` steering in the air.
 - `tk` the trick program of a jump:
   - `f` backflip;
-  - `s` spin left/right, let go at `sr` × 100°;
+  - `s` spin left/right, let go at `sr` × 100°, the air angle left alone up to `sf`° round (default `sr` × 100 + 20);
   - `w` whip, let go at `wt` × 0.25 s;
+  - `hm` a held move `{b, ln, st, w, h}`: buttons held, a lean, a steer or a whip while the bike is more than `h` m
+    above the ground ahead (the old AI's moves 1-15; only with no flip, spin or whip);
   - `q` button tricks one after another, `[code, n, gap]`:
     - T tailwhip, B barspin: `n` turns;
     - L table, G T-bog, X X-up: `n` tenths of a second held;
   - `m` seconds of air kept before landing;
   - `lf` throw to the left;
   - `h` the first button trick's buttons held up the takeoff.
+
+A ride in the air belongs to a jump's section: the lip just passed (3 m or less behind) if there is one, else the jump
+of the bike's section or the one before (a hop on a landing is the last jump's). `as: false` (old plans) always takes
+the latter.
 
 A button trick starts only once the one before has been caught (frame, bars and lay back within 0.06 rad), after its
 gap, and only if the bike's flight, flown on from how it flies now, leaves the trick's time plus `m` before landing
@@ -107,7 +113,8 @@ There every try is also ridden 0.3 m/s faster, 0.3 m/s slower and with its trick
   - its trick moves become trick programs;
   - a plan without `pz` gets `pc` 1 everywhere;
   - a plan without `as` keeps its old way of picking a jump's section.
-  Converted plans ride in the new simulation as they did in the old one (checked: gf6cqjb3rr crashes at the same metre with the same 520 points).
+  Converted plans ride in the new simulation exactly as they did in the old one: on all 9 old lines the two riders gave
+  the same controls at every step (checked 2026-11-12). The old manual move (21) is dropped.
 
 ## Riding in the game
 

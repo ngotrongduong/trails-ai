@@ -26,14 +26,14 @@
 
   // ---- the trick book
   // What every trick tried off a jump did: rows [air seconds, trick, landed 0/1]. A trick is one part of a trick
-  // program: F a backflip, S a 360, S2 a 720, W a whip, or a button trick (BTRICKS: T, B, L, G, X). The AI draws the
+  // program: F a backflip, S a 360, S2 a 720, S3 a 1080, W a whip, or a button trick (BTRICKS: T, B, L, G, X). The AI draws the
   // tricks of a program by what they are worth and how often they were landed with that much air (as a bandit picks its
   // arms: a trick little tried gets tries), so it tries everything it may, and more of what works.
   const BOOK_ROWS = 6000;
   // what a trick is worth (Train points and skill points, as landPoints counts them) and the least air it takes
   const TRICK_PARTS = {
     F: { unlock: UNLOCK.flip, worth: 300 + 6 * XP_W, air: 0.8 }, S: { unlock: UNLOCK.spin, worth: 200 + 4 * XP_W, air: 0.7 },
-    S2: { unlock: UNLOCK.spin, worth: 400 + 4 * XP_W + EXTRA_W, air: 1.2 }, W: { unlock: UNLOCK.whip, worth: 100 + 2 * XP_W, air: 0.45 },
+    S2: { unlock: UNLOCK.spin, worth: 400 + 4 * XP_W + EXTRA_W, air: 1.2 }, S3: { unlock: UNLOCK.spin, worth: 600 + 4 * XP_W + 2 * EXTRA_W, air: 1.7 }, W: { unlock: UNLOCK.whip, worth: 100 + 2 * XP_W, air: 0.45 },
     T: { unlock: UNLOCK.tailwhip, worth: 5 * XP_W, air: 0.85 }, B: { unlock: UNLOCK.barspin, worth: 3 * XP_W, air: 0.6 },
     L: { unlock: UNLOCK.table, worth: 5 * XP_W, air: 0.8 }, G: { unlock: UNLOCK.tbog, worth: 3 * XP_W, air: 0.6 }, X: { unlock: UNLOCK.xup, worth: 4 * XP_W, air: 0.7 },
   };
@@ -42,12 +42,14 @@
     if (!tk) return [];
     const out = [];
     if (tk.f) out.push('F');
-    if (tk.s) out.push((tk.sr || 3.3) > 5.5 ? 'S2' : 'S');
+    if (tk.s) out.push((tk.sr || 3.3) > 9 ? 'S3' : (tk.sr || 3.3) > 5.5 ? 'S2' : 'S');
     if (tk.w) out.push('W');
     for (const [c] of tk.q || []) if (!out.includes(c)) out.push(c);
     return out;
   };
-  const GOT_KEY = { F: 'flip', S: 'spin', S2: 'spin', W: 'whip', T: 'tailwhip', B: 'barspin', L: 'table', G: 'tbog', X: 'xup' };
+  const GOT_KEY = { F: 'flip', S: 'spin', S2: 'spin', S3: 'spin', W: 'whip', T: 'tailwhip', B: 'barspin', L: 'table', G: 'tbog', X: 'xup' };
+  // (a 720 or a 1080 that came round less counts as not landed)
+  const gotPart = (got, part) => (got[GOT_KEY[part]] || 0) >= ({ S2: 720, S3: 1080 }[part] || 1);
   function bookWeights(rows, air, mask) {
     const w = {}, near = rows.filter(r => Math.abs(r[0] - air) <= 0.25);
     for (const [c, d] of Object.entries(TRICK_PARTS)) {
@@ -68,7 +70,8 @@
     const tk = {};
     let left = air - 0.35;
     if (want('F') && left > 0.6) { tk.f = 1; left -= 0.35; }
-    if (want('S2') && left > 0.9) { tk.s = Math.random() < 0.5 ? -1 : 1; tk.sr = +(6.6 + Math.random() * 0.6).toFixed(2); left -= 0.6; }
+    if (want('S3') && left > 1.4) { tk.s = Math.random() < 0.5 ? -1 : 1; tk.sr = +(9.9 + Math.random() * 0.6).toFixed(2); left -= 0.9; }
+    else if (want('S2') && left > 0.9) { tk.s = Math.random() < 0.5 ? -1 : 1; tk.sr = +(6.6 + Math.random() * 0.6).toFixed(2); left -= 0.6; }
     else if (want('S') && left > 0.5) { tk.s = Math.random() < 0.5 ? -1 : 1; tk.sr = +(3.0 + Math.random() * 0.6).toFixed(2); left -= 0.3; }
     else if (want('W')) { tk.w = Math.random() < 0.5 ? -1 : 1; tk.wt = +(0.6 + Math.random() * 2).toFixed(2); }
     const q = [];
@@ -265,7 +268,7 @@
         if (!tk || c.same || !r) continue;
         const e = r.jl.find(q => q.k === j), fell = !e || (r.crash && r.crashSec === j);
         if (!e && !ref) continue;
-        for (const part of partsOf(tk)) this.book.push([e ? e.a : ref, part, !fell && e && e.got[GOT_KEY[part]] ? 1 : 0]);
+        for (const part of partsOf(tk)) this.book.push([e ? e.a : ref, part, !fell && e && gotPart(e.got, part) ? 1 : 0]);
       }
       if (this.book.length > BOOK_ROWS) this.book.splice(0, this.book.length - BOOK_ROWS);
       this.bookDirty = true;

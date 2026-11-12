@@ -36,7 +36,7 @@ Chi tiết ở [docs/design.md](docs/design.md). Tóm tắt:
 
 ## Trick
 
-AI tập mọi trick mà tài khoản của bạn đã mở: **backflip, 360/720, whip, tailwhip, barspin, table, T-bog, X-up, 360 table**. AI không bao giờ tự bấm “Unlock tricks”.
+AI tập mọi trick mà tài khoản của bạn đã mở: **backflip, 360/720/1080, whip, tailwhip, barspin, table, T-bog, X-up, 360 table**. AI không bao giờ tự bấm “Unlock tricks”.
 
 - **Nhiều trick một cú nhảy:** backflip cùng 360, rồi một chuỗi trick nút lần lượt (ví dụ table → tailwhip → barspin).
 - **Một trick nhiều lần:** tailwhip ×2, barspin ×3…
@@ -49,7 +49,7 @@ AI tập mọi trick mà tài khoản của bạn đã mở: **backflip, 360/720
 | | Điểm |
 |---|---|
 | Điểm Train của game: Buttery · Clean · Sketchy · Flat/Cased | 160 · 140 · 100 · 50 |
-| Backflip · Whip · mỗi nửa vòng xoay (360 = 200, 720 = 400) | +300 · +100 · +100 |
+| Backflip · Whip · mỗi nửa vòng xoay (360 = 200, 720 = 400, 1080 = 600) | +300 · +100 · +100 |
 | Chuỗi đáp đẹp liên tiếp (Flat/Cased làm mất chuỗi) | × tới 5 |
 | Điểm kỹ năng của game, mỗi loại trick một lần mỗi cú: whip 2, 360 4, backflip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, 360 table +10 | × 25 |
 | Mỗi vòng trick lặp thêm (barspin ×2, tailwhip ×3…) | +15 |

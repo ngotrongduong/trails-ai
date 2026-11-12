@@ -46,6 +46,19 @@
   // library: the line as it was, the plan in the new shape (its speeds, pulls, pumps, angles; its trick a trick
   // program). The old memories stay where they are. Lines of the game's Training, practice lines, joined-up tours and
   // challenges are left out: this AI rides one line of the map at a time.
+  // The old AI's move of a section (its MOVES, by number, and hr) as a trick program: 1-15 held moves (buttons held, a
+  // lean, a steer or a whip, above hr m), 16-17 a 360 let go at hr × 100°, 18 a backflip, 19-20 a whip let go at
+  // hr × 0.25 s, 22-25 a backflip with a whip or a 360 (its angle left alone up to 320° round, as the old AI did). The
+  // manual (21) is not kept.
+  const OLD_HELD = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 },
+    { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
+  function oldMove(mv, hr) {
+    mv |= 0;
+    if (mv >= 1 && mv <= 15) return { hm: { ...OLD_HELD[mv], h: hr } };
+    const o = { 16: { s: -1, sr: hr, sf: 320 }, 17: { s: 1, sr: hr, sf: 320 }, 18: { f: 1 }, 19: { w: -1, wt: hr }, 20: { w: 1, wt: hr },
+      22: { f: 1, w: -1, wt: hr }, 23: { f: 1, w: 1, wt: hr }, 24: { f: 1, s: -1, sr: hr, sf: 320 }, 25: { f: 1, s: 1, sr: hr, sf: 320 } }[mv];
+    return o || null;
+  }
   function migrateOld() {
     let n = 0;
     // (the first test build named lines by number: they get their own names)
@@ -58,10 +71,7 @@
       if (!L || !P || !Array.isArray(L.X) || L.practice || L.drill || L.aim || L.tour !== undefined || !Array.isArray(P.v)) continue;
       const mem = newMemory({ ...L, W: L.W || null });
       n++;
-      const hr = i => (Array.isArray(P.hr) ? P.hr[i] : 1.5);
-      const TK = { 16: i => ({ s: -1, sr: hr(i) }), 17: i => ({ s: 1, sr: hr(i) }), 18: () => ({ f: 1 }), 19: i => ({ w: -1, wt: hr(i) }), 20: i => ({ w: 1, wt: hr(i) }),
-        22: i => ({ f: 1, w: -1, wt: hr(i) }), 23: i => ({ f: 1, w: 1, wt: hr(i) }), 24: () => ({ f: 1, s: -1, sr: 3.3 }), 25: () => ({ f: 1, s: 1, sr: 3.3 }) };
-      const plan = { v: P.v.slice(), pt: P.pt.slice(), pl: P.pl.slice(), pu: P.pu.slice(), tk: P.v.map((_, i) => (TK[P.mv && P.mv[i]] || (() => null))(i)) };
+      const plan = { v: P.v.slice(), pt: P.pt.slice(), pl: P.pl.slice(), pu: P.pu.slice(), tk: P.v.map((_, i) => oldMove(P.mv && P.mv[i], Array.isArray(P.hr) ? P.hr[i] : 1.5)) };
       for (const key of ['vs', 'lg', 'sa', 'ph', 'pk']) if (P[key] !== undefined) plan[key] = P[key];
       // (an old plan without pz pumped where the ground falls away ahead; without as its jumps took the old sections)
       if (!P.pz) plan.pc = P.v.map(() => 1);

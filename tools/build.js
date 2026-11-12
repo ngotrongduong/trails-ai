@@ -101,10 +101,10 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 
 <div class="card">
 <h2>Trick và cách tính điểm</h2>
-<p>AI tập cả 9 trick game có (trong số trick tài khoản của bạn đã mở): backflip, 360/720, whip, tailwhip, barspin, table, T-bog, X-up và 360 table. Ở mỗi cú nhảy nó thử nhiều trick cùng lúc, nối trick này sau trick kia (table rồi tailwhip, barspin hai lần…), chỉ bắt đầu trick khi còn đủ thời gian bay để bắt lại xe trước khi chạm đất.</p>
+<p>AI tập cả 9 trick game có (trong số trick tài khoản của bạn đã mở): backflip, 360/720/1080, whip, tailwhip, barspin, table, T-bog, X-up và 360 table. Ở mỗi cú nhảy nó thử nhiều trick cùng lúc, nối trick này sau trick kia (table rồi tailwhip, barspin hai lần…), chỉ bắt đầu trick khi còn đủ thời gian bay để bắt lại xe trước khi chạm đất.</p>
 <table>
 <tr><td>Điểm Train của game: tiếp đất Buttery · Clean · Sketchy · Flat/Cased</td><td>160 · 140 · 100 · 50</td></tr>
-<tr><td>Backflip · whip · mỗi nửa vòng xoay (360 = 200, 720 = 400)</td><td>+300 · +100 · +100</td></tr>
+<tr><td>Backflip · whip · mỗi nửa vòng xoay (360 = 200, 720 = 400, 1080 = 600)</td><td>+300 · +100 · +100</td></tr>
 <tr><td>Chuỗi tiếp đất đẹp liên tiếp (Flat/Cased làm mất chuỗi)</td><td>× tới 5</td></tr>
 <tr><td>Điểm kỹ năng mỗi loại trick (mỗi loại một lần mỗi cú nhảy)</td><td>whip 2 · 360 4 · backflip 6 · barspin 3 · T-bog 3 · X-up 4 · tailwhip 5 · table 5 · 360 table +10</td></tr>
 <tr><td>AI tính: điểm Train + 25 × điểm kỹ năng + 15 cho mỗi vòng trick lặp thêm</td><td></td></tr>

@@ -34,7 +34,7 @@ function worker() {
   let id = 0;
   return msg => new Promise(res => { waiting = res; ctx.onmessage({ data: { ...msg, id: ++id } }); });
 }
-const words = e => `${e.g}@${e.a}s ${JSON.stringify(Object.fromEntries(Object.entries(e.got).filter(([, v]) => v)))} = ${e.p} (train ${e.train}, xp ${e.xp})`;
+const words = e => `jump ${e.k} at ${e.i} m: ${e.g}@${e.a}s${JSON.stringify(Object.fromEntries(Object.entries(e.got).filter(([, v]) => v)))} = ${e.p} (train ${e.train}, xp ${e.xp})`;
 (async () => {
   const file = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   const route = file.route && file.route.X ? file.route : file.line;
