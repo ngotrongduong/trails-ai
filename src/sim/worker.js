@@ -203,7 +203,8 @@ function snapMem() {
   return { ps, d, len: m.length };
 }
 function putMem(sn) {
-  if (sn) { const have = l.memory.buffer.byteLength; if (have < sn.len) l.memory.grow(Math.ceil((sn.len - have) / 65536)); }
+  // (a state may hold pages past this worker's memory: KP comes from rides in other workers too)
+  if (sn) { const need = Math.max(sn.len, sn.ps.length ? (sn.ps[sn.ps.length - 1] + 1) * PG : 0), have = l.memory.buffer.byteLength; if (have < need) l.memory.grow(Math.ceil((need - have) / 65536)); }
   const m = new Uint8Array(l.memory.buffer), inS = new Set();
   if (sn) for (let i = 0; i < sn.ps.length; i++) { const p = sn.ps[i]; inS.add(p); KP.add(p); m.set(sn.d.subarray(i * PG, i * PG + PG), p * PG); }
   if (clean) { for (const p of KP) if (!inS.has(p)) toBase(m, p); return; }

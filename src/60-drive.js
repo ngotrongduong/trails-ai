@@ -11,7 +11,8 @@
     aiDrive: (() => { try { return keep.getItem(AIDRIVE) !== '0'; } catch { return true; } })(),
     paused: false, pausedAt: null, still: 0, ride: null, last: null, rides: 0, t0: 0, tries: 0, rate: 0, update: false,
   };
-  const workerCount = () => clamp((navigator.hardwareConcurrency || 4) - 2, 2, 8);
+  // learning workers: all the computer's threads but 2 for the game (a worker takes about 220 MB)
+  const workerCount = () => Math.max(2, (navigator.hardwareConcurrency || 4) - 2);
   // the best ride in the simulation, as the memory keeps it (its landings without what only the search needs)
   const keepBest = b => b && { end: b.end, prog: b.prog, game: b.game, train: b.train, xp: b.xp, vAvg: b.vAvg, crashSec: b.crashSec, ticks: b.ticks, offM: b.offM || 0,
     jl: b.jl.map(e => ({ k: e.k, a: e.a, g: e.g, p: e.p, st: e.st || 0, got: e.got })) };

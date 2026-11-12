@@ -8,7 +8,7 @@ Một AI tự học lái **một đường bạn chọn** trong [Trails: The Gam
 
 1. Đưa xe tới **đầu đường** muốn AI học, quay xe theo hướng chạy.
 2. Bấm **▶ Bắt đầu**. AI nhận đường ở chỗ xe đứng rồi vừa học vừa lái:
-   - Nó học trong mô phỏng trên máy bạn, dùng gần hết các luồng CPU.
+   - Nó học trong mô phỏng trên máy bạn, dùng mọi luồng CPU trừ 2 luồng để game chạy mượt (máy 20 luồng: 18 luồng học, khoảng 220 MB RAM mỗi luồng).
    - Nó lái xe thật từ đầu đường bằng cách tốt nhất đang có. Tìm được cách tốt hơn thì dùng ngay, kể cả giữa lượt, nếu phần đường đã qua vẫn đi y như cũ.
 3. Muốn tự lái thì bấm phím lái bất kỳ. AI nhường xe nhưng vẫn học tiếp. Đưa xe về đầu đường rồi đứng yên khoảng 3 giây (và không bấm phím) là AI lái tiếp.
 4. **Đổi đường:** đưa xe tới đầu một đường khác (cách đầu đường cũ từ 25 m) rồi đứng yên khoảng 3 giây. AI lưu đường cũ, mở bộ nhớ của đường mới nếu đã học (chưa học thì bắt đầu học) và học tiếp ở đó.
