@@ -4679,11 +4679,15 @@ onmessage=async e=>{const m=e.data;
     };
     // The run cut into a video in the replay's editor, as a player does, for the game's Creator score (+5 a camera cut,
     // +5 for slow motion in an edit, on top of +15 a replay shared and +10 a title): its "Edit", then "Auto edit" (the
-    // game's own: the longest jump from beside the trail in slow motion, the next from the rider's eyes), then "Cut
-    // here" every 1.2 s as it plays, up to SHARE_CUTS, each one switching between the cameras behind and in the eyes.
-    // The share panel is opened again from the editor's "Share", with the edit in it. Back: the cuts made.
+    // game's own: the longest jump from beside the trail in slow motion, the next from the rider's eyes), then cuts
+    // spread evenly over the video, up to SHARE_CUTS in all, each one switching between the cameras behind and in the
+    // eyes: the editor's keys, Shift + ← → (a second back or on, the video stopped there) and K ("Cut here"), as the
+    // video does not play on its own while the window is hidden. The share panel is opened again from the editor's
+    // "Share", with the edit in it. Back: the cuts made.
     const SHARE_CUTS = 6;
     const replayBtn = (sel, text) => [...document.querySelectorAll(sel + ' button')].find(b => b.textContent.trim() === text);
+    const key = (code, k, shiftKey) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: k, code, shiftKey: !!shiftKey, bubbles: true })); };
+    const segs = () => document.querySelectorAll('.rp-shots-track .rp-seg').length;
     async function editRun() {
       const edit = await until(() => replayBtn('.rp-actions', 'Edit'), 4000);
       if (!edit) return 0;
@@ -4691,13 +4695,20 @@ onmessage=async e=>{const m=e.data;
       const auto = await until(() => replayBtn('.rp-tools', 'Auto edit'), 3000);
       if (!auto) return 0;
       auto.click();
-      let cuts = 1;
-      const cut = replayBtn('.rp-tools', 'Cut here');
-      for (let i = 0; cut && i < SHARE_CUTS - 1; i++) {
-        await new Promise(r => setTimeout(r, 1200));
-        const n = document.querySelectorAll('.rp-shots-track > *').length;
-        cut.click();
-        if (document.querySelectorAll('.rp-shots-track > *').length > n) cuts++;
+      await new Promise(r => setTimeout(r, 300));
+      // the video's length: "0:12.3 of 0:41" under the editor
+      const tm = [...document.querySelectorAll('.rp-time')].map(e => e.textContent.match(/of\s+(\d+):(\d+)/)).find(Boolean);
+      const secs = tm ? +tm[1] * 60 + +tm[2] : 0, step = Math.floor(secs / SHARE_CUTS);
+      let cuts = Math.max(0, segs() - 1);
+      if (step >= 1) {
+        for (let i = 0; i < secs + 2; i++) key('ArrowLeft', 'ArrowLeft', true);
+        for (let i = 1; i < SHARE_CUTS && cuts < SHARE_CUTS; i++) {
+          for (let j = 0; j < step; j++) key('ArrowRight', 'ArrowRight', true);
+          const n = segs();
+          key('KeyK', 'k');
+          await new Promise(r => setTimeout(r, 150));
+          if (segs() > n) cuts++;
+        }
       }
       const share = replayBtn('.rp-tools', 'Share');
       if (share) share.click();
