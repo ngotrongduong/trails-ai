@@ -992,7 +992,7 @@ if (!air) {
 const va = vAt(P, sec, idx), e = va - sp, pm = s[4] < -0.15 ? 0.4 : 1;
 if (e > 0) pedal = Math.min(pm, e * 0.7 + 0.15); else if (e < -0.4 && va < VFREE) brake = Math.min(1, -e * 0.5);
 if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
-if (P.pu && P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || P.ph)) {
+if (P.pu && P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || (P.ph && P.ph[sec]))) {
 if (P.pz && R.PZ) { const pk = P.pk || PUMP0, u = me.at; if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec]; }
 else if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
 }
@@ -1473,6 +1473,7 @@ if(P.vs)Q.vs=S.map((_,i)=>Array.isArray(P.vs[i])?P.vs[i]:null);
 for(const k of ['as','pz','pk'])if(P[k]!==undefined)Q[k]=P[k];
 if(P.lg)Q.lg=S.map((_,i)=>P.lg[i]||0);
 if(P.sa)Q.sa=S.map((_,i)=>P.sa[i]||0);
+if(P.ph)Q.ph=S.map((_,i)=>P.ph[i]||0);
 let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
 let prog=0,progT=0,fell=false;
 for(let t=0;t<18000;t++){
@@ -1671,7 +1672,8 @@ const PLAN_KEYS = ['v', 'pt', 'mv', 'hr', 'pl', 'pu'];
 const num = v => typeof v === 'number' && Number.isFinite(v);
 const partsOk = (P, n) => (P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num)))))
 && (P.lg === undefined || (Array.isArray(P.lg) && P.lg.length === n && P.lg.every(num)))
-&& (P.sa === undefined || (Array.isArray(P.sa) && P.sa.length === n && P.sa.every(num)));
+&& (P.sa === undefined || (Array.isArray(P.sa) && P.sa.length === n && P.sa.every(num)))
+&& (P.ph === undefined || (Array.isArray(P.ph) && P.ph.length === n && P.ph.every(num)));
 const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
 const done = r => r.end === 'về đích' && typeof r.game === 'number';
 const goalN = r => (r.goal ? r.goal.n : 0);
@@ -1687,6 +1689,7 @@ const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6];
 const setLean = (p, k, v) => { if (!p.lg) { if (!v) return; p.lg = p.v.map(() => 0); } p.lg[k] = v; };
 const AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
 const setAirSteer = (p, k, v) => { if (!p.sa) { if (!v) return; p.sa = p.v.map(() => 0); } p.sa[k] = v; };
+const setHillPump = (p, k, v) => { if (!p.ph) { if (!v) return; p.ph = p.v.map(() => 0); } p.ph[k] = v; };
 const aliveAt = r => r.end === 'đang đi' || r.end === 'về đích';
 const BOOK = 'trailsai.trickbook', BOOK_ROWS = 4000;
 function loadBook(mask) {
@@ -1925,6 +1928,7 @@ if (this.secs[k].b >= end) break;
 for (const key of PLAN_KEYS) out[key][k] = P[key][k];
 if (P.vs && P.vs[k]) { if (!out.vs) out.vs = out.v.map(() => null); out.vs[k] = P.vs[k].slice(); }
 if (P.sa && P.sa[k]) setAirSteer(out, k, P.sa[k]);
+if (P.ph && P.ph[k]) setHillPump(out, k, P.ph[k]);
 }
 this.kept = k;
 return out;
@@ -2062,6 +2066,7 @@ for (let k = mem.kept; k < this.secs.length; k++) {
 for (const key of PLAN_KEYS) p[key][k] = b[key][k];
 if (p.vs) p.vs[k] = b.vs && b.vs[k] ? b.vs[k].slice() : null;
 if (p.sa) p.sa[k] = 0;
+if (p.ph) p.ph[k] = 0;
 }
 return p;
 });
@@ -2092,6 +2097,7 @@ if (only) return Array.from({ length: n }, () => only[Math.floor(Math.random() *
 const air = this.airOf(k);
 return this.setup.tricks && air ? bookMoves(this.book, air, n, this.setup.tricks) : null;
 }
+onHill(k) { const s = this.secs[k], K = this.geo && this.geo.KIND; if (!K) return false; for (let i = s.a; i <= s.b; i++) if (K[i] === 'start') return true; return false; }
 secTry(base, k, wide, move) {
 const s = this.secs[k], p = clonePlan(base), D = this.route.aim || this.route.drill, dk = D && (D.mk || D.kind);
 if (!p.vs) p.vs = p.v.map(() => null);
@@ -2107,6 +2113,7 @@ p.v[k] = p.vs[k][n - 1];
 if (Math.random() < (s.jump ? 0.8 : 0.3)) p.pt[k] += gauss() * (s.jump ? 0.12 : 0.04) * wide;
 if (s.jump && Math.random() < 0.2 * wide) p.pl[k] = Math.random() < 0.4 ? 0 : 1 + Math.floor(Math.random() * 5);
 if (Math.random() < 0.2 * wide) p.pu[k] = [0, 0.5, 0.8, 1][Math.floor(Math.random() * 4)];
+if (this.onHill(k) && Math.random() < 0.2 * wide) { setHillPump(p, k, p.ph && p.ph[k] ? 0 : 1); if (p.ph && p.ph[k] && !p.pu[k]) p.pu[k] = 1; }
 if (Math.random() < 0.12 * wide) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
 if (s.jump && move !== undefined && move !== null) {
 p.mv[k] = move;
@@ -2132,12 +2139,14 @@ p.pl[k] = Math.random() < 0.6 ? 1 + Math.floor(Math.random() * 6) : 0;
 if (Math.random() < 0.5) setAirSteer(p, k, AIR_STEERS[Math.floor(Math.random() * AIR_STEERS.length)]);
 }
 p.pu[k] = Math.random() < 0.3 ? [0.5, 0.8, 1][Math.floor(Math.random() * 3)] : 0;
+if (this.onHill(k)) setHillPump(p, k, p.pu[k] && Math.random() < 0.5 ? 1 : 0);
 if (Math.random() < 0.4) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
 return { p };
 }
 firstTries(nd, k, wide, n, wild) {
 const S = this.secs, s = S[k], out = [{ p: clonePlan(nd.plan), same: true }];
 if (nd.plan.v[k] < VFREE || (nd.plan.vs && nd.plan.vs[k])) { const p = clonePlan(nd.plan); if (p.vs) p.vs[k] = null; p.v[k] = 18; out.push({ p }); }
+if (this.onHill(k) && !(nd.plan.ph && nd.plan.ph[k] && nd.plan.pu[k] >= 1)) { const p = clonePlan(nd.plan); setHillPump(p, k, 1); p.pu[k] = 1; out.push({ p }); }
 if (s.jump) {
 for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
 const p = clonePlan(nd.plan), u = p.vs && p.vs[k];
@@ -2173,6 +2182,8 @@ const w = one();
 if (w.lg || p.lg) { if (!p.lg) p.lg = p.v.map(() => 0); p.lg[k] = w.lg ? w.lg[k] : 0; }
 const a = one();
 if (a.sa || p.sa) { if (!p.sa) p.sa = p.v.map(() => 0); p.sa[k] = a.sa ? a.sa[k] : 0; }
+const h = one();
+if (h.ph || p.ph) { if (!p.ph) p.ph = p.v.map(() => 0); p.ph[k] = h.ph ? h.ph[k] : 0; }
 return { p };
 }
 async rollAll(cs, a1, a2) {
@@ -2626,7 +2637,7 @@ ${tl('Mượn kinh nghiệm', 'Borrowed experience')}<b class="k-borrow">–</b>
 <input type="file" accept=".json,application/json" class="file" hidden>
 <div class="row"><button class="b g forget" disabled>${tl('Quên đường này, học lại từ đầu', 'Forget this line, learn it again')}</button></div>
 <div class="row"><button class="b g watchme" ${tt('Khi bạn tự lái trên đường AI đã học hoặc đang học, AI ghi lại tốc độ, chỗ bạn nhấc xe, pump, góc xe khi bay và trick của bạn, rồi thử cách đó trong mô phỏng', 'When you ride a line the AI has learned or is learning, the AI notes your speed, where you lift the bike, your pumping, the pitch in the air and your tricks, then tries your way in the simulation')}>👀</button></div>
-<div class="row"><button class="b g shareme" ${tt('Mỗi lượt AI lái về đích không ngã, cách lần trước ít nhất 10 phút: AI tạo link xem lại lượt đó bằng nút Share của game (hiện trên trang của bạn) và mời mọi người trong chat vào chạy đường đó', 'Every ride the AI takes to the end without a fall, 10 minutes after the last at least: the AI makes a link to watch it with the game’s Share (shown on your profile) and invites everyone in chat to ride that line')}>📣</button></div>
+<div class="row"><button class="b g shareme" ${tt('Mỗi lượt AI lái về đích không ngã, cách lần trước ít nhất 5 phút: AI tạo link xem lại lượt đó bằng nút Share của game (hiện trên trang của bạn) và mời mọi người trong chat vào chạy đường đó', 'Every ride the AI takes to the end without a fall, 5 minutes after the last at least: the AI makes a link to watch it with the game’s Share (shown on your profile) and invites everyone in chat to ride that line')}>📣</button></div>
 <div class="sec">${tl('Bộ não chung', 'Shared brain')}<small>${tl('Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra. Bộ não cũng cho đường mới một cách bắt đầu.', 'A neural network trained on many lines at once, to ride lines it has never seen too. The chosen line is kept apart as its test. The brain also gives new lines a way to start.')}</small></div>
 <div class="kv">
 ${tl('Vòng luyện', 'Rounds')}<b class="b-gen">0</b>
@@ -3212,12 +3223,13 @@ if (p === known || !T.running) return;
 known = p;
 const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
 for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
-for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0)) return;
+for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0) || ((p.ph && p.ph[i]) || 0) !== ((plan.ph && plan.ph[i]) || 0)) return;
 for (const k of ['pz', 'pk', 'as']) if (!same(p[k], plan[k])) return;
 for (const k of PLAN_KEYS) plan[k] = p[k].slice();
 if (p.vs) plan.vs = p.vs.map(q => (q ? q.slice() : null)); else delete plan.vs;
 if (p.lg) plan.lg = p.lg.slice(); else delete plan.lg;
 if (p.sa) plan.sa = p.sa.slice(); else delete plan.sa;
+if (p.ph) plan.ph = p.ph.slice(); else delete plan.ph;
 plan.lp = landSlopes(T.best, secs.length);
 took();
 };
@@ -3786,20 +3798,20 @@ try { keep.setItem(WATCH, watchOn ? '1' : '0'); } catch { /* storage blocked */ 
 showMe();
 say(watchOn ? 'AI sẽ xem bạn lái trên những đường nó biết và học theo.' : 'AI không xem bạn lái nữa.');
 };
-const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3, DRIVES = 'trailsai.drives';
+const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 5 * 60e3, DRIVES = 'trailsai.drives';
 let shareOn = (() => { try { return keep.getItem(SHARE) !== '0'; } catch { return true; } })(), sharing = false;
 const shareAt = () => +(keep.getItem(SHARE_AT) || 0) || 0;
 const press = (code, key) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true })); };
 const until = async (f, ms) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await new Promise(r => setTimeout(r, 250))) { const v = f(); if (v) return v; } return null; };
 const sharePanel = () => { const c = [...document.querySelectorAll('.rp-caps')].find(e => e.textContent === 'Share this run'); return c && c.parentElement; };
 function showShare() {
-$('.shareme').textContent = tx(`📣 Tự chia sẻ lượt chạy đẹp (10 phút/lần): ${shareOn ? 'bật' : 'tắt'}`, `📣 Share good rides (every 10 min): ${shareOn ? 'on' : 'off'}`);
+$('.shareme').textContent = tx(`📣 Tự chia sẻ lượt chạy đẹp (5 phút/lần): ${shareOn ? 'bật' : 'tắt'}`, `📣 Share good rides (every 5 min): ${shareOn ? 'on' : 'off'}`);
 }
 $('.shareme').onclick = () => {
 shareOn = !shareOn;
 try { keep.setItem(SHARE, shareOn ? '1' : '0'); } catch { /* storage blocked */ }
 showShare();
-say(shareOn ? tx('Mỗi lượt AI lái về đích không ngã sẽ được chia sẻ (cách nhau ít nhất 10 phút), kèm lời mời mọi người vào chạy.', 'Every ride the AI takes to the end without a fall is shared (10 minutes apart at least), with an invite for everyone to come and ride.')
+say(shareOn ? tx('Mỗi lượt AI lái về đích không ngã sẽ được chia sẻ (cách nhau ít nhất 5 phút), kèm lời mời mọi người vào chạy.', 'Every ride the AI takes to the end without a fall is shared (5 minutes apart at least), with an invite for everyone to come and ride.')
 : tx('AI không tự chia sẻ lượt chạy nữa.', 'The AI no longer shares its rides.'));
 };
 async function shareRun(title) {
@@ -3837,10 +3849,10 @@ if (ws && ws.readyState === 1 && st && num(st.x) && num(st.z)) {
 ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`.slice(0, 200), invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
 invited = true;
 }
-log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Đã mời mọi người trong chat vào chạy đường này.' : '. Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 10 phút nữa.`,
-`<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Invited everyone in chat to ride this line.' : '. Could not invite in chat (the game is not connected to its server).'} Next share: 10 minutes from now at the earliest.`));
+log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Đã mời mọi người trong chat vào chạy đường này.' : '. Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 5 phút nữa.`,
+`<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Invited everyone in chat to ride this line.' : '. Could not invite in chat (the game is not connected to its server).'} Next share: 5 minutes from now at the earliest.`));
 } catch (err) {
-log(tx(`<b>Chưa chia sẻ được lượt chạy:</b> ${esc(err && err.message || err)}. AI thử lại ở lượt đẹp sau 10 phút nữa.`, `<b>Could not share the ride:</b> ${esc(err && err.message || err)}. The AI tries again on a good ride 10 minutes from now.`));
+log(tx(`<b>Chưa chia sẻ được lượt chạy:</b> ${esc(err && err.message || err)}. AI thử lại ở lượt đẹp sau 5 phút nữa.`, `<b>Could not share the ride:</b> ${esc(err && err.message || err)}. The AI tries again on a good ride 5 minutes from now.`));
 } finally { sharing = false; }
 }
 const lineGeo = new Map();

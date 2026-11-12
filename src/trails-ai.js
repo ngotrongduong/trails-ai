@@ -1258,9 +1258,10 @@
           if (P.pl && P.pl[sec] > 0 && R.KIND[idx] === 'takeoff' && idx >= S[sec].b - P.pl[sec]) btn |= 1;
           // Pump, as hard as the section says. A plan with pz pumps through the dips as the game's Training teaches (the
           // zones R.PZ: from pk[0] m past where one starts to pk[1] m past where it ends); older plans where the ground
-          // 1 to 3 m ahead falls away. Not on the start hill: there the real game throws you off where the simulation
-          // does not.
-          if (P.pu && P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || P.ph)) {
+          // 1 to 3 m ahead falls away. Not on the start hill (there the real game threw the rider off where the
+          // simulation did not), unless the plan has learned to there (P.ph, by section): pumped down a start hill
+          // the bike went 23.3 m/s 80 m down it instead of 21.4 (the game's pump boosts up to 20 m/s).
+          if (P.pu && P.pu[sec] > 0 && (R.KIND[idx] !== 'start' || (P.ph && P.ph[sec]))) {
             if (P.pz && R.PZ) { const pk = P.pk || PUMP0, u = me.at; if (R.PZ.some(z => u >= z[0] + pk[0] && u <= z[1] + pk[1])) pump = P.pu[sec]; }
             else if ((H[look(1)] - H[look(3)]) / 2 > 0.03) pump = P.pu[sec];
           }
@@ -1890,6 +1891,7 @@ function watchPlan(P,until,w){
   for(const k of ['as','pz','pk'])if(P[k]!==undefined)Q[k]=P[k];
   if(P.lg)Q.lg=S.map((_,i)=>P.lg[i]||0);
   if(P.sa)Q.sa=S.map((_,i)=>P.sa[i]||0);
+  if(P.ph)Q.ph=S.map((_,i)=>P.ph[i]||0);
   let s=state();const N=R.length,rider=makeRider(R,H,S,Q),eye=makeBrainRider(R,H,null),me=w?makeBrainRider(R,H,w):null,rows=[];
   let prog=0,progT=0,fell=false;
   for(let t=0;t<18000;t++){
@@ -2118,10 +2120,11 @@ onmessage=async e=>{const m=e.data;
   const num = v => typeof v === 'number' && Number.isFinite(v);
   // vs, a speed for every part of a section, is there only once learning has split a section
   // (and lg, the rider's weight on the ground by section, once learning has tried one; sa, the steering in the air off
-  // each jump, likewise)
+  // each jump, likewise; ph, pumping down the start hill)
   const partsOk = (P, n) => (P.vs === undefined || (Array.isArray(P.vs) && P.vs.length === n && P.vs.every(q => q === null || (Array.isArray(q) && q.length <= 12 && q.every(num)))))
     && (P.lg === undefined || (Array.isArray(P.lg) && P.lg.length === n && P.lg.every(num)))
-    && (P.sa === undefined || (Array.isArray(P.sa) && P.sa.length === n && P.sa.every(num)));
+    && (P.sa === undefined || (Array.isArray(P.sa) && P.sa.length === n && P.sa.every(num)))
+    && (P.ph === undefined || (Array.isArray(P.ph) && P.ph.length === n && P.ph.every(num)));
   const planFits = (p, secs) => p && PLAN_KEYS.every(k => Array.isArray(p[k]) && p[k].length === secs.length) && partsOk(p, secs.length);
   // Ride a beats ride b when it gets further, or as far with more points. Points only decide once rides get as far
   // (in the end, all the way): before, a trick a ride did on an earlier jump made it count over rides that went further.
@@ -2151,6 +2154,8 @@ onmessage=async e=>{const m=e.data;
   // how much a try may steer in the air off a jump toward the line (P.sa, see makeRider), and setting it
   const AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
   const setAirSteer = (p, k, v) => { if (!p.sa) { if (!v) return; p.sa = p.v.map(() => 0); } p.sa[k] = v; };
+  // whether a try pumps down the start hill in section k (P.ph, see makeRider), and setting it
+  const setHillPump = (p, k, v) => { if (!p.ph) { if (!v) return; p.ph = p.v.map(() => 0); } p.ph[k] = v; };
   // a try still riding where it was stopped, or ridden to the end
   const aliveAt = r => r.end === 'đang đi' || r.end === 'về đích';
 
@@ -2455,6 +2460,7 @@ onmessage=async e=>{const m=e.data;
         for (const key of PLAN_KEYS) out[key][k] = P[key][k];
         if (P.vs && P.vs[k]) { if (!out.vs) out.vs = out.v.map(() => null); out.vs[k] = P.vs[k].slice(); }
         if (P.sa && P.sa[k]) setAirSteer(out, k, P.sa[k]);
+        if (P.ph && P.ph[k]) setHillPump(out, k, P.ph[k]);
       }
       // the first section not kept
       this.kept = k;
@@ -2619,6 +2625,7 @@ onmessage=async e=>{const m=e.data;
             for (const key of PLAN_KEYS) p[key][k] = b[key][k];
             if (p.vs) p.vs[k] = b.vs && b.vs[k] ? b.vs[k].slice() : null;
             if (p.sa) p.sa[k] = 0;
+            if (p.ph) p.ph[k] = 0;
           }
           return p;
         });
@@ -2665,6 +2672,8 @@ onmessage=async e=>{const m=e.data;
       const air = this.airOf(k);
       return this.setup.tricks && air ? bookMoves(this.book, air, n, this.setup.tricks) : null;
     }
+    // whether section k has some of the start hill (where pumping is learned apart, P.ph)
+    onHill(k) { const s = this.secs[k], K = this.geo && this.geo.KIND; if (!K) return false; for (let i = s.a; i <= s.b; i++) if (K[i] === 'start') return true; return false; }
     // Section k of base changed about as much as wide says: its speed (one, or by parts), the angle held in the air,
     // the pull, the pump, the move off a jump and its timing, a manual on the flat (on a drill that asks for one).
     secTry(base, k, wide, move) {
@@ -2682,6 +2691,7 @@ onmessage=async e=>{const m=e.data;
       if (Math.random() < (s.jump ? 0.8 : 0.3)) p.pt[k] += gauss() * (s.jump ? 0.12 : 0.04) * wide;
       if (s.jump && Math.random() < 0.2 * wide) p.pl[k] = Math.random() < 0.4 ? 0 : 1 + Math.floor(Math.random() * 5);
       if (Math.random() < 0.2 * wide) p.pu[k] = [0, 0.5, 0.8, 1][Math.floor(Math.random() * 4)];
+      if (this.onHill(k) && Math.random() < 0.2 * wide) { setHillPump(p, k, p.ph && p.ph[k] ? 0 : 1); if (p.ph && p.ph[k] && !p.pu[k]) p.pu[k] = 1; }
       if (Math.random() < 0.12 * wide) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
       if (s.jump && move !== undefined && move !== null) {
         p.mv[k] = move;
@@ -2712,6 +2722,7 @@ onmessage=async e=>{const m=e.data;
         if (Math.random() < 0.5) setAirSteer(p, k, AIR_STEERS[Math.floor(Math.random() * AIR_STEERS.length)]);
       }
       p.pu[k] = Math.random() < 0.3 ? [0.5, 0.8, 1][Math.floor(Math.random() * 3)] : 0;
+      if (this.onHill(k)) setHillPump(p, k, p.pu[k] && Math.random() < 0.5 ? 1 : 0);
       if (Math.random() < 0.4) setLean(p, k, LEANS[Math.floor(Math.random() * LEANS.length)]);
       return { p };
     }
@@ -2722,6 +2733,8 @@ onmessage=async e=>{const m=e.data;
       const S = this.secs, s = S[k], out = [{ p: clonePlan(nd.plan), same: true }];
       // always one try with no speed limit here (VFREE: never brake)
       if (nd.plan.v[k] < VFREE || (nd.plan.vs && nd.plan.vs[k])) { const p = clonePlan(nd.plan); if (p.vs) p.vs[k] = null; p.v[k] = 18; out.push({ p }); }
+      // and on the start hill one pumping all the way down it
+      if (this.onHill(k) && !(nd.plan.ph && nd.plan.ph[k] && nd.plan.pu[k] >= 1)) { const p = clonePlan(nd.plan); setHillPump(p, k, 1); p.pu[k] = 1; out.push({ p }); }
       if (s.jump) {
         for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
           const p = clonePlan(nd.plan), u = p.vs && p.vs[k];
@@ -2760,6 +2773,8 @@ onmessage=async e=>{const m=e.data;
       if (w.lg || p.lg) { if (!p.lg) p.lg = p.v.map(() => 0); p.lg[k] = w.lg ? w.lg[k] : 0; }
       const a = one();
       if (a.sa || p.sa) { if (!p.sa) p.sa = p.v.map(() => 0); p.sa[k] = a.sa ? a.sa[k] : 0; }
+      const h = one();
+      if (h.ph || p.ph) { if (!p.ph) p.ph = p.v.map(() => 0); p.ph[k] = h.ph ? h.ph[k] : 0; }
       return { p };
     }
     // Rides tries cs (each {nd, p}) from their partial rides, spread over the workers; each gets r (its result) and
@@ -3272,7 +3287,7 @@ onmessage=async e=>{const m=e.data;
       <input type="file" accept=".json,application/json" class="file" hidden>
       <div class="row"><button class="b g forget" disabled>${tl('Quên đường này, học lại từ đầu', 'Forget this line, learn it again')}</button></div>
       <div class="row"><button class="b g watchme" ${tt('Khi bạn tự lái trên đường AI đã học hoặc đang học, AI ghi lại tốc độ, chỗ bạn nhấc xe, pump, góc xe khi bay và trick của bạn, rồi thử cách đó trong mô phỏng', 'When you ride a line the AI has learned or is learning, the AI notes your speed, where you lift the bike, your pumping, the pitch in the air and your tricks, then tries your way in the simulation')}>👀</button></div>
-      <div class="row"><button class="b g shareme" ${tt('Mỗi lượt AI lái về đích không ngã, cách lần trước ít nhất 10 phút: AI tạo link xem lại lượt đó bằng nút Share của game (hiện trên trang của bạn) và mời mọi người trong chat vào chạy đường đó', 'Every ride the AI takes to the end without a fall, 10 minutes after the last at least: the AI makes a link to watch it with the game’s Share (shown on your profile) and invites everyone in chat to ride that line')}>📣</button></div>
+      <div class="row"><button class="b g shareme" ${tt('Mỗi lượt AI lái về đích không ngã, cách lần trước ít nhất 5 phút: AI tạo link xem lại lượt đó bằng nút Share của game (hiện trên trang của bạn) và mời mọi người trong chat vào chạy đường đó', 'Every ride the AI takes to the end without a fall, 5 minutes after the last at least: the AI makes a link to watch it with the game’s Share (shown on your profile) and invites everyone in chat to ride that line')}>📣</button></div>
       <div class="sec">${tl('Bộ não chung', 'Shared brain')}<small>${tl('Một mạng nơ-ron luyện trên nhiều đường cùng lúc để lái được cả đường chưa từng thấy. Đường đang chọn được để riêng làm bài kiểm tra. Bộ não cũng cho đường mới một cách bắt đầu.', 'A neural network trained on many lines at once, to ride lines it has never seen too. The chosen line is kept apart as its test. The brain also gives new lines a way to start.')}</small></div>
       <div class="kv">
         ${tl('Vòng luyện', 'Rounds')}<b class="b-gen">0</b>
@@ -3951,12 +3966,13 @@ onmessage=async e=>{const m=e.data;
         known = p;
         const upto = Math.min(secs.length - 1, Math.max(rider.sec, rider.airSec) + 1);
         for (const k of PLAN_KEYS) for (let i = 0; i <= upto; i++) if (p[k][i] !== plan[k][i]) return;
-        for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0)) return;
+        for (let i = 0; i <= upto; i++) if (!same(p.vs && p.vs[i], plan.vs && plan.vs[i]) || ((p.lg && p.lg[i]) || 0) !== ((plan.lg && plan.lg[i]) || 0) || ((p.sa && p.sa[i]) || 0) !== ((plan.sa && plan.sa[i]) || 0) || ((p.ph && p.ph[i]) || 0) !== ((plan.ph && plan.ph[i]) || 0)) return;
         for (const k of ['pz', 'pk', 'as']) if (!same(p[k], plan[k])) return;
         for (const k of PLAN_KEYS) plan[k] = p[k].slice();
         if (p.vs) plan.vs = p.vs.map(q => (q ? q.slice() : null)); else delete plan.vs;
         if (p.lg) plan.lg = p.lg.slice(); else delete plan.lg;
         if (p.sa) plan.sa = p.sa.slice(); else delete plan.sa;
+        if (p.ph) plan.ph = p.ph.slice(); else delete plan.ph;
         plan.lp = landSlopes(T.best, secs.length);
         took();
       };
@@ -4638,13 +4654,13 @@ onmessage=async e=>{const m=e.data;
     };
 
     // ---- sharing a good ride: the owner wants every ride the AI takes to the end without a fall shared for everyone,
-    // and everyone invited to come and ride it, at most once every 10 minutes (when it was last done is kept, so a
+    // and everyone invited to come and ride it, at most once every 5 minutes (when it was last done is kept, so a
     // reload does not share again sooner). The AI does it as a player does: the game's "Share your last run" (L) opens
     // the run in the replay with its share panel; the AI gives it a title, keeps "On your profile" on, makes the link
     // (the game bakes the run and its ground and uploads it, up to a minute or two) and closes the replay (P). Then it
     // invites everyone in the game's chat to the start of the line, the link in the message, as the game's own chat
     // invite sends it ({t: 'chat', text, invite}). The button in the details turns it off and on.
-    const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 10 * 60e3, DRIVES = 'trailsai.drives';
+    const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 5 * 60e3, DRIVES = 'trailsai.drives';
     let shareOn = (() => { try { return keep.getItem(SHARE) !== '0'; } catch { return true; } })(), sharing = false;
     const shareAt = () => +(keep.getItem(SHARE_AT) || 0) || 0;
     const press = (code, key) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key, code, bubbles: true })); };
@@ -4652,13 +4668,13 @@ onmessage=async e=>{const m=e.data;
     // the game's share panel, while it is open
     const sharePanel = () => { const c = [...document.querySelectorAll('.rp-caps')].find(e => e.textContent === 'Share this run'); return c && c.parentElement; };
     function showShare() {
-      $('.shareme').textContent = tx(`📣 Tự chia sẻ lượt chạy đẹp (10 phút/lần): ${shareOn ? 'bật' : 'tắt'}`, `📣 Share good rides (every 10 min): ${shareOn ? 'on' : 'off'}`);
+      $('.shareme').textContent = tx(`📣 Tự chia sẻ lượt chạy đẹp (5 phút/lần): ${shareOn ? 'bật' : 'tắt'}`, `📣 Share good rides (every 5 min): ${shareOn ? 'on' : 'off'}`);
     }
     $('.shareme').onclick = () => {
       shareOn = !shareOn;
       try { keep.setItem(SHARE, shareOn ? '1' : '0'); } catch { /* storage blocked */ }
       showShare();
-      say(shareOn ? tx('Mỗi lượt AI lái về đích không ngã sẽ được chia sẻ (cách nhau ít nhất 10 phút), kèm lời mời mọi người vào chạy.', 'Every ride the AI takes to the end without a fall is shared (10 minutes apart at least), with an invite for everyone to come and ride.')
+      say(shareOn ? tx('Mỗi lượt AI lái về đích không ngã sẽ được chia sẻ (cách nhau ít nhất 5 phút), kèm lời mời mọi người vào chạy.', 'Every ride the AI takes to the end without a fall is shared (5 minutes apart at least), with an invite for everyone to come and ride.')
         : tx('AI không tự chia sẻ lượt chạy nữa.', 'The AI no longer shares its rides.'));
     };
     // the run just ridden, made into a link (its URL back), or an error
@@ -4700,10 +4716,10 @@ onmessage=async e=>{const m=e.data;
           ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`.slice(0, 200), invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
           invited = true;
         }
-        log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Đã mời mọi người trong chat vào chạy đường này.' : '. Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 10 phút nữa.`,
-          `<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Invited everyone in chat to ride this line.' : '. Could not invite in chat (the game is not connected to its server).'} Next share: 10 minutes from now at the earliest.`));
+        log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Đã mời mọi người trong chat vào chạy đường này.' : '. Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 5 phút nữa.`,
+          `<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>${invited ? '. Invited everyone in chat to ride this line.' : '. Could not invite in chat (the game is not connected to its server).'} Next share: 5 minutes from now at the earliest.`));
       } catch (err) {
-        log(tx(`<b>Chưa chia sẻ được lượt chạy:</b> ${esc(err && err.message || err)}. AI thử lại ở lượt đẹp sau 10 phút nữa.`, `<b>Could not share the ride:</b> ${esc(err && err.message || err)}. The AI tries again on a good ride 10 minutes from now.`));
+        log(tx(`<b>Chưa chia sẻ được lượt chạy:</b> ${esc(err && err.message || err)}. AI thử lại ở lượt đẹp sau 5 phút nữa.`, `<b>Could not share the ride:</b> ${esc(err && err.message || err)}. The AI tries again on a good ride 5 minutes from now.`));
       } finally { sharing = false; }
     }
     // the lines the AI knows, by id, with their points: the one learning now, and those it has a lesson for
