@@ -61,10 +61,18 @@
     }
     return w;
   }
+  // Held moves (the old AI's moves 1-15, and a lean either way): buttons held, a lean, a steer or a whip while the bike
+  // is more than h m above the ground ahead. Some lines are ridden only so: n458teqth2 needs full steer in the air off
+  // its first jumps.
+  const OLD_HELD = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 },
+    { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
+  const HELD = OLD_HELD.slice(1).concat([{ ln: 1 }, { ln: -1 }]);
+  const heldMove = h => ({ hm: { ...pick(HELD), h: h !== undefined ? h : +(0.2 + Math.random() * 1.6).toFixed(2) } });
   // A trick program for a jump with air seconds of flight, drawn by the book: some of a backflip, a spin and a whip (a
   // spin and a whip are the same control, so one or the other), then button tricks one after another (each kind once
-  // or more: two barspins, three tailwhips), as many as the air may take.
+  // or more: two barspins, three tailwhips), as many as the air may take. Now and then a held move instead.
   function drawTricks(rows, air, mask) {
+    if (Math.random() < 0.15) return heldMove();
     const w = bookWeights(rows, air, mask), has = c => w[c] > 0;
     const sum = Object.values(w).reduce((a, x) => a + x, 0) || 1, want = c => has(c) && Math.random() < Math.min(0.85, 1.6 * w[c] / sum + 0.08);
     const tk = {};
@@ -90,6 +98,7 @@
   function nudgeTricks(tk, rows, air, mask) {
     if (!tk || Math.random() < 0.15) return drawTricks(rows, air, mask);
     const t = JSON.parse(JSON.stringify(tk));
+    if (t.hm) return Math.random() < 0.7 ? (t.hm.h = +clamp(t.hm.h + gauss() * 0.3, 0, 3).toFixed(2), t) : heldMove(t.hm.h);
     if (t.s && Math.random() < 0.5) t.sr = +clamp(t.sr + gauss() * 0.25, 2.8, 11).toFixed(2);
     if (t.w && Math.random() < 0.5) t.wt = +clamp(t.wt + gauss() * 0.4, 0.3, 3).toFixed(2);
     if (t.q && Math.random() < 0.5) t.m = +clamp((t.m === undefined ? 0.2 : t.m) + gauss() * 0.08, 0, 0.6).toFixed(2);
@@ -195,7 +204,8 @@
         p.pt[k] = Math.random() < 0.5 ? s.pt + r(-0.6, 0.4) : r(-1.2, 0.6);
         p.pl[k] = Math.random() < 0.6 ? 1 + Math.floor(Math.random() * 6) : 0;
         if (Math.random() < 0.5) setPer(p, 'sa', k, pick(AIR_STEERS));
-        p.tk[k] = Math.random() < 0.6 ? null : p.tk[k];
+        const r0 = Math.random();
+        p.tk[k] = r0 < 0.45 ? null : r0 < 0.65 ? heldMove() : p.tk[k];
       }
       p.pu[k] = Math.random() < 0.3 ? pick([0.5, 0.8, 1]) : 0;
       setPer(p, 'pc', k, Math.random() < 0.3 ? 1 : 0);

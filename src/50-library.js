@@ -49,9 +49,7 @@
   // The old AI's move of a section (its MOVES, by number, and hr) as a trick program: 1-15 held moves (buttons held, a
   // lean, a steer or a whip, above hr m), 16-17 a 360 let go at hr × 100°, 18 a backflip, 19-20 a whip let go at
   // hr × 0.25 s, 22-25 a backflip with a whip or a 360 (its angle left alone up to 320° round, as the old AI did). The
-  // manual (21) is not kept.
-  const OLD_HELD = [null, { b: 16 }, { b: 32 }, { b: 48 }, { b: 24 }, { b: 40 }, { b: 8 }, { b: 4, ln: -1 }, { b: 4, ln: 1 }, { w: 1 }, { w: -1 },
-    { b: 64, st: 1 }, { st: 1 }, { st: -1 }, { b: 8, st: 1 }, { b: 12, ln: -1 }];
+  // manual (21) is not kept. (OLD_HELD: see the learner)
   function oldMove(mv, hr) {
     mv |= 0;
     if (mv >= 1 && mv <= 15) return { hm: { ...OLD_HELD[mv], h: hr } };

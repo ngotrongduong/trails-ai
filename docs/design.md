@@ -96,7 +96,10 @@ One sweep goes along the line:
 6. **Check.** The best full ride is ridden again from the start and kept if it beats the held plan. A sweep that finds nothing makes the next one wider.
 
 **Trick book.** Every trick tried off a jump writes a row `[air seconds, trick, landed]` (the last 6000 rows, kept per
-unlock mask). A jump's tricks are drawn like a multi-armed bandit: each trick's worth × how often it was landed with about that much air, plus a bonus for tricks tried little. Only tricks the account has unlocked are drawn, as many as the air takes.
+unlock mask). A jump's tricks are drawn like a multi-armed bandit: each trick's worth × how often it was landed with about that much air, plus a bonus for tricks tried little. Only tricks the account has unlocked are drawn, as many as the air takes. Spins are drawn as 360, 720 or 1080 (a
+720 or 1080 that came round less is booked as not landed). About one draw in seven is a held move instead (`hm`: a steer,
+a lean, a whip or buttons held in the air): some lines are ridden only so (n458teqth2 crashes at 48 m without full steer
+in the air off its first jumps).
 
 **Fragile sections.** A section is marked fragile when the real ride, on the same plan, did worse than the simulation there:
 - it fell where the simulation did not, or
