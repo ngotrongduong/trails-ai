@@ -4683,17 +4683,43 @@ onmessage=async e=>{const m=e.data;
     // spread evenly over the video, up to SHARE_CUTS in all, each one switching between the cameras behind and in the
     // eyes: the editor's keys, Shift + ← → (a second back or on, the video stopped there) and K ("Cut here"), as the
     // video does not play on its own while the window is hidden. The share panel is opened again from the editor's
-    // "Share", with the edit in it. Back: the cuts made.
+    // "Share", with the edit in it. Before it the edit is made into a video (filmRun). Back: {cuts made, filmed}.
     const SHARE_CUTS = 6;
     const replayBtn = (sel, text) => [...document.querySelectorAll(sel + ' button')].find(b => b.textContent.trim() === text);
     const key = (code, k, shiftKey) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: k, code, shiftKey: !!shiftKey, bubbles: true })); };
     const segs = () => document.querySelectorAll('.rp-shots-track .rp-seg').length;
+    // The edit made into a video by the editor's "Video", for the Creator score's +10 a video: the game counts it once
+    // the video is made, so it is not saved (no file comes down). 720p at 30 a second, the quickest the game makes
+    // (about half a minute for a minute's ride); it draws frame by frame and does not need the window shown.
+    const pickOpt = (group, text) => {
+      const g = [...document.querySelectorAll('.rp-group')].find(e => { const n = e.querySelector('.rp-group-name'); return n && n.textContent.startsWith(group); });
+      const b = g && [...g.querySelectorAll('.rp-opt')].find(e => e.textContent.trim() === text && !e.disabled);
+      if (b && !b.classList.contains('on')) b.click();
+    };
+    async function filmRun() {
+      const video = replayBtn('.rp-tools', 'Video');
+      if (!video) return false;
+      video.click();
+      if (!(await until(() => replayBtn('.rp-panel', 'Make video'), 3000))) return false;
+      pickOpt('Size', '720p');
+      pickOpt('Frames a second', '30');
+      // (the game greys out the sizes this browser cannot make, a moment after the panel draws)
+      await new Promise(r => setTimeout(r, 400));
+      const make = replayBtn('.rp-panel', 'Make video');
+      if (!make) return false;
+      make.click();
+      const end = await until(() => replayBtn('.rp-making', 'Back to the edit') || replayBtn('.rp-making', 'Back'), 5 * 60e3);
+      if (!end) { const c = replayBtn('.rp-making', 'Cancel'); if (c) c.click(); await new Promise(r => setTimeout(r, 1000)); return false; }
+      const made = end.textContent.trim() === 'Back to the edit';
+      if (made) end.click();
+      return made;
+    }
     async function editRun() {
       const edit = await until(() => replayBtn('.rp-actions', 'Edit'), 4000);
-      if (!edit) return 0;
+      if (!edit) return { cuts: 0, film: false };
       edit.click();
       const auto = await until(() => replayBtn('.rp-tools', 'Auto edit'), 3000);
-      if (!auto) return 0;
+      if (!auto) return { cuts: 0, film: false };
       auto.click();
       await new Promise(r => setTimeout(r, 300));
       // the video's length: "0:12.3 of 0:41" under the editor
@@ -4708,17 +4734,20 @@ onmessage=async e=>{const m=e.data;
         }
       }
       const cuts = Math.max(0, segs() - 1);
-      const share = replayBtn('.rp-tools', 'Share');
+      let film = false;
+      try { film = await filmRun(); } catch (err) { console.error(err); }
+      // (the editor's "Share" closes the video's panel too, if it is still open)
+      const share = await until(() => replayBtn('.rp-tools', 'Share'), 3000);
       if (share) share.click();
-      return cuts;
+      return { cuts, film };
     }
-    // the run just ridden, cut into a video (editRun) and made into a link: {link, cuts} back, or an error
+    // the run just ridden, cut into a video (editRun) and made into a link: {link, cuts, film} back, or an error
     async function shareRun(title) {
       try {
         press('KeyL', 'l');
         if (!(await until(sharePanel, 8000))) throw new Error(tx('game không mở bảng chia sẻ (cần đang ở trong game và có mạng)', 'the game did not open its share panel (it needs to be riding, online)'));
-        let cuts = 0;
-        try { cuts = await editRun(); } catch (err) { console.error(err); }
+        let ed = { cuts: 0, film: false };
+        try { ed = await editRun(); } catch (err) { console.error(err); }
         if (!(await until(sharePanel, 4000))) throw new Error(tx('game không mở lại bảng chia sẻ sau khi cắt video', 'the game did not open its share panel again after the edit'));
         const field = sharePanel().querySelector('input.rp-field');
         if (field) { field.value = title; field.dispatchEvent(new Event('input', { bubbles: true })); }
@@ -4733,7 +4762,7 @@ onmessage=async e=>{const m=e.data;
         const got = await until(() => { const p = sharePanel(); return p && (p.querySelector('.rp-url') || p.querySelector('.rp-error')); }, 180e3);
         if (!got) throw new Error(tx('3 phút chưa có link', 'no link after 3 minutes'));
         if (got.classList.contains('rp-error')) throw new Error(got.textContent);
-        return { link: 'https://' + got.textContent.trim(), cuts };
+        return { link: 'https://' + got.textContent.trim(), ...ed };
       } finally {
         // (closing the panel closes the replay too; P, the game's Replay key, toggles it, so only when it stays open)
         const p = sharePanel(), x = p && p.querySelector('.rp-panel-close'), shut = () => !document.body.classList.contains('replaying');
@@ -4746,7 +4775,7 @@ onmessage=async e=>{const m=e.data;
       try { keep.setItem(SHARE_AT, String(Date.now())); } catch { /* storage blocked */ }
       try {
         const pts = d.game || 0, st = d.route.start;
-        const { link, cuts } = await shareRun(`AI Trails · ${m} m · ${pts} pts`.slice(0, 60));
+        const { link, cuts, film } = await shareRun(`AI Trails · ${m} m · ${pts} pts`.slice(0, 60));
         const ws = live.ws;
         let invited = false;
         if (ws && ws.readyState === 1 && st && num(st.x) && num(st.z)) {
@@ -4754,7 +4783,8 @@ onmessage=async e=>{const m=e.data;
           ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`.slice(0, 200), invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
           invited = true;
         }
-        const cut = cuts ? tx(` Video đã cắt ${cuts} lần camera, có quay chậm.`, ` The video has ${cuts} camera cuts and slow motion.`) : '';
+        const cut = (cuts ? tx(` Video đã cắt ${cuts} lần camera, có quay chậm.`, ` The video has ${cuts} camera cuts and slow motion.`) : '')
+          + (film ? tx(' Đã làm thành video (720p).', ' Made into a video (720p).') : '');
         log(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>.${cut}${invited ? ' Đã mời mọi người trong chat vào chạy đường này.' : ' Chưa gửi được lời mời vào chat (game chưa kết nối máy chủ).'} Lần chia sẻ sau: sớm nhất 5 phút nữa.`,
           `<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>.${cut}${invited ? ' Invited everyone in chat to ride this line.' : ' Could not invite in chat (the game is not connected to its server).'} Next share: 5 minutes from now at the earliest.`));
       } catch (err) {
@@ -4867,7 +4897,7 @@ onmessage=async e=>{const m=e.data;
       open() { showPanel(true); },
       // the extension found a newer AI on GitHub and kept it for the next page load
       newer() { log(tx('<b>Có bản AI mới.</b> Bấm F5 để dùng (những gì AI đã học vẫn còn nguyên).', '<b>A new AI is out.</b> Press F5 to use it (what the AI has learned stays).')); },
-      cap, seen, learnRide, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain, shareRun, shareGood, editRun,
+      cap, seen, learnRide, trainer, brain, drill, buildRoute, practiceLine, findTracks, onwardChoices, profileOf, ground, engine, live, drive: driveButton, learn: learnButton, gatherJumps, fitBrain, freshBrain, shareRun, shareGood, editRun, filmRun,
     };
     if (window.__taiNewer) window.TrailsAI.newer();
     setTimeout(findTracks, 1500);

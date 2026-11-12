@@ -309,8 +309,11 @@ tricks). New:
   in the game's replay editor (+5 a camera cut, +5 slow motion in an edit, as the game
   counts them on `made` messages): "Edit", "Auto edit", then up to 6 cuts in all spread
   over the video with the editor's keys (Shift + arrows a second at a time, K to cut: the
-  video does not play on its own in a hidden window), and the editor's "Share". "Video" is
-  not pressed: it downloads a file. Shares are now 5 minutes apart at least.
+  video does not play on its own in a hidden window), then "Video" and "Make video" at 720p,
+  30 a second (the quickest: half a minute or so, drawn frame by frame, so a hidden window
+  is no matter), and the editor's "Share". The game counts the +10 a video once it is made
+  (`made` 'export'), so "Save video" is not pressed and no file comes down. Shares are now
+  5 minutes apart at least.
 - **Notes of the real rides.** The last 10 rides in the game are kept (`trailsai.drives`:
   the line, why it stopped, metres ridden and expected, and each landing's place along
   the line, metres off it, seconds in the air and grade), to find out afterwards why one
