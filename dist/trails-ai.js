@@ -3828,17 +3828,15 @@ auto.click();
 await new Promise(r => setTimeout(r, 300));
 const tm = [...document.querySelectorAll('.rp-time')].map(e => e.textContent.match(/of\s+(\d+):(\d+)/)).find(Boolean);
 const secs = tm ? +tm[1] * 60 + +tm[2] : 0, step = Math.floor(secs / SHARE_CUTS);
-let cuts = Math.max(0, segs() - 1);
 if (step >= 1) {
 for (let i = 0; i < secs + 2; i++) key('ArrowLeft', 'ArrowLeft', true);
-for (let i = 1; i < SHARE_CUTS && cuts < SHARE_CUTS; i++) {
+for (let i = 1; i < SHARE_CUTS && segs() - 1 < SHARE_CUTS; i++) {
 for (let j = 0; j < step; j++) key('ArrowRight', 'ArrowRight', true);
-const n = segs();
 key('KeyK', 'k');
 await new Promise(r => setTimeout(r, 150));
-if (segs() > n) cuts++;
 }
 }
+const cuts = Math.max(0, segs() - 1);
 const share = replayBtn('.rp-tools', 'Share');
 if (share) share.click();
 return cuts;

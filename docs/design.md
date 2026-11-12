@@ -298,6 +298,19 @@ tricks). New:
   66° face: in the simulation every trick there still falls (landing impact 8.4 to 8.7
   against 5.0 for the one landing that holds, no trick and the nose 62° up the face), and
   "Air control strength" at its top (60, from 18) learned nothing better in 2.5 minutes.
+- **Pumping down the start hill.** The rider never pumped on the start hill (the real game
+  once threw the rider off there where the simulation did not). It is now a choice learned
+  by section, P.ph (only where the section has some of the start hill): every first round
+  on such a section tries pumping all the way down it (pu 1, ph 1), and changed and drawn
+  tries switch it now and then. Pumped down the start hill of Đèo Nắng 79 the bike went
+  23.3 m/s 80 m down instead of 21.4 (27.8 against 27.0 at its foot: the game's pump boosts
+  up to 20 m/s). Plans without P.ph ride as before.
+- **Sharing for the Creator score.** Before the link is made, the run is cut into a video
+  in the game's replay editor (+5 a camera cut, +5 slow motion in an edit, as the game
+  counts them on `made` messages): "Edit", "Auto edit", then up to 6 cuts in all spread
+  over the video with the editor's keys (Shift + arrows a second at a time, K to cut: the
+  video does not play on its own in a hidden window), and the editor's "Share". "Video" is
+  not pressed: it downloads a file. Shares are now 5 minutes apart at least.
 - **Notes of the real rides.** The last 10 rides in the game are kept (`trailsai.drives`:
   the line, why it stopped, metres ridden and expected, and each landing's place along
   the line, metres off it, seconds in the air and grade), to find out afterwards why one
