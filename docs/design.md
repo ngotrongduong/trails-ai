@@ -154,6 +154,17 @@ There every try is also ridden 0.3 m/s faster, 0.3 m/s slower and with its trick
   that the pieces alone do not tell apart.
   A library line traced by an older version is traced again when it is opened and the game holds all its chunks; if
   it comes out different it is learned afresh.
+- **Forks** (`buildRoutes`, the drive's `findWays` / `wayStep` / `switchWay`). Where a takeoff (or the piece before
+  one) has up to 3 takeoffs or landings within 12 m of the nearest, each is a way on; `buildRoutes` lists the lines
+  each start can go (the builder's laid-out ones first, then the trace by the pieces, then each other pick at its
+  forks), at most 5, none the same way over the ground within 0.5 m. The first is `buildRoute`'s. On the 86 laid-out
+  lines one of the ways follows 26 to the end (the first alone 23).
+  A line with two or more ways keeps them all in its memory (`ways`: each one's line, where it parts from the first,
+  what it got, and, for the ones not being ridden, what it learned). The AI learns each in turn: 3 to 10 sweeps, on
+  while a sweep still gets further. A way the AI has not learned yet starts from the one before (`seedOf` /
+  `seedFrom`): the sections of the part the two share (the same points, and 80 m more, as a section looks ahead) ride
+  as that one learned them. Then it learns on the way that got furthest; within 10 m of it, the one with more show
+  points. A switch due during a real ride waits for the ride to end.
 - **Memory.** Each line has one memory (`trailsai.line.<id>`, format `trails-ai-line` v3). It holds the route, the plan, the best simulated ride, the real rides, the fragile sections and the learning history. The index `trailsai.lines` has one row per line for the library list.
 - **Switching lines.** When the bike stands still 2.5 s at least 25 m from the current line's start, the AI saves the line and opens the one at the bike, from the library or fresh, and learns on there.
 - **Old memories.** The old AI's memories (`trailsai.v2.*` plain lines) are converted once into the new shape, and the originals are kept:

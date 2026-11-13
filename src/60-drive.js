@@ -52,6 +52,7 @@
         }
       }
       if (!mem.line.W) mem.line.W = await widthsOf(mem.line);
+      if (mem.ways === undefined && !mem.line.back && lineLoaded(mem.line)) await findWays(mem);
       ses.mem = mem;
       const L = ses.learner = new Learner({
         // (the learner counts its tries from 0 again every sweep)
@@ -61,7 +62,7 @@
           ui.log(tx(`Tìm được cách đi tốt hơn: <b>${rideShow(b)} điểm trình diễn</b> (${b.game} điểm game)${b.end === 'finish' ? `, về đích trong ${sec} s` : `, tới ${b.prog} m`}, ${n} trick, nhiều nhất ${c} trick một cú${man}.`,
             `Found a better way: <b>${rideShow(b)} show points</b> (${b.game} game points)${b.end === 'finish' ? `, to the end in ${sec} s` : `, to ${b.prog} m`}, ${n} tricks, at most ${c} in one jump${man}.`));
         },
-        saved: () => { ses.lastTries = 0; saveMem(); ui.update(); },
+        saved: () => { ses.lastTries = 0; saveMem(); wayStep(); ui.update(); },
         round: r => watchRound(r),
       });
       L.watch = watch.on;
@@ -69,7 +70,8 @@
       L.book = loadBook(setup.tricks);
       ses.files = ses.files || await gameFiles();
       ui.say(tx('Đang nạp đường vào bộ mô phỏng…', 'Loading the line into the simulation…'));
-      const got = await L.prepare(mem.line, setup, ses.files, workerCount(), mem.plan ? mem : null);
+      const got = await L.prepare(mem.line, setup, ses.files, workerCount(), mem.plan ? mem : ses.seed ? { seed: ses.seed } : null);
+      ses.seed = null;
       const g = L.geo;
       ses.R = { X: g.X, Z: g.Z, KIND: g.KIND, W: g.W, PZ: g.PZ, length: g.X.length }; ses.H = g.H; ses.secs = L.secs;
       if (!mem.plan) lib.put(Object.assign(mem, { plan: L.plan, best: keepBest(L.best), setup, sim: SIM_ID }));
@@ -84,6 +86,79 @@
     stopRide(null);
     if (ses.learner) { saveMem(); ses.learner.close(); }
     ses.learner = null; ses.mem = null; ses.R = null;
+  }
+
+  // ---- the ways a line may go
+  // Where a line forks (see buildRoutes) the AI learns each way in turn in the simulation, WAY_MIN to WAY_MAX sweeps
+  // (on while each sweep still gets further), the part a way shares with the one before ridden as that one learned it
+  // (see seedOf); then it learns on the way that got furthest (within WAY_NEAR m of it: the one with more show points).
+  // The memory keeps every way (ways: its line, what it got, what it learned), so a way that ends at a dead end is
+  // tried once and kept as it was; mem.way is the one being ridden, whose line and learning are the memory's own.
+  const WAY_MIN = 3, WAY_MAX = 10, WAY_NEAR = 10;
+  const WAY_KEEP = ['plan', 'best', 'gen', 'hist', 'fragile', 'jitScale', 'realBest', 'realFar'];
+  const wayFresh = () => ({ plan: null, best: null, gen: 0, hist: [], fragile: [], jitScale: 1, realBest: 0, realFar: undefined });
+  // how far into the line (m) the best ride in the simulation got
+  const metresOf = (L, line) => Math.max(0, (done(L.best) ? L.N : L.best.prog) - (L.N - line.length));
+  const wayBetter = (a, b) => (Math.abs((a.m || 0) - (b.m || 0)) > WAY_NEAR ? (a.m || 0) > (b.m || 0) : (a.show || 0) > (b.show || 0));
+  // (the metre where line a parts from line b)
+  const partsAt = (a, b) => { let i = 0; const n = Math.min(a.X.length, b.X.length); while (i < n && Math.abs(a.X[i] - b.X[i]) < 0.05 && Math.abs(a.Z[i] - b.Z[i]) < 0.05) i++; return i; };
+  async function findWays(mem) {
+    mem.ways = [];
+    let rs = [];
+    try { rs = await buildRoutes(mem.line.start, false); } catch (err) { console.error(err); }
+    if (rs.length < 2) return;
+    const lines = rs.map(r => newMemory(r).line);
+    let cur = lines.findIndex(l => sameLine(l, mem.line));
+    if (cur < 0) { lines.unshift(mem.line); cur = 0; }
+    mem.ways = lines.map((line, i) => ({ line: i === cur ? null : line, at: i ? partsAt(line, lines[0]) : 0, design: line.design || null, length: line.length, tried: false }));
+    mem.way = cur; mem.trying = true;
+    // (a way learned already: its trial is the next sweep)
+    if (mem.plan && (mem.gen || 0) >= WAY_MIN) mem.ways[cur].sweeps = WAY_MAX - 1;
+    ui.log(tx(`Đường này có <b>${mem.ways.length} ngã rẽ</b> (cách đi khác nhau): AI thử học từng ngã trong mô phỏng, lưu kết quả, rồi học tiếp trên ngã đi xa nhất và ghi nhiều điểm nhất.`,
+      `This line <b>forks ${mem.ways.length} ways</b>: the AI learns each way in turn in the simulation, keeps what each got, then learns on the one that goes furthest and scores most.`));
+  }
+  // after each sweep: the way being tried has had enough (or the trials are over): the next way, or the best one
+  function wayStep() {
+    const m = ses.mem, L = ses.learner;
+    if (ses.wayNext !== undefined) { if (!ses.ride) goWay(ses.wayNext); return; }
+    if (!m || !L || !L.best || !m.trying || !m.ways || m.ways.length < 2) return;
+    const w = m.ways[m.way], got = metresOf(L, m.line), still = got > (w.m || 0);
+    w.sweeps = (w.sweeps || 0) + 1;
+    Object.assign(w, { m: got, show: rideShow(L.best), game: L.best.game, end: L.best.end });
+    if (!(done(L.best) || w.sweeps >= WAY_MAX || (w.sweeps >= WAY_MIN && !still))) { lib.put(m); return; }
+    w.tried = true;
+    const n = m.ways.length;
+    ui.log(tx(`Ngã rẽ ${m.way + 1}/${n}${w.at ? ` (rẽ ở mét ${w.at})` : ''}: đi được <b>${w.m} m</b>${w.end === 'finish' ? ' (về đích)' : ''}, ${w.show} điểm trình diễn.`,
+      `Way ${m.way + 1}/${n}${w.at ? ` (parts at ${w.at} m)` : ''}: got <b>${w.m} m</b>${w.end === 'finish' ? ' (to the end)' : ''}, ${w.show} show points.`));
+    const next = m.ways.findIndex(o => !o.tried);
+    if (next >= 0) { goWay(next); return; }
+    m.trying = false;
+    const best = m.ways.reduce((a, o, i) => (wayBetter(o, m.ways[a]) ? i : a), 0);
+    m.ways.forEach((o, i) => { o.chosen = i === best; });
+    ui.log(tx(`<b>Đã thử hết ${n} ngã rẽ.</b> AI chọn ngã ${best + 1}: đi được ${m.ways[best].m} m, ${m.ways[best].show} điểm trình diễn, và học tiếp trên ngã này.`,
+      `<b>All ${n} ways tried.</b> The AI picks way ${best + 1}: ${m.ways[best].m} m, ${m.ways[best].show} show points, and learns on it.`));
+    if (best !== m.way) goWay(best);
+    else lib.put(m);
+  }
+  const goWay = j => switchWay(j).catch(err => { console.error(err); ui.say(err.message || String(err)); ui.log(tx('Lỗi khi đổi ngã rẽ: ', 'Error changing way: ') + esc(err.message || err)); });
+  // The line's memory takes up way j: what it has learned (or nothing yet, but the part it shares with this way), and
+  // its learner opens it. A real ride going on finishes first (see endRide).
+  async function switchWay(j) {
+    if (ses.ride) { ses.wayNext = j; return; }
+    ses.wayNext = undefined;
+    const m = ses.mem, L = ses.learner;
+    if (!m || !L) return;
+    saveMem();
+    const from = m.ways[m.way], to = m.ways[j], st = to.state || wayFresh();
+    from.state = {}; for (const k of WAY_KEEP) from.state[k] = m[k];
+    from.line = m.line;
+    ses.seed = st.plan ? null : L.seedOf();
+    L.close(); ses.learner = null; ses.mem = null; ses.R = null;
+    for (const k of WAY_KEEP) m[k] = st[k];
+    m.line = to.line; m.way = j; to.line = null; delete to.state;
+    lib.put(m);
+    await openLine(m.id);
+    if (ses.want && ses.aiDrive && !ses.paused) nextRide(500);
   }
   async function start() {
     if (ses.want) return;
@@ -244,8 +319,11 @@
       if (lineStale(ses.mem.line)) ui.log(tx('<b>Đường trong game đã khác bộ nhớ</b> (có người sửa). Lần mở sau AI sẽ dò lại.', '<b>The line in the game differs from the memory</b> (someone changed it). The AI traces it again next time it opens it.'));
     }
     saveMem(); ui.update();
-    if (L && why !== 'player' && (why !== 'finish' || (d.expect && d.game < d.expect.game))) compareRide(d, L).catch(err => console.error(err));
+    // (the learner moving on to another way of the line once this ride was over: see switchWay)
+    const switching = ses.wayNext !== undefined;
+    if (L && !switching && why !== 'player' && (why !== 'finish' || (d.expect && d.game < d.expect.game))) compareRide(d, L).catch(err => console.error(err));
     if (record && shareDue()) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
+    if (switching) { goWay(ses.wayNext); return; }
     if (ses.want && ses.aiDrive && !ses.paused) nextRide(why === 'finish' ? 1500 : 2500);
   }
 

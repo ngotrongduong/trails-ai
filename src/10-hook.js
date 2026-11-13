@@ -34,16 +34,16 @@
   // ---------------------------------------------------------------- what the game receives
   // The world data the game gets from its server: the pieces of every chunk of the map near the bike, the starts of
   // the lines, and the game's own socket (for the chat invite after a share).
-  // routes: the lines builders laid out in their spots (a start and the pieces of its jumps in order), for each start the
-  // one with the most pieces: { [start id]: { name, ids } }.
+  // routes: the lines builders laid out in their spots (a start and the pieces of its jumps in order), for each start
+  // those from it, the one with the most pieces first: { [start id]: [{ name, ids }] }.
   const cap = { chunks: new Map(), held: new Set(), starts: [], routes: {}, ws: null };
   const routesOf = spots => {
     const out = {};
     for (const sp of (spots && Array.isArray(spots.list) ? spots.list : [])) for (const l of sp.lines || []) {
       if (!l || typeof l.from !== 'string' || !Array.isArray(l.route) || l.route.length < 2) continue;
-      const o = out[l.from];
-      if (!o || l.route.length > o.ids.length) out[l.from] = { name: String(l.name || sp.name || '').slice(0, 40) || null, ids: l.route.filter(id => typeof id === 'string') };
+      (out[l.from] = out[l.from] || []).push({ name: String(l.name || sp.name || '').slice(0, 40) || null, ids: l.route.filter(id => typeof id === 'string') });
     }
+    for (const k of Object.keys(out)) out[k].sort((a, b) => b.ids.length - a.ids.length);
     return out;
   };
   const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');

@@ -29,6 +29,7 @@
 #tai .jumps .n{color:#97a196;width:28px}
 #tai .jumps .t{flex:1}
 #tai .jumps .p{color:#f0c96a;font-variant-numeric:tabular-nums}
+#tai [hidden]{display:none}
 #tai .g1{color:#7fe08a}#tai .g2{color:#a6e39a}#tai .g3{color:#e5d37a}#tai .g4,#tai .g5{color:#f08a7a}
 #tai .log{max-height:150px;overflow:auto;font-size:12px;color:#c5ccc2}
 #tai .log a{color:#8fc7ff}
@@ -65,6 +66,7 @@
   <button class="go"></button>
   <div class="say"></div>
   <button class="upd" hidden></button>
+  <h4 class="l-ways"></h4><div class="jumps ways"></div>
   <h4 class="l-jumps"></h4><div class="jumps"></div>
   <h4 class="l-last"></h4><div class="last"></div>
   <h4 class="l-log"></h4><div class="log"></div>
@@ -143,7 +145,17 @@
     const J = b ? b.jl : [];
     const jh = J.map((e, i) => `<div><span class="n">#${i + 1}</span><span class="t">${esc(trickText(e.got) || tx('không trick', 'no trick'))} <span class="g${e.g}">${GRADE_VI[e.g]}</span></span><span class="p">${pts(e.p)}</span></div>`).join('')
       || `<div>${tx('Chưa có cú nhảy nào.', 'No jumps yet.')}</div>`;
-    if ($('.jumps').innerHTML !== jh) $('.jumps').innerHTML = jh;
+    if ($('.jumps:not(.ways)').innerHTML !== jh) $('.jumps:not(.ways)').innerHTML = jh;
+    // the ways the line forks into (see the drive): what each got, the one being learned
+    const W = m && m.ways && m.ways.length > 1 ? m.ways : null;
+    $('.l-ways').hidden = $('.ways').hidden = !W;
+    set('.l-ways', tx('Các ngã rẽ của đường', 'The ways this line forks'));
+    const wh = W ? W.map((w, i) => {
+      const cur = i === m.way, what = w.design ? esc(w.design) : w.at ? tx(`rẽ ở mét ${w.at}`, `parts at ${w.at} m`) : tx('đường đầu tiên', 'first way');
+      const st = cur && m.trying ? tx('đang thử', 'trying') : cur ? tx('đang học', 'learning') : w.tried ? `${w.m} m · ${tx('trình diễn', 'show')} ${pts(w.show)}` : tx('chưa thử', 'not tried');
+      return `<div><span class="n">${cur ? '★' : ''}#${i + 1}</span><span class="t">${what} (${w.length} m)${w.chosen ? ' ✓' : ''}</span><span class="p">${st}</span></div>`;
+    }).join('') : '';
+    if ($('.ways').innerHTML !== wh) $('.ways').innerHTML = wh;
     const d = ses.ride, last = ses.last;
     const lh = d ? tx(`Đang lái: ${d.lands.length} cú nhảy, ${pts(d.game)} điểm`, `Riding: ${d.lands.length} jumps, ${pts(d.game)} points`)
       : last ? tx(`${END_WORDS[last.end][0]} sau ${last.m} m, ${pts(last.game)} điểm`, `${END_WORDS[last.end][1]} after ${last.m} m, ${pts(last.game)} points`) : tx('Chưa lái lượt nào.', 'No ride yet.');

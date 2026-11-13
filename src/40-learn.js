@@ -62,7 +62,7 @@
   // The search: partial rides kept at each section (BEAM), tries per section in its first round, how many times a sweep
   // may back up before it gives up for this time; the rider's weight on the ground and the steering in the air a try
   // may give a section.
-  const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12;
+  const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12, SEED_ROOM = 80;
   const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6], AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
   // the ways to pump (pc, see the rider): through the dips, where the ground falls away, where it rises (drawn anew
   // twice as often: it gains the most speed)
@@ -174,6 +174,7 @@
       this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
       const ok = mem && planFits(mem.plan, this.secs);
       this.plan = ok ? clonePlan(mem.plan) : freshPlan(this.secs);
+      if (!ok && mem && mem.seed) this.seedFrom(mem.seed);
       this.gen = ok ? mem.gen || 0 : 0;
       this.hist = ok ? (mem.hist || []).slice(-400) : [];
       this.fragile = new Set(ok ? mem.fragile || [] : []); this.jitScale = ok ? mem.jitScale || 1 : 1; this.bestHolds = undefined;
@@ -186,6 +187,21 @@
       wild.v = wild.v.map(v => clampV(v + 2));
       await this.pool.calib([this.plan, slow, wild]);
       return { fromMemory: !!ok, best: this.best };
+    }
+    // What this line has learned, for another way of it (seedOf), and taken up by that way (seedFrom): the sections of
+    // the part the two share (the same points, and SEED_ROOM m more, as a section looks ahead) ridden the same way.
+    seedOf() { const g = this.geo; return { plan: clonePlan(this.plan), secs: this.secs.map(s => [s.a, s.b]), X: Array.from(g.X), Z: Array.from(g.Z), KIND: Array.from(g.KIND) }; }
+    seedFrom(sd) {
+      const g = this.geo, n = Math.min(g.X.length, sd.X.length);
+      let same = 0;
+      while (same < n && Math.abs(g.X[same] - sd.X[same]) < 0.05 && Math.abs(g.Z[same] - sd.Z[same]) < 0.05 && g.KIND[same] === sd.KIND[same]) same++;
+      const p = this.plan, q = sd.plan;
+      this.secs.forEach((s, k) => {
+        const j = sd.secs.findIndex(o => o[0] === s.a && o[1] === s.b);
+        if (j < 0 || s.b + SEED_ROOM >= same) return;
+        for (const key of ['v', 'pt', 'pl', 'pu', 'tk']) p[key][k] = clonePlan(q[key][j] === undefined ? null : q[key][j]);
+        for (const key of ['vs', 'lg', 'sa', 'ph', 'pc', 'mn']) if (q[key] && q[key][j]) { if (!p[key]) p[key] = p.v.map(() => (key === 'vs' ? null : 0)); p[key][k] = clonePlan(q[key][j]); }
+      });
     }
     stop() { this.running = false; }
     close() { this.stop(); if (this.pool) this.pool.close(); this.pool = null; }

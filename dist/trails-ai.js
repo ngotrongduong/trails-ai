@@ -125,9 +125,9 @@ const routesOf = spots => {
 const out = {};
 for (const sp of (spots && Array.isArray(spots.list) ? spots.list : [])) for (const l of sp.lines || []) {
 if (!l || typeof l.from !== 'string' || !Array.isArray(l.route) || l.route.length < 2) continue;
-const o = out[l.from];
-if (!o || l.route.length > o.ids.length) out[l.from] = { name: String(l.name || sp.name || '').slice(0, 40) || null, ids: l.route.filter(id => typeof id === 'string') };
+(out[l.from] = out[l.from] || []).push({ name: String(l.name || sp.name || '').slice(0, 40) || null, ids: l.route.filter(id => typeof id === 'string') });
 }
+for (const k of Object.keys(out)) out[k].sort((a, b) => b.ids.length - a.ids.length);
 return out;
 };
 const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
@@ -185,6 +185,7 @@ if (playerKeys.onKey) { try { playerKeys.onKey(e); } catch (err) { console.error
 const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
 const TURN_MAX = 2.0, TURN_REACH = 60, TURN_COST = 10, TURN_BEND = 0.75;
 const JUMP_OTHER = 10;
+const FORK_MARGIN = 12, FORK_WAYS = 3, FORK_LINES = 5;
 const GROUND_REACH = 30, GROUND_DH = 0.7, GROUND_LAT = 0.35, GROUND_COST = 5, GUIDE_REACH = 60;
 const LINE_V = 2;
 const assets = () => {
@@ -242,7 +243,7 @@ d = Math.hypot(qx - px, qz - pz);
 }
 return { X, Z, KIND, W };
 }
-async function buildRoute(start, back) {
+async function buildRoute(start, back, opt = {}) {
 const e = await engine();
 const near = allPieces().filter(p => e.kidx[p.kind] !== undefined && Math.hypot(p.x - start.x, p.z - start.z) < 2500);
 const segs = [];
@@ -265,12 +266,14 @@ if (d + hd * 2 < best) { best = d + hd * 2; cur = s; }
 }
 }
 if (!cur) return null;
-const design = !back && cap.routes ? cap.routes[start.id] : null, guide = design ? design.ids : null, byId = new Map(segs.map(s => [s.p.id, s]));
+const design = opt.guide !== undefined ? opt.guide : !back && cap.routes && cap.routes[start.id] ? cap.routes[start.id][0] : null;
+const guide = design ? design.ids : null, byId = new Map(segs.map(s => [s.p.id, s])), pick = opt.pick || [], forks = [];
 let gk = 0;
 const chain = [], used = new Set(), gapAfter = [];
 while (cur && chain.length < 600) {
 chain.push(cur); used.add(cur);
-let nxt = null, score = Infinity, gap = 0;
+let nxt = null, gap = 0;
+const cands = [];
 for (const s of segs) {
 if (used.has(s)) continue;
 const a = back ? s : cur, b = back ? cur : s;
@@ -286,9 +289,21 @@ if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) co
 if (dh > (jump ? 0.75 : 0.65)) continue;
 }
 const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0) + (jump && !land ? JUMP_OTHER : 0);
-if (sc < score) { score = sc; nxt = s; gap = jump || (ground && land) ? 1 : ground ? 2 : 0; }
+cands.push({ s, sc, gap: jump || (ground && land) ? 1 : ground ? 2 : 0 });
 }
-if (!back && cur.p.kind !== 'takeoff') {
+cands.sort((a, b) => a.sc - b.sc);
+let way = 0;
+if (cands.length && !guide) {
+const ways = [cands[0]];
+for (const c of cands.slice(1)) {
+if (ways.length >= FORK_WAYS || c.sc > cands[0].sc + FORK_MARGIN) break;
+if (!['takeoff', 'landing'].includes(c.s.p.kind) || !(cur.p.kind === 'takeoff' || ['takeoff', 'landing'].includes(cands[0].s.p.kind))) continue;
+if (ways.every(w => Math.hypot(w.s.lead[0] - c.s.lead[0], w.s.lead[1] - c.s.lead[1]) > 3)) ways.push(c);
+}
+if (ways.length > 1) { way = Math.min(ways.length - 1, pick[forks.length] || 0); forks.push({ at: chain.length - 1, n: ways.length }); }
+nxt = ways[way].s; gap = ways[way].gap;
+} else if (cands.length) { nxt = cands[0].s; gap = cands[0].gap; }
+if (!back && cur.p.kind !== 'takeoff' && !way) {
 let along = Infinity, on = null;
 for (const s of segs) {
 if (used.has(s) || s.p.kind !== 'takeoff') continue;
@@ -374,7 +389,26 @@ return false;
 const pieces = near.filter(p => nearLine(p.x, p.z, p.kind === 'shape' || p.kind === 'ground' ? 70 : 35));
 const kinds = {};
 chain.forEach(s => { kinds[s.p.kind] = (kinds[s.p.kind] || 0) + 1; });
-return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds, v: LINE_V, design: design ? design.name : null };
+return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds, v: LINE_V, design: design ? design.name : null,
+forks, ids: chain.map(s => s.p.id) };
+}
+async function buildRoutes(start, back) {
+const out = [], seen = new Set(), sameWay = (a, b) => a.length === b.length && Array.from(a.X).every((x, i) => Math.abs(x - b.X[i]) < 0.5 && Math.abs(a.Z[i] - b.Z[i]) < 0.5);
+const add = r => { const k = r && r.ids.join(','); if (!r || seen.has(k)) return false; seen.add(k); if (out.some(o => sameWay(o, r))) return false; out.push(r); return true; };
+for (const d of (!back && cap.routes && cap.routes[start.id]) || []) { if (out.length < FORK_LINES) add(await buildRoute(start, back, { guide: d })); }
+const base = await buildRoute(start, back, { guide: null });
+add(base);
+const q = base ? [{ pick: [], r: base }] : [];
+while (q.length && out.length < FORK_LINES) {
+const { pick, r } = q.shift();
+for (let j = pick.length; j < r.forks.length && out.length < FORK_LINES; j++) {
+for (let a = 1; a < r.forks[j].n && out.length < FORK_LINES; a++) {
+const p = pick.concat(new Array(j - pick.length).fill(0), [a]), v = await buildRoute(start, back, { guide: null, pick: p });
+if (add(v)) q.push({ pick: p, r: v });
+}
+}
+}
+return out;
 }
 async function widthsOf(route) {
 const e = await engine(), segs = [];
@@ -748,7 +782,7 @@ return v;
 const beats = (a, b) => !b || far(a) > far(b) || (far(a) === far(b) && (judged(a) !== judged(b) ? judged(a) > judged(b)
 : Math.abs((a.vAvg || 0) - (b.vAvg || 0)) > 0.05 ? a.vAvg > b.vAvg : a.fit > b.fit + 0.01));
 const aliveAt = r => r.end === 'riding' || r.end === 'finish';
-const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12;
+const BEAM = 6, SWEEP_TRIES = 72, MAX_BACKS = 12, SEED_ROOM = 80;
 const LEANS = [0, 0.3, 0.6, 1, -0.3, -0.6], AIR_STEERS = [0, 0.15, 0.3, 0.5, 0.8, 1];
 const PUMP_WAYS = [0, 1, 2], PUMP_PICK = [0, 1, 2, 2];
 const setPer = (p, key, k, v) => { if (!p[key]) { if (!v) return; p[key] = p.v.map(() => 0); } p[key][k] = v; };
@@ -835,6 +869,7 @@ const meta = await this.pool.init(route, setup, files);
 this.secs = meta.secs; this.N = meta.length; this.geo = meta.geo;
 const ok = mem && planFits(mem.plan, this.secs);
 this.plan = ok ? clonePlan(mem.plan) : freshPlan(this.secs);
+if (!ok && mem && mem.seed) this.seedFrom(mem.seed);
 this.gen = ok ? mem.gen || 0 : 0;
 this.hist = ok ? (mem.hist || []).slice(-400) : [];
 this.fragile = new Set(ok ? mem.fragile || [] : []); this.jitScale = ok ? mem.jitScale || 1 : 1; this.bestHolds = undefined;
@@ -845,6 +880,19 @@ this.secs.forEach((s, k) => { if (s.jump) wild.tk[k] = { f: 1, q: [['B', 1, 0], 
 wild.v = wild.v.map(v => clampV(v + 2));
 await this.pool.calib([this.plan, slow, wild]);
 return { fromMemory: !!ok, best: this.best };
+}
+seedOf() { const g = this.geo; return { plan: clonePlan(this.plan), secs: this.secs.map(s => [s.a, s.b]), X: Array.from(g.X), Z: Array.from(g.Z), KIND: Array.from(g.KIND) }; }
+seedFrom(sd) {
+const g = this.geo, n = Math.min(g.X.length, sd.X.length);
+let same = 0;
+while (same < n && Math.abs(g.X[same] - sd.X[same]) < 0.05 && Math.abs(g.Z[same] - sd.Z[same]) < 0.05 && g.KIND[same] === sd.KIND[same]) same++;
+const p = this.plan, q = sd.plan;
+this.secs.forEach((s, k) => {
+const j = sd.secs.findIndex(o => o[0] === s.a && o[1] === s.b);
+if (j < 0 || s.b + SEED_ROOM >= same) return;
+for (const key of ['v', 'pt', 'pl', 'pu', 'tk']) p[key][k] = clonePlan(q[key][j] === undefined ? null : q[key][j]);
+for (const key of ['vs', 'lg', 'sa', 'ph', 'pc', 'mn']) if (q[key] && q[key][j]) { if (!p[key]) p[key] = p.v.map(() => (key === 'vs' ? null : 0)); p[key][k] = clonePlan(q[key][j]); }
+});
 }
 stop() { this.running = false; }
 close() { this.stop(); if (this.pool) this.pool.close(); this.pool = null; }
@@ -1189,6 +1237,7 @@ ui.log(stale ? tx('Đường này đã bị sửa trong game: AI dò lại và h
 }
 }
 if (!mem.line.W) mem.line.W = await widthsOf(mem.line);
+if (mem.ways === undefined && !mem.line.back && lineLoaded(mem.line)) await findWays(mem);
 ses.mem = mem;
 const L = ses.learner = new Learner({
 progress: p => { const was = ses.lastTries || 0; ses.tries += p.tries >= was ? p.tries - was : p.tries; ses.lastTries = p.tries; ui.update(); },
@@ -1197,7 +1246,7 @@ const n = rideTricks(b), c = rideMost(b), sec = (b.ticks / 60).toFixed(1), man =
 ui.log(tx(`Tìm được cách đi tốt hơn: <b>${rideShow(b)} điểm trình diễn</b> (${b.game} điểm game)${b.end === 'finish' ? `, về đích trong ${sec} s` : `, tới ${b.prog} m`}, ${n} trick, nhiều nhất ${c} trick một cú${man}.`,
 `Found a better way: <b>${rideShow(b)} show points</b> (${b.game} game points)${b.end === 'finish' ? `, to the end in ${sec} s` : `, to ${b.prog} m`}, ${n} tricks, at most ${c} in one jump${man}.`));
 },
-saved: () => { ses.lastTries = 0; saveMem(); ui.update(); },
+saved: () => { ses.lastTries = 0; saveMem(); wayStep(); ui.update(); },
 round: r => watchRound(r),
 });
 L.watch = watch.on;
@@ -1205,7 +1254,8 @@ const setup = riderSetup();
 L.book = loadBook(setup.tricks);
 ses.files = ses.files || await gameFiles();
 ui.say(tx('Đang nạp đường vào bộ mô phỏng…', 'Loading the line into the simulation…'));
-const got = await L.prepare(mem.line, setup, ses.files, workerCount(), mem.plan ? mem : null);
+const got = await L.prepare(mem.line, setup, ses.files, workerCount(), mem.plan ? mem : ses.seed ? { seed: ses.seed } : null);
+ses.seed = null;
 const g = L.geo;
 ses.R = { X: g.X, Z: g.Z, KIND: g.KIND, W: g.W, PZ: g.PZ, length: g.X.length }; ses.H = g.H; ses.secs = L.secs;
 if (!mem.plan) lib.put(Object.assign(mem, { plan: L.plan, best: keepBest(L.best), setup, sim: SIM_ID }));
@@ -1220,6 +1270,66 @@ function closeLine() {
 stopRide(null);
 if (ses.learner) { saveMem(); ses.learner.close(); }
 ses.learner = null; ses.mem = null; ses.R = null;
+}
+const WAY_MIN = 3, WAY_MAX = 10, WAY_NEAR = 10;
+const WAY_KEEP = ['plan', 'best', 'gen', 'hist', 'fragile', 'jitScale', 'realBest', 'realFar'];
+const wayFresh = () => ({ plan: null, best: null, gen: 0, hist: [], fragile: [], jitScale: 1, realBest: 0, realFar: undefined });
+const metresOf = (L, line) => Math.max(0, (done(L.best) ? L.N : L.best.prog) - (L.N - line.length));
+const wayBetter = (a, b) => (Math.abs((a.m || 0) - (b.m || 0)) > WAY_NEAR ? (a.m || 0) > (b.m || 0) : (a.show || 0) > (b.show || 0));
+const partsAt = (a, b) => { let i = 0; const n = Math.min(a.X.length, b.X.length); while (i < n && Math.abs(a.X[i] - b.X[i]) < 0.05 && Math.abs(a.Z[i] - b.Z[i]) < 0.05) i++; return i; };
+async function findWays(mem) {
+mem.ways = [];
+let rs = [];
+try { rs = await buildRoutes(mem.line.start, false); } catch (err) { console.error(err); }
+if (rs.length < 2) return;
+const lines = rs.map(r => newMemory(r).line);
+let cur = lines.findIndex(l => sameLine(l, mem.line));
+if (cur < 0) { lines.unshift(mem.line); cur = 0; }
+mem.ways = lines.map((line, i) => ({ line: i === cur ? null : line, at: i ? partsAt(line, lines[0]) : 0, design: line.design || null, length: line.length, tried: false }));
+mem.way = cur; mem.trying = true;
+if (mem.plan && (mem.gen || 0) >= WAY_MIN) mem.ways[cur].sweeps = WAY_MAX - 1;
+ui.log(tx(`Đường này có <b>${mem.ways.length} ngã rẽ</b> (cách đi khác nhau): AI thử học từng ngã trong mô phỏng, lưu kết quả, rồi học tiếp trên ngã đi xa nhất và ghi nhiều điểm nhất.`,
+`This line <b>forks ${mem.ways.length} ways</b>: the AI learns each way in turn in the simulation, keeps what each got, then learns on the one that goes furthest and scores most.`));
+}
+function wayStep() {
+const m = ses.mem, L = ses.learner;
+if (ses.wayNext !== undefined) { if (!ses.ride) goWay(ses.wayNext); return; }
+if (!m || !L || !L.best || !m.trying || !m.ways || m.ways.length < 2) return;
+const w = m.ways[m.way], got = metresOf(L, m.line), still = got > (w.m || 0);
+w.sweeps = (w.sweeps || 0) + 1;
+Object.assign(w, { m: got, show: rideShow(L.best), game: L.best.game, end: L.best.end });
+if (!(done(L.best) || w.sweeps >= WAY_MAX || (w.sweeps >= WAY_MIN && !still))) { lib.put(m); return; }
+w.tried = true;
+const n = m.ways.length;
+ui.log(tx(`Ngã rẽ ${m.way + 1}/${n}${w.at ? ` (rẽ ở mét ${w.at})` : ''}: đi được <b>${w.m} m</b>${w.end === 'finish' ? ' (về đích)' : ''}, ${w.show} điểm trình diễn.`,
+`Way ${m.way + 1}/${n}${w.at ? ` (parts at ${w.at} m)` : ''}: got <b>${w.m} m</b>${w.end === 'finish' ? ' (to the end)' : ''}, ${w.show} show points.`));
+const next = m.ways.findIndex(o => !o.tried);
+if (next >= 0) { goWay(next); return; }
+m.trying = false;
+const best = m.ways.reduce((a, o, i) => (wayBetter(o, m.ways[a]) ? i : a), 0);
+m.ways.forEach((o, i) => { o.chosen = i === best; });
+ui.log(tx(`<b>Đã thử hết ${n} ngã rẽ.</b> AI chọn ngã ${best + 1}: đi được ${m.ways[best].m} m, ${m.ways[best].show} điểm trình diễn, và học tiếp trên ngã này.`,
+`<b>All ${n} ways tried.</b> The AI picks way ${best + 1}: ${m.ways[best].m} m, ${m.ways[best].show} show points, and learns on it.`));
+if (best !== m.way) goWay(best);
+else lib.put(m);
+}
+const goWay = j => switchWay(j).catch(err => { console.error(err); ui.say(err.message || String(err)); ui.log(tx('Lỗi khi đổi ngã rẽ: ', 'Error changing way: ') + esc(err.message || err)); });
+async function switchWay(j) {
+if (ses.ride) { ses.wayNext = j; return; }
+ses.wayNext = undefined;
+const m = ses.mem, L = ses.learner;
+if (!m || !L) return;
+saveMem();
+const from = m.ways[m.way], to = m.ways[j], st = to.state || wayFresh();
+from.state = {}; for (const k of WAY_KEEP) from.state[k] = m[k];
+from.line = m.line;
+ses.seed = st.plan ? null : L.seedOf();
+L.close(); ses.learner = null; ses.mem = null; ses.R = null;
+for (const k of WAY_KEEP) m[k] = st[k];
+m.line = to.line; m.way = j; to.line = null; delete to.state;
+lib.put(m);
+await openLine(m.id);
+if (ses.want && ses.aiDrive && !ses.paused) nextRide(500);
 }
 async function start() {
 if (ses.want) return;
@@ -1359,8 +1469,10 @@ if (newly.length) ui.log(tx(`Mô phỏng lạc quan quá ở đoạn ${newly.joi
 if (lineStale(ses.mem.line)) ui.log(tx('<b>Đường trong game đã khác bộ nhớ</b> (có người sửa). Lần mở sau AI sẽ dò lại.', '<b>The line in the game differs from the memory</b> (someone changed it). The AI traces it again next time it opens it.'));
 }
 saveMem(); ui.update();
-if (L && why !== 'player' && (why !== 'finish' || (d.expect && d.game < d.expect.game))) compareRide(d, L).catch(err => console.error(err));
+const switching = ses.wayNext !== undefined;
+if (L && !switching && why !== 'player' && (why !== 'finish' || (d.expect && d.game < d.expect.game))) compareRide(d, L).catch(err => console.error(err));
 if (record && shareDue()) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
+if (switching) { goWay(ses.wayNext); return; }
 if (ses.want && ses.aiDrive && !ses.paused) nextRide(why === 'finish' ? 1500 : 2500);
 }
 const SAME = { y: 0.3, v: 0.5, p: 0.15 };
@@ -1622,6 +1734,7 @@ font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8ece6;backgr
 #tai .jumps .n{color:#97a196;width:28px}
 #tai .jumps .t{flex:1}
 #tai .jumps .p{color:#f0c96a;font-variant-numeric:tabular-nums}
+#tai [hidden]{display:none}
 #tai .g1{color:#7fe08a}#tai .g2{color:#a6e39a}#tai .g3{color:#e5d37a}#tai .g4,#tai .g5{color:#f08a7a}
 #tai .log{max-height:150px;overflow:auto;font-size:12px;color:#c5ccc2}
 #tai .log a{color:#8fc7ff}
@@ -1658,6 +1771,7 @@ panel.innerHTML = `
 <button class="go"></button>
 <div class="say"></div>
 <button class="upd" hidden></button>
+<h4 class="l-ways"></h4><div class="jumps ways"></div>
 <h4 class="l-jumps"></h4><div class="jumps"></div>
 <h4 class="l-last"></h4><div class="last"></div>
 <h4 class="l-log"></h4><div class="log"></div>
@@ -1732,7 +1846,16 @@ set('.lang', lang === 'vi' ? 'Tiếng Việt' : 'English');
 const J = b ? b.jl : [];
 const jh = J.map((e, i) => `<div><span class="n">#${i + 1}</span><span class="t">${esc(trickText(e.got) || tx('không trick', 'no trick'))} <span class="g${e.g}">${GRADE_VI[e.g]}</span></span><span class="p">${pts(e.p)}</span></div>`).join('')
 || `<div>${tx('Chưa có cú nhảy nào.', 'No jumps yet.')}</div>`;
-if ($('.jumps').innerHTML !== jh) $('.jumps').innerHTML = jh;
+if ($('.jumps:not(.ways)').innerHTML !== jh) $('.jumps:not(.ways)').innerHTML = jh;
+const W = m && m.ways && m.ways.length > 1 ? m.ways : null;
+$('.l-ways').hidden = $('.ways').hidden = !W;
+set('.l-ways', tx('Các ngã rẽ của đường', 'The ways this line forks'));
+const wh = W ? W.map((w, i) => {
+const cur = i === m.way, what = w.design ? esc(w.design) : w.at ? tx(`rẽ ở mét ${w.at}`, `parts at ${w.at} m`) : tx('đường đầu tiên', 'first way');
+const st = cur && m.trying ? tx('đang thử', 'trying') : cur ? tx('đang học', 'learning') : w.tried ? `${w.m} m · ${tx('trình diễn', 'show')} ${pts(w.show)}` : tx('chưa thử', 'not tried');
+return `<div><span class="n">${cur ? '★' : ''}#${i + 1}</span><span class="t">${what} (${w.length} m)${w.chosen ? ' ✓' : ''}</span><span class="p">${st}</span></div>`;
+}).join('') : '';
+if ($('.ways').innerHTML !== wh) $('.ways').innerHTML = wh;
 const d = ses.ride, last = ses.last;
 const lh = d ? tx(`Đang lái: ${d.lands.length} cú nhảy, ${pts(d.game)} điểm`, `Riding: ${d.lands.length} jumps, ${pts(d.game)} points`)
 : last ? tx(`${END_WORDS[last.end][0]} sau ${last.m} m, ${pts(last.game)} điểm`, `${END_WORDS[last.end][1]} after ${last.m} m, ${pts(last.game)} points`) : tx('Chưa lái lượt nào.', 'No ride yet.');

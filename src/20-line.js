@@ -9,6 +9,9 @@
   const TURN_MAX = 2.0, TURN_REACH = 60, TURN_COST = 10, TURN_BEND = 0.75;
   // Off a takeoff anything but a landing counts JUMP_OTHER m further off (a landing it can reach wins over the next lip).
   const JUMP_OTHER = 10;
+  // A fork: the line could go on to up to FORK_WAYS takeoffs or landings counted within FORK_MARGIN m of the nearest.
+  // The AI tries up to FORK_LINES ways a line may go (see the drive) and learns on the one that rides furthest best.
+  const FORK_MARGIN = 12, FORK_WAYS = 3, FORK_LINES = 5;
   // Between pieces a line may cross bare ground (the game's own lines do, a landing to the next takeoff over the hill):
   // up to GROUND_REACH m on, turned up to GROUND_DH rad, no further to the side than GROUND_LAT a metre on, counted as
   // GROUND_COST m further off than a piece that follows on at once. Off the end of a piece onto a landing so is a drop.
@@ -76,7 +79,10 @@
   }
   // The line from start (x, z, heading) along the pieces the game has loaded; back: ridden the wrong way round, from
   // start back along the pieces that lead to it (a landing then ridden up as a takeoff, a takeoff down as a landing).
-  async function buildRoute(start, back) {
+  // opt.guide: the laid-out line to follow ({ name, ids }; null none; left out, the start's longest one). opt.pick:
+  // at the n-th fork the line meets (see FORK_MARGIN), the pick[n]-th way (0: the nearest, as the default line goes).
+  // The route carries its forks (where in its chain, how many ways) and its pieces' ids in order (ids).
+  async function buildRoute(start, back, opt = {}) {
     const e = await engine();
     const near = allPieces().filter(p => e.kidx[p.kind] !== undefined && Math.hypot(p.x - start.x, p.z - start.z) < 2500);
     const segs = [];
@@ -100,12 +106,14 @@
       }
     }
     if (!cur) return null;
-    const design = !back && cap.routes ? cap.routes[start.id] : null, guide = design ? design.ids : null, byId = new Map(segs.map(s => [s.p.id, s]));
+    const design = opt.guide !== undefined ? opt.guide : !back && cap.routes && cap.routes[start.id] ? cap.routes[start.id][0] : null;
+    const guide = design ? design.ids : null, byId = new Map(segs.map(s => [s.p.id, s])), pick = opt.pick || [], forks = [];
     let gk = 0;
     const chain = [], used = new Set(), gapAfter = [];
     while (cur && chain.length < 600) {
       chain.push(cur); used.add(cur);
-      let nxt = null, score = Infinity, gap = 0;
+      let nxt = null, gap = 0;
+      const cands = [];
       for (const s of segs) {
         if (used.has(s)) continue;
         // (back: the piece s whose end leads onto this one, as forward this one would go on to s)
@@ -128,11 +136,25 @@
         }
         const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0) + (jump && !land ? JUMP_OTHER : 0);
         // (gap: 1 a flight, off a takeoff or dropping off the end of something onto a landing; 2 bare ground)
-        if (sc < score) { score = sc; nxt = s; gap = jump || (ground && land) ? 1 : ground ? 2 : 0; }
+        cands.push({ s, sc, gap: jump || (ground && land) ? 1 : ground ? 2 : 0 });
       }
+      cands.sort((a, b) => a.sc - b.sc);
+      // A fork: other takeoffs or landings it could go on to, counted at most FORK_MARGIN m further off than the
+      // nearest, each over 3 m from the ones before it (not the same jump laid twice). Not on a laid-out line.
+      let way = 0;
+      if (cands.length && !guide) {
+        const ways = [cands[0]];
+        for (const c of cands.slice(1)) {
+          if (ways.length >= FORK_WAYS || c.sc > cands[0].sc + FORK_MARGIN) break;
+          if (!['takeoff', 'landing'].includes(c.s.p.kind) || !(cur.p.kind === 'takeoff' || ['takeoff', 'landing'].includes(cands[0].s.p.kind))) continue;
+          if (ways.every(w => Math.hypot(w.s.lead[0] - c.s.lead[0], w.s.lead[1] - c.s.lead[1]) > 3)) ways.push(c);
+        }
+        if (ways.length > 1) { way = Math.min(ways.length - 1, pick[forks.length] || 0); forks.push({ at: chain.length - 1, n: ways.length }); }
+        nxt = ways[way].s; gap = ways[way].gap;
+      } else if (cands.length) { nxt = cands[0].s; gap = cands[0].gap; }
       // A takeoff laid on top of a flat, part way along it: the bike rides up it there, whatever lies past it
       // (cur.cut: how far along the flat its foot is).
-      if (!back && cur.p.kind !== 'takeoff') {
+      if (!back && cur.p.kind !== 'takeoff' && !way) {
         let along = Infinity, on = null;
         for (const s of segs) {
           if (used.has(s) || s.p.kind !== 'takeoff') continue;
@@ -225,7 +247,30 @@
     const pieces = near.filter(p => nearLine(p.x, p.z, p.kind === 'shape' || p.kind === 'ground' ? 70 : 35));
     const kinds = {};
     chain.forEach(s => { kinds[s.p.kind] = (kinds[s.p.kind] || 0) + 1; });
-    return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds, v: LINE_V, design: design ? design.name : null };
+    return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds, v: LINE_V, design: design ? design.name : null,
+      forks, ids: chain.map(s => s.p.id) };
+  }
+  // The ways a line from start may go: each line laid out from it (longest first), the line by the pieces, then that
+  // line taking another way at one fork after another (breadth first: the first fork's other ways, then the second's,
+  // ...), as long as each is another line; at most FORK_LINES in all. The first is buildRoute(start, back)'s.
+  async function buildRoutes(start, back) {
+    // (another line: other pieces, and not the same way over the ground within half a metre)
+    const out = [], seen = new Set(), sameWay = (a, b) => a.length === b.length && Array.from(a.X).every((x, i) => Math.abs(x - b.X[i]) < 0.5 && Math.abs(a.Z[i] - b.Z[i]) < 0.5);
+    const add = r => { const k = r && r.ids.join(','); if (!r || seen.has(k)) return false; seen.add(k); if (out.some(o => sameWay(o, r))) return false; out.push(r); return true; };
+    for (const d of (!back && cap.routes && cap.routes[start.id]) || []) { if (out.length < FORK_LINES) add(await buildRoute(start, back, { guide: d })); }
+    const base = await buildRoute(start, back, { guide: null });
+    add(base);
+    const q = base ? [{ pick: [], r: base }] : [];
+    while (q.length && out.length < FORK_LINES) {
+      const { pick, r } = q.shift();
+      for (let j = pick.length; j < r.forks.length && out.length < FORK_LINES; j++) {
+        for (let a = 1; a < r.forks[j].n && out.length < FORK_LINES; a++) {
+          const p = pick.concat(new Array(j - pick.length).fill(0), [a]), v = await buildRoute(start, back, { guide: null, pick: p });
+          if (add(v)) q.push({ pick: p, r: v });
+        }
+      }
+    }
+    return out;
   }
   // Half the width of the piece under each point of a line kept from before lines carried it: the widest piece whose
   // way passes within 2 m of the point, else 0.

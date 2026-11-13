@@ -36,6 +36,7 @@ Chi tiết ở [docs/design.md](docs/design.md). Tóm tắt:
 
 - **Đọc đường.** AI đọc các chi tiết của đường từ dữ liệu game: dốc xuất phát, mép nhảy, dốc đáp, mô pump, cua. Nó nối chúng thành một lộ trình chia từng mét. Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
 - **Đi đúng thiết kế của track.** Nếu người xây track đã vẽ sẵn đường trong spot của họ (các đường có tên, ví dụ “Big hits”), AI đi đúng thứ tự các cú nhảy đó. Nếu không, AI tự nối: lăn qua đất trống giữa các chi tiết, thả từ dốc xuất phát xuống dốc đáp, và **rẽ trên không** khi dốc đáp nằm lệch hướng mép nhảy (tới 115°). Ở những cú rẽ đó AI bẻ lái ngay khi đang bay. Đo trên 86 đường người xây vẽ sẵn trên bản đồ: AI đi đúng 520/535 cú nhảy (cách cũ: 109). Đường đã học bằng cách cũ sẽ được dò lại khi mở; nếu khác thì học lại từ đầu.
+- **Thử từng ngã rẽ.** Ở chỗ đường rẽ nhánh (một mép nhảy có hai dốc đáp, hay một điểm xuất phát có nhiều đường vẽ sẵn), AI liệt kê tới 5 cách đi. Nó học từng cách trong mô phỏng, mỗi cách 3–10 lượt (học tiếp chừng nào còn đi xa thêm). Phần đường chung với cách trước được đi đúng như cách trước đã học, nên không phải học lại. AI lưu kết quả từng cách: đi được bao nhiêu mét, bao nhiêu điểm trình diễn. Ngã nào cụt thì thua, và AI học tiếp trên ngã đi xa nhất. Nếu hai ngã xa gần bằng nhau (chênh dưới 10 m) thì nó chọn ngã ghi nhiều điểm hơn. Bảng điều khiển có mục “Các ngã rẽ của đường” cho thấy từng ngã.
 - **Mô phỏng thật.** Mỗi luồng chạy đúng file vật lý (WebAssembly) của game, nên cách đi nào chạy được trong mô phỏng thì ngoài game cũng chạy y như vậy. Trạng thái của xe được lưu ở đầu mỗi đoạn. Nhờ vậy thử một cách mới ở mét 800 chỉ tốn vài mét chạy.
 - **Kế hoạch.** Mỗi đoạn có vài con số: tốc độ (có thể chia phần), góc xe khi bay, nhấc xe trước mép, pump mạnh bao nhiêu và pump kiểu nào, dồn người, đánh lái trên không, có đi manual không. Cú nhảy có thêm **chương trình trick**.
 
@@ -151,7 +152,7 @@ An AI that teaches itself to ride **one line you choose** in Trails: The Game:
 - It learns by trial and error inside the game's own physics (WebAssembly in Web Workers), on your own computer.
 - It rides your real bike from the line's start, ride after ride, using its best plan so far.
 
-It follows the track as it was built: a line its builder laid out in their spot jump by jump, otherwise the pieces joined over bare ground, drops and jumps that turn in the air (the AI steers in flight there).
+It follows the track as it was built: a line its builder laid out in their spot jump by jump, otherwise the pieces joined over bare ground, drops and jumps that turn in the air (the AI steers in flight there). Where a line forks (a lip with two landings, two lines laid out from one start) the AI learns each way in turn in the simulation, keeps what each got, and goes on with the one that gets furthest and scores most; a way that runs into a dead end is tried once and kept as it was.
 
 Every trick your account has unlocked is practised, as many as the air allows: several tricks in one jump, the same trick more than once (double barspins, triple tailwhips). Each line's memory goes into a library in your browser. Take the bike to another line's start and the AI saves the old line, opens the new one and carries on there.
 
