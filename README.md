@@ -64,7 +64,8 @@ AI tập cả 9 trick của game mà tài khoản của bạn đã mở: **barsp
 | Điểm Train của game: Buttery · Clean · Sketchy · Flat/Cased | 160 · 140 · 100 · 50 |
 | Backflip · Whip · mỗi nửa vòng xoay (360 = 200, 720 = 400, 1080 = 600) | +300 · +100 · +100 |
 | Chuỗi đáp đẹp liên tiếp (Flat/Cased làm mất chuỗi) | × tới 5 |
-| Điểm kỹ năng của game, mỗi loại trick một lần mỗi cú: whip 2, 360 4, backflip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, 360 table +10 | × 25 |
+| Điểm kỹ năng của game (bảng Tricks), mỗi loại trick một lần mỗi cú: whip 2, 360 4, backflip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, 360 table +10 | × 25 |
+| Manual: mỗi 5 m (mỗi manual từ 1 giây trở lên) | 1 điểm kỹ năng × 25 |
 
 Trick giữ nút (table, T-bog, X-up) game chỉ tính một lần mỗi cú nhảy, dù giữ bao lâu. Tailwhip và barspin thì mỗi vòng được đếm riêng.
 
@@ -75,16 +76,16 @@ Mỗi lượt chạy là một màn trình diễn kỹ năng. **Mỗi cú nhảy
 | Mỗi cú nhảy | Điểm |
 |---|---|
 | Cú đáp: Buttery · Clean · Sketchy · Flat · Cased | 160 · 140 · 100 · 50 · 0 |
-| Mỗi trick (theo độ khó; mỗi vòng đều tính: 720 = hai 360, tailwhip ×3 = ba tailwhip): backflip 450 · 360 300 · whip 150 · tailwhip 125 · table 125 · X-up 100 · barspin 75 · T-bog 75 · 360 table +250 | cộng lại |
+| Mỗi trick theo độ khó, bằng 50 × điểm kỹ năng của game (mỗi vòng đều tính: 720 = hai 360, tailwhip ×3 = ba tailwhip): backflip 300 · tailwhip 250 · table 250 · 360 200 · X-up 200 · barspin 150 · T-bog 150 · whip 100 · 360 table +500 | cộng lại |
 | Hệ số combo cho tổng điểm trick: thêm 0,5 cho mỗi **loại** trick sau loại đầu, thêm 0,25 cho mỗi lần lặp lại | × (1 + 0,5 × (số loại − 1) + 0,25 × số lần lặp) |
 
 Ví dụ với cú đáp Clean:
 
 | Cú nhảy | Cách tính | Điểm |
 |---|---|---|
-| Backflip | 140 + 450 | 590 |
-| Backflip + 360 + tailwhip | 140 + 875 × 2 | 1.890 |
-| Backflip + 720 + tailwhip ×2 + barspin | 140 + 1.375 × 3 | 4.265 |
+| Backflip | 140 + 300 | 440 |
+| Backflip + 360 + tailwhip | 140 + 750 × 2 | 1.640 |
+| Backflip + 720 + tailwhip ×2 + barspin | 140 + 1.350 × 3 | 4.190 |
 
 Cả lượt chạy cộng thêm:
 

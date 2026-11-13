@@ -82,7 +82,9 @@
     if (ses.want) return;
     if (!live.ex || !live.g) { ui.say(tx('AI chưa gắn được vào game. Hãy tải lại trang game.', "The AI is not hooked into the game. Reload the game's page.")); return; }
     ses.want = true; ses.paused = false; ui.update();
-    try { await openLine(ses.mem ? ses.mem.id : null); } catch (err) { ses.want = false; ui.say(err.message || String(err)); ui.update(); return; }
+    // (the line open before, unless the bike has been taken elsewhere since: then the line it is at)
+    const me = bikeNow(), st = ses.mem && ses.mem.line.start, here = !!st && (!me || Math.hypot(me.x - st.x, me.z - st.z) < MOVED);
+    try { await openLine(here ? ses.mem.id : null); } catch (err) { ses.want = false; ui.say(err.message || String(err)); ui.update(); return; }
     const L = ses.learner;
     if (!L.running) L.run().catch(err => { console.error(err); ui.log(tx('Lỗi khi học: ', 'Error while learning: ') + esc(err.message || err)); });
     ui.say(ses.aiDrive ? tx('AI đang học và lái. Bấm phím lái bất kỳ để lấy lại xe.', 'The AI is learning and riding. Press any ride key to take the bike back.') : tx('AI đang học ở nền (không lái xe thật).', 'The AI is learning in the background (not riding for real).'));
@@ -106,7 +108,7 @@
   let rideTimer = 0;
   function nextRide(ms) { clearTimeout(rideTimer); rideTimer = setTimeout(rideOnce, ms); }
   // still lying where the last ride fell: the game's own "Ride again" (R) resets its bail screen too
-  async function getUp() { if (!(liveState()[13] > 0)) return; key('KeyR', 'r'); await sleep(500); }
+  async function getUp() { if (!(liveState()[13] > 0)) return; ses.aiMoved = Date.now(); key('KeyR', 'r'); await sleep(500); ses.aiMoved = Date.now(); }
   async function rideOnce() {
     if (!ses.want || !ses.aiDrive || ses.paused || ses.busy || share.busy || ses.ride || !ses.learner || !ses.R) return;
     if (ses.update && ses.rides > 0) { applyUpdate(); return; }
@@ -128,11 +130,13 @@
     const st = ses.mem.line.start, L = ses.learner;
     live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
     live.ex.trails_game_reset(live.g);
+    ses.aiMoved = Date.now();
     if (inviteDue()) try { inviteNow(ui.log); } catch (err) { console.error(err); }
     const R = ses.R, N = R.length, plan = clonePlan(L.plan), rider = makeRider(R, ses.H, ses.secs, plan);
-    const d = ses.ride = { plan, plan0: clonePlan(plan), tr: [], swapT: -1, setup: riderSetup(), rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, man: 0, manCur: 0, manLong: 0, expect: L.best };
-    // (a manual held a second or more, as the game keeps them: counted in ticks)
-    const manEnd = () => { if (d.manCur >= 60) { d.man += d.manCur; d.manLong = Math.max(d.manLong, d.manCur); } d.manCur = 0; };
+    const d = ses.ride = { plan, plan0: clonePlan(plan), tr: [], swapT: -1, setup: riderSetup(), rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, man: 0, manCur: 0, manLong: 0, manM: 0, manMCur: 0, expect: L.best };
+    // (a manual held a second or more, as the game keeps them: counted in ticks, and in metres for the game's skill
+    // point every 5 m)
+    const manEnd = () => { if (d.manCur >= 60) { d.man += d.manCur; d.manLong = Math.max(d.manLong, d.manCur); d.manM += Math.round(d.manMCur); } d.manCur = 0; d.manMCur = 0; };
     d.manSec = () => { if (d.manCur) manEnd(); return +(d.man / 60).toFixed(1); };
     // a newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
     // gets the states the simulation scored, so its score holds for the rest of this ride too
@@ -153,7 +157,7 @@
         const s = liveState(), t = d.t;
         if (d.seq === null) d.seq = s[16];
         if (s[13] > 0) { setTimeout(() => endRide('crash'), 0); return null; }
-        if (s[46] > 0) d.manCur++; else if (d.manCur) manEnd();
+        if (s[46] > 0) { d.manCur++; d.manMCur += Math.abs(s[8]) / 60; } else if (d.manCur) manEnd();
         if (s[16] !== d.seq) {
           d.seq = s[16];
           if ((s[15] | 0) > 0) { const lp = landPoints(s, d.streak); d.streak = lp.streak; d.pending = { t, e: { k: rider.airSec, i: rider.idx, a: +s[14].toFixed(2), g: lp.g, p: lp.p, train: lp.train, xp: lp.xp, got: lp.got } }; }
@@ -203,7 +207,8 @@
     const L = ses.learner, m = Math.max(0, d.rider.idx - (L ? L.N - ses.mem.line.length : 0));
     if (why === 'finish') live.drive = { hold: true, step: () => [0, 127, 0, 0, 0, 0, 0] };
     ses.rides++;
-    const man = d.manSec ? d.manSec() : 0;
+    const man = d.manSec ? d.manSec() : 0, manXp = Math.floor((d.manM || 0) / 5);
+    d.xp += manXp; d.game += XP_W * manXp;
     const rec = { at: Date.now(), end: why, m, game: d.game, train: d.train, xp: d.xp, man, lands: d.lands.map(e => [e.k, e.g, e.p, trickText(e.got)]), swaps: d.swaps };
     ses.last = rec;
     const record = why === 'finish' && !!ses.mem && d.game > (ses.mem.realBest || 0);
@@ -276,6 +281,23 @@
     if (had || ses.aiDrive) ui.say(tx('Bạn đang cầm lái, AI vẫn học tiếp. Đưa xe tới đầu đường (đường này hay đường khác) rồi đứng yên 3 giây: AI sẽ lái tiếp.', 'You have the bike; the AI goes on learning. Take it to the start of a line (this one or another) and stand still 3 seconds: the AI rides on.'));
     ui.update();
   };
+  // The bike gone far in a moment, and not by the AI: the player took it to another line through the game itself (the
+  // map, a start's Ride button, a friend's invite), with no ride key pressed. Taken as the player taking the bike, so
+  // the AI does not put it back at this line's start, and opens the line it is at once it stands still there. (Not
+  // within 1.5 s of the AI moving it, nor back at this line's start, where the game puts it after a fall.)
+  const JUMP = 40;
+  setInterval(() => {
+    const me = bikeNow(), was = ses.lastPos;
+    ses.lastPos = me ? { x: me.x, z: me.z } : null;
+    if (!ses.want || ses.paused || !ses.aiDrive || !ses.mem || !me || !was || Date.now() - (ses.aiMoved || 0) < 1500) return;
+    const st = ses.mem.line.start;
+    if (Math.hypot(me.x - was.x, me.z - was.z) < JUMP || Math.hypot(me.x - st.x, me.z - st.z) < 2 * START_NEAR) return;
+    stopRide('player'); clearTimeout(rideTimer);
+    if (live.drive && live.drive.hold) live.drive = null;
+    ses.paused = true; ses.still = 0; ses.pausedAt = was;
+    ui.log(tx('Xe được đưa tới chỗ khác: AI chờ xe đứng yên ở đó rồi học và lái đường ở chỗ đó.', 'The bike was taken somewhere else: once it stands still there, the AI learns and rides the line there.'));
+    ui.update();
+  }, 500);
   // Twice a second, while the AI is on but does not hold the bike (the player has it, or it only learns): a bike stood
   // still 2.5 s, no key pressed for 2 s, at the start of this line takes the AI back to riding; somewhere else (25 m or
   // more from where the player took it and from this line's start), it is on another line, which the AI opens.

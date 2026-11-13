@@ -106,9 +106,9 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <tr><td>Điểm Train của game: tiếp đất Buttery · Clean · Sketchy · Flat/Cased</td><td>160 · 140 · 100 · 50</td></tr>
 <tr><td>Backflip · whip · mỗi nửa vòng xoay (360 = 200, 720 = 400, 1080 = 600)</td><td>+300 · +100 · +100</td></tr>
 <tr><td>Chuỗi tiếp đất đẹp liên tiếp (Flat/Cased làm mất chuỗi)</td><td>× tới 5</td></tr>
-<tr><td>Điểm kỹ năng mỗi loại trick (mỗi loại một lần mỗi cú nhảy)</td><td>whip 2 · 360 4 · backflip 6 · barspin 3 · T-bog 3 · X-up 4 · tailwhip 5 · table 5 · 360 table +10</td></tr>
+<tr><td>Điểm kỹ năng mỗi loại trick (mỗi loại một lần mỗi cú nhảy)</td><td>whip 2 · 360 4 · backflip 6 · barspin 3 · T-bog 3 · X-up 4 · tailwhip 5 · table 5 · 360 table +10 · manual 1 mỗi 5 m</td></tr>
 <tr><td>AI tính: điểm Train + 25 × điểm kỹ năng + 15 cho mỗi vòng trick lặp thêm</td><td></td></tr>
-<tr><td>AI học theo <b>điểm trình diễn</b>: mỗi cú nhảy chấm riêng = cú đáp + tổng điểm trick × (1 + 0,5 mỗi loại trick thêm + 0,25 mỗi lần lặp)</td><td>backflip 450 · 360 300 · whip 150 · tailwhip 125 · table 125 · X-up 100 · barspin 75 · T-bog 75</td></tr>
+<tr><td>AI học theo <b>điểm trình diễn</b>: mỗi cú nhảy chấm riêng = cú đáp + tổng điểm trick × (1 + 0,5 mỗi loại trick thêm + 0,25 mỗi lần lặp)</td><td>50 × điểm kỹ năng: backflip 300 · tailwhip 250 · table 250 · 360 200 · X-up 200 · barspin 150 · T-bog 150 · whip 100</td></tr>
 <tr><td>Cả lượt: mỗi loại kỹ năng đã dùng · mỗi giây giữ manual</td><td>+300 · +60</td></tr>
 <tr><td>Phạt: mỗi giây chạy · mỗi cú cased · mỗi mét lệch ra ngoài đường</td><td>−20 · −200 · −60</td></tr>
 <tr><td>Lệch khỏi mép nhảy để né cú nhảy</td><td>lượt đó dừng, như bị ngã</td></tr>

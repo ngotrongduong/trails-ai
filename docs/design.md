@@ -70,7 +70,7 @@ several times.
 A landing counts once the bike has been 0.5 s on the ground without a crash. Its worth is the game's Train points and skill points:
 
 - **Train:** base 160 buttery, 140 clean, 100 sketchy, 50 flat or cased (those two end the streak). Add 300 for a backflip, 100 per half turn from a 360 up, 100 for a whip. All of it × the streak, up to 5.
-- **Skill points**, each kind once a landing: whip 2, 360 4, flip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, +10 for a 360 table.
+- **Skill points**, each kind once a landing: whip 2, 360 4, flip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, +10 for a 360 table; and 1 every 5 m of manual (each manual of a second or more, its metres rounded).
 
 The AI's points for a landing: Train + 25 × skill points + 15 for every turn a trick went round more than once.
 
@@ -78,10 +78,10 @@ The game's points are shown, but the AI learns by **show points**: a ride as a s
 it shows by itself (the game's streak makes a jump worth what the jumps before it were; the show does not).
 
 - A jump: its landing (buttery 160, clean 140, sketchy 100, flat 50, cased 0), plus its tricks, each by how hard it is
-  (the game's Train points for it + 25 × its skill points: backflip 450, 360 300, whip 150, tailwhip 125, table 125,
-  X-up 100, barspin 75, T-bog 75, +250 a 360 table), every turn counted (a 720 two 360s, a triple tailwhip three),
-  × the combo: 1 + 0.5 for every kind of trick in the jump after the first + 0.25 for every trick of a kind already in
-  it. A clean backflip alone is 590; a backflip 360 tailwhip 1890; a backflip 720 double tailwhip barspin 4265.
+  (50 × the game's skill points for it: backflip 300, tailwhip 250, table 250, 360 200, X-up 200, barspin 150, T-bog
+  150, whip 100, +500 a 360 table), every turn counted (a 720 two 360s, a triple tailwhip three), × the combo: 1 + 0.5
+  for every kind of trick in the jump after the first + 0.25 for every trick of a kind already in it. A clean
+  backflip alone is 440; a backflip 360 tailwhip 1640; a backflip 720 double tailwhip barspin 4190.
 - A ride: its jumps, + 300 for every kind of trick it lands somewhere (the manual too), + 60 a second in manuals of a
   second or more (those the game keeps; the longer, the more).
 

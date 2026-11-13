@@ -9,14 +9,15 @@
   // What the AI rides for: a show of skill, every jump worth what it shows by itself (not the game's streak, which
   // makes a jump worth what the jumps before it were). A jump (a landing: jl entry) is worth
   // - its landing: SHOW_LAND by the game's grade (buttery 160 … cased 0);
-  // - plus its tricks, each by how hard it is (SHOW_TRICK: the game's Train points for it + 25 × its skill points),
-  //   every turn counted (a 720 two 360s, a triple tailwhip three tailwhips), × the combo: 1 + SHOW_KIND for every
-  //   kind of trick in the jump after the first, + SHOW_MORE for every trick of a kind already in it. So a backflip
-  //   alone is 590 on a clean landing; a backflip 360 tailwhip 1890; a backflip 720 double tailwhip barspin 4265.
+  // - plus its tricks, each by how hard it is: SHOW_TRICK, 50 × the game's skill points for it (its Tricks board:
+  //   whip 2, 360 4, backflip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, a 360 table 10 on top), every turn
+  //   counted (a 720 two 360s, a triple tailwhip three tailwhips), × the combo: 1 + SHOW_KIND for every kind of trick
+  //   in the jump after the first, + SHOW_MORE for every trick of a kind already in it. So a backflip alone is 440 on
+  //   a clean landing; a backflip 360 tailwhip 1640; a backflip 720 double tailwhip barspin 4190.
   // A ride is worth its jumps, + SHOW_VARIETY for every kind of trick it lands somewhere (the manual too), + MANUAL_W a
   // second on the back wheel, in manuals of a second or more (those the game keeps: the longer, the more).
   const SHOW_LAND = [0, 160, 140, 100, 50, 0], SHOW_KIND = 0.5, SHOW_MORE = 0.25, SHOW_VARIETY = 300, MANUAL_W = 60;
-  const SHOW_TRICK = { flip: 450, spin: 300, whip: 150, tailwhip: 125, barspin: 75, table: 125, tbog: 75, xup: 100 };
+  const SHOW_TRICK = { flip: 300, spin: 200, whip: 100, tailwhip: 250, barspin: 150, table: 250, tbog: 150, xup: 200 }, SHOW_SPINTABLE = 500;
   // a landing's tricks: n of them (every turn counted), k kinds, sum of what they are worth
   const tricksIn = got => {
     let n = 0, k = 0, sum = 0;
@@ -24,7 +25,7 @@
       const c = got ? key === 'spin' ? Math.round((got.spin || 0) / 360) : got[key] || 0 : 0;
       if (c > 0) { n += c; k++; sum += w * c; }
     }
-    if (got && got.spin && got.table) sum += 250;
+    if (got && got.spin && got.table) sum += SHOW_SPINTABLE;
     return { n, k, sum };
   };
   const tricksOf = got => tricksIn(got).n;
@@ -77,12 +78,12 @@
   // tricks of a program by what they are worth and how often they were landed with that much air (as a bandit picks its
   // arms: a trick little tried gets tries), so it tries everything it may, and more of what works.
   const BOOK_ROWS = 6000;
-  // what a trick is worth (Train points and skill points, as landPoints counts them) and the least air it takes
+  // what a trick is worth in the show (SHOW_TRICK) and the least air it takes
   const TRICK_PARTS = {
-    F: { unlock: UNLOCK.flip, worth: 300 + 6 * XP_W, air: 0.8 }, S: { unlock: UNLOCK.spin, worth: 200 + 4 * XP_W, air: 0.7 },
-    S2: { unlock: UNLOCK.spin, worth: 400 + 4 * XP_W + EXTRA_W, air: 1.2 }, S3: { unlock: UNLOCK.spin, worth: 600 + 4 * XP_W + 2 * EXTRA_W, air: 1.7 }, W: { unlock: UNLOCK.whip, worth: 100 + 2 * XP_W, air: 0.45 },
-    T: { unlock: UNLOCK.tailwhip, worth: 5 * XP_W, air: 0.85 }, B: { unlock: UNLOCK.barspin, worth: 3 * XP_W, air: 0.6 },
-    L: { unlock: UNLOCK.table, worth: 5 * XP_W, air: 0.8 }, G: { unlock: UNLOCK.tbog, worth: 3 * XP_W, air: 0.6 }, X: { unlock: UNLOCK.xup, worth: 4 * XP_W, air: 0.7 },
+    F: { unlock: UNLOCK.flip, worth: SHOW_TRICK.flip, air: 0.8 }, S: { unlock: UNLOCK.spin, worth: SHOW_TRICK.spin, air: 0.7 },
+    S2: { unlock: UNLOCK.spin, worth: 2 * SHOW_TRICK.spin, air: 1.2 }, S3: { unlock: UNLOCK.spin, worth: 3 * SHOW_TRICK.spin, air: 1.7 }, W: { unlock: UNLOCK.whip, worth: SHOW_TRICK.whip, air: 0.45 },
+    T: { unlock: UNLOCK.tailwhip, worth: SHOW_TRICK.tailwhip, air: 0.85 }, B: { unlock: UNLOCK.barspin, worth: SHOW_TRICK.barspin, air: 0.6 },
+    L: { unlock: UNLOCK.table, worth: SHOW_TRICK.table, air: 0.8 }, G: { unlock: UNLOCK.tbog, worth: SHOW_TRICK.tbog, air: 0.6 }, X: { unlock: UNLOCK.xup, worth: SHOW_TRICK.xup, air: 0.7 },
   };
   // the parts of a trick program, and whether a landing (jl entry, landPoints' got) counted each
   const partsOf = tk => {
