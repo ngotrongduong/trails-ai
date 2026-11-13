@@ -145,7 +145,7 @@
       this.plan = ok ? clonePlan(mem.plan) : freshPlan(this.secs);
       this.gen = ok ? mem.gen || 0 : 0;
       this.hist = ok ? (mem.hist || []).slice(-400) : [];
-      this.fragile = new Set(ok ? mem.fragile || [] : []);
+      this.fragile = new Set(ok ? mem.fragile || [] : []); this.jitScale = ok ? mem.jitScale || 1 : 1; this.bestHolds = undefined;
       this.best = (await this.pool.evalAll([this.plan]))[0];
       // (a fresh line, or one whose memory no longer rides: a plan from nothing may do better)
       if (!done(this.best)) { const f = freshPlan(this.secs), r = (await this.pool.evalAll([f]))[0]; if (beats(r, this.best)) { this.plan = f; this.best = r; } }
@@ -324,7 +324,7 @@
         const jitTop = async list => {
           if (!fr) return;
           const top = list.filter(c => c.r.kid).sort((x, y) => this.horizon(y.r, x.r, false)).slice(0, 3 * BEAM);
-          await this.rollAll(top.map(c => ({ nd: c.nd, p: c.p, of: c })), a1, a2, JITS, true);
+          await this.rollAll(top.map(c => ({ nd: c.nd, p: c.p, of: c })), a1, a2, this.jits(), true);
         };
         await jitTop(cs);
         if (!this.running) return null;
@@ -377,9 +377,25 @@
       if (!this.running || !bestEnd) return { improved: false };
       // checked from the start, as everything else is compared
       const full = (await pool.evalAll([bestEnd.p]))[0];
-      const improved = beats(full, this.best);
+      let improved = beats(full, this.best);
+      // where real rides have fallen, a plan that holds with the jitters beats one that does not, whatever their points
+      // (else the plan that keeps falling in the game would stay, for it scores more in the simulation)
+      if (this.fragile.size) {
+        if (this.bestHolds === undefined) this.bestHolds = await this.holds(this.plan);
+        const h = await this.holds(bestEnd.p);
+        if (h !== this.bestHolds) improved = h;
+        if (improved) this.bestHolds = h;
+      }
       if (improved) { this.plan = bestEnd.p; this.best = full; }
       return { improved, full, backs, ms: performance.now() - t0 };
+    }
+    // the jitters, as wide as real rides have shown they need to be
+    jits() { const s = this.jitScale || 1; return JITS.map(j => ({ dv: j.dv * s, dt: j.dt * s })); }
+    // whether plan p, ridden from the start with each of the jitters, gets past every fragile section
+    async holds(p) {
+      const last = Math.max(...this.fragile), need = Math.min(this.N - 1, this.secs[last].b + 5);
+      const rs = await Promise.all(this.jits().map(j => this.pool.evalAll([p], j).then(o => o[0])));
+      return rs.every(r => done(r) || r.prog >= need);
     }
     async run() {
       if (this.running || !this.pool) return;
@@ -402,6 +418,11 @@
       } finally { this.running = false; }
     }
     // A real ride of the line fell (or came down worse) where the simulation of the same plan did not: that section is
-    // fragile from now on, and its best ride is checked again with the jitters.
-    markFragile(k) { if (k >= 0 && k < this.secs.length) this.fragile.add(k); }
+    // fragile from now on, and the best plan is checked again with the jitters. Falling again where it already was
+    // fragile, with a plan that held with the jitters, they were not wide enough: half as wide again (at most 4 times).
+    markFragile(k) {
+      if (!(k >= 0 && k < this.secs.length)) return;
+      if (this.fragile.has(k) && this.bestHolds) this.jitScale = Math.min(4, (this.jitScale || 1) * 1.5);
+      this.fragile.add(k); this.bestHolds = undefined;
+    }
   }

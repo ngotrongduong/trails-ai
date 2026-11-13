@@ -19,7 +19,7 @@
   function saveMem() {
     const L = ses.learner, m = ses.mem;
     if (!L || !m || !L.best) return;
-    m.plan = L.plan; m.best = keepBest(L.best); m.gen = L.gen; m.hist = L.hist.slice(-400); m.fragile = [...L.fragile];
+    m.plan = L.plan; m.best = keepBest(L.best); m.gen = L.gen; m.hist = L.hist.slice(-400); m.fragile = [...L.fragile]; m.jitScale = L.jitScale || 1;
     m.setup = L.setup; m.sim = SIM_ID;
     if (!lib.put(m)) ui.log(tx('<b>Không lưu được bộ nhớ</b> (bộ nhớ trình duyệt đầy?).', '<b>Could not save the memory</b> (browser storage full?).'));
     if (L.bookDirty) { saveBook(L.setup.tricks, L.book); L.bookDirty = false; }
@@ -110,13 +110,27 @@
   async function rideOnce() {
     if (!ses.want || !ses.aiDrive || ses.paused || ses.busy || share.busy || ses.ride || !ses.learner || !ses.R) return;
     if (ses.update && ses.rides > 0) { applyUpdate(); return; }
+    // (waiting for a plan other than the one that fell twice at the same place, 5 minutes at most)
+    if (ses.waitPlan && ses.waitPlan === ses.learner.plan && Date.now() - ses.waitAt < 300e3) { nextRide(3000); return; }
+    ses.waitPlan = null;
     await getUp();
+    // the game's rider setup changed since the line was loaded (another bike, other tyres, a tune): the simulation no
+    // longer rides the same bike, so the line is loaded into it again (at most once every 2 minutes)
+    if (JSON.stringify(riderSetup()) !== JSON.stringify(ses.learner.setup) && Date.now() - (ses.reloadAt || 0) > 120e3) {
+      ses.reloadAt = Date.now();
+      ui.log(tx('<b>Xe trong game khác xe trong mô phỏng</b> (đổi xe, lốp hoặc chỉnh xe): AI nạp lại mô phỏng với xe đang dùng.', '<b>The bike in the game differs from the simulation\'s</b> (another bike, tyres or tune): the AI loads the simulation again with it.'));
+      const id = ses.mem.id;
+      closeLine();
+      try { await openLine(id); } catch (err) { ui.say(err.message || String(err)); return; }
+      nextRide(500);
+      return;
+    }
     const st = ses.mem.line.start, L = ses.learner;
     live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
     live.ex.trails_game_reset(live.g);
     if (inviteDue()) try { inviteNow(ui.log); } catch (err) { console.error(err); }
     const R = ses.R, N = R.length, plan = clonePlan(L.plan), rider = makeRider(R, ses.H, ses.secs, plan);
-    const d = ses.ride = { plan, rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, expect: L.best };
+    const d = ses.ride = { plan, plan0: clonePlan(plan), tr: [], swapT: -1, setup: riderSetup(), rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, expect: L.best };
     // a newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
     // gets the states the simulation scored, so its score holds for the rest of this ride too
     const swap = () => {
@@ -128,6 +142,7 @@
       for (const k of ['v', 'pt', 'pl', 'pu', 'tk', 'vs', 'lg', 'sa', 'ph', 'pc']) for (let i = 0; i <= upto; i++) if (!same(p[k] && p[k][i], plan[k] && plan[k][i])) return;
       for (const k of Object.keys(plan)) delete plan[k];
       Object.assign(plan, clonePlan(p));
+      if (d.swapT < 0) d.swapT = d.t;
       d.swaps++; d.expect = L.best;
     };
     d.step = () => {
@@ -140,6 +155,8 @@
           if ((s[15] | 0) > 0) { const lp = landPoints(s, d.streak); d.streak = lp.streak; d.pending = { t, e: { k: rider.airSec, i: rider.idx, a: +s[14].toFixed(2), g: lp.g, p: lp.p, train: lp.train, xp: lp.xp, got: lp.got } }; }
         }
         if (d.pending && t - d.pending.t >= 30) { const e = d.pending.e; d.lands.push(e); d.game += e.p; d.train += e.train; d.xp += e.xp; d.pending = null; ui.update(); }
+        // (where the bike is, as the simulation's trace keeps it)
+        if (t % 3 === 0 && !d.coast) d.tr.push([t, +rider.at.toFixed(2), +s[1].toFixed(3), +s[8].toFixed(3), +s[4].toFixed(4), s[12] > 0 ? 1 : 0]);
         if (t % 30 === 0) swap();
         d.calm = s[12] > 0 ? 0 : d.calm + 1;
         let inp;
@@ -194,14 +211,53 @@
     if (L && why !== 'player' && d.expect) {
       const sim = d.expect, newly = [];
       const mark = k => { if (k >= 0 && !L.fragile.has(k)) { L.markFragile(k); newly.push(k + 1); } };
-      if ((why === 'crash' || why === 'off' || why === 'stuck') && (sim.end === 'finish' || sim.prog > d.rider.idx + 10)) mark(why === 'crash' && d.rider.airSec >= 0 && d.rider.airT > 0 ? d.rider.airSec : d.rider.sec);
+      if ((why === 'crash' || why === 'off' || why === 'stuck') && (sim.end === 'finish' || sim.prog > d.rider.idx + 10)) {
+        const k = why === 'crash' && d.rider.airSec >= 0 && d.rider.airT > 0 ? d.rider.airSec : d.rider.sec;
+        // (fallen again where it already was fragile: the plan that held with the jitters did not hold in the game)
+        if (L.fragile.has(k)) { const was = L.jitScale || 1; L.markFragile(k); if ((L.jitScale || 1) > was) ui.log(tx(`Lại ngã ở đoạn ${k + 1}: AI thử cách đi chắc hơn nữa ở đó (độ lệch thử ×${L.jitScale.toFixed(1)}).`, `Fell again at section ${k + 1}: the AI looks for a still safer way there (jitters ×${L.jitScale.toFixed(1)}).`)); }
+        else mark(k);
+        // the same plan fell at the same place twice running: the AI does not ride it again until the learner has
+        // another (riding on would only fall there again)
+        const last = ses.lastFall;
+        if (last && last.plan === L.plan && last.k === k) { ses.waitPlan = L.plan; ses.waitAt = Date.now(); ui.log(tx('Cách đi này đã ngã 2 lần ở cùng chỗ: AI chờ học được cách khác rồi mới lái tiếp.', 'This way has fallen twice at the same place: the AI waits until it has learned another before riding again.')); }
+        ses.lastFall = { plan: L.plan, k };
+      } else if (why === 'finish') ses.lastFall = null;
       for (const e of d.lands) { const s = (sim.jl || []).find(q => q.k === e.k); if (e.g >= 4 && s && s.g <= 3) mark(e.k); }
       if (newly.length) ui.log(tx(`Mô phỏng lạc quan quá ở đoạn ${newly.join(', ')}: AI sẽ học cách đi chắc hơn ở đó.`, `The simulation was too hopeful at section ${newly.join(', ')}: the AI will learn a safer way there.`));
       if (lineStale(ses.mem.line)) ui.log(tx('<b>Đường trong game đã khác bộ nhớ</b> (có người sửa). Lần mở sau AI sẽ dò lại.', '<b>The line in the game differs from the memory</b> (someone changed it). The AI traces it again next time it opens it.'));
     }
     saveMem(); ui.update();
+    if (L && why !== 'player' && (why !== 'finish' || (d.expect && d.game < d.expect.game))) compareRide(d, L).catch(err => console.error(err));
     if (record && shareDue()) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
     if (ses.want && ses.aiDrive && !ses.paused) nextRide(why === 'finish' ? 1500 : 2500);
+  }
+
+  // A real ride that fell (or went off, or stuck, or got fewer points), laid beside the simulation of the plan it set off with, step by
+  // step up to the first change of plan: where the two first part (height 0.3 m, speed 0.5 m/s, pitch 0.15 rad) is
+  // logged.
+  const SAME = { y: 0.3, v: 0.5, p: 0.15 };
+  async function compareRide(d, L) {
+    const { pts, r } = await L.pool.trace(d.plan0);
+    if (!pts || !pts.length) return;
+    const sim = new Map(pts.map(q => [q[0], q])), upto = d.swapT >= 0 ? d.swapT : Infinity;
+    let at = null;
+    for (const q of d.tr) {
+      if (q[0] > upto) break;
+      const o = sim.get(q[0]);
+      if (!o) break;
+      if (Math.abs(q[2] - o[2]) > SAME.y || Math.abs(q[3] - o[3]) > SAME.v || Math.abs(wrapA(q[4] - o[4])) > SAME.p) { at = [q, o]; break; }
+    }
+    const f = n => n.toFixed(2);
+    if (!at) {
+      ui.log(tx(`So với mô phỏng: lượt thật đi y hệt tới ${d.tr.length ? Math.round(d.tr[d.tr.length - 1][1]) : 0} m (mô phỏng: ${END_WORDS[r.end] ? END_WORDS[r.end][0] : r.end} ở ${r.prog} m).`,
+        `Against the simulation: the real ride went the same to ${d.tr.length ? Math.round(d.tr[d.tr.length - 1][1]) : 0} m (simulation: ${END_WORDS[r.end] ? END_WORDS[r.end][1] : r.end} at ${r.prog} m).`));
+      return;
+    }
+    const [q, o] = at;
+    d.part = { t: q[0], m: q[1] };
+    ui.log(tx(`So với mô phỏng: lượt thật bắt đầu lệch ở mét ${Math.round(q[1])} (giây ${(q[0] / 60).toFixed(1)}${q[5] ? ', đang bay' : ''}): cao ${f(q[2])}/${f(o[2])} m, tốc độ ${f(q[3])}/${f(o[3])} m/s, góc xe ${f(q[4])}/${f(o[4])} (thật/mô phỏng).`,
+      `Against the simulation: the real ride parts from it at ${Math.round(q[1])} m (${(q[0] / 60).toFixed(1)} s${q[5] ? ', in the air' : ''}): height ${f(q[2])}/${f(o[2])} m, speed ${f(q[3])}/${f(o[3])} m/s, pitch ${f(q[4])}/${f(o[4])} (real/simulation).`));
+    console.log('[trails-ai] real vs sim', { real: d.tr.slice(0, 400), sim: pts.slice(0, 400) });
   }
 
   // ---- the player takes the bike back, and gives it back

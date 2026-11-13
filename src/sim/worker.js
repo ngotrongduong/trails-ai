@@ -301,10 +301,13 @@ function roll(m) {
   }
 }
 // A whole ride of P with a record: where the bike was every 6th step and what every landing got (for the panel)
+// A whole ride of plan P, and every TRACE_EVERY steps where it was: tick, place along the line, height, speed,
+// pitch, in the air (the real ride in the game keeps the same, to be laid side by side)
+const TRACE_EVERY = 3;
 function trace(P) {
   putMem(null); clean = false;
   const E = Ep(P), pts = [];
-  const r = go(E, (E, s) => { if (E.t % 6 === 0) pts.push(+E.rider.at.toFixed(1), +s[1].toFixed(2)); return false; });
+  const r = go(E, (E, s) => { if (E.t % TRACE_EVERY === 0) pts.push([E.t, +E.rider.at.toFixed(2), +s[1].toFixed(3), +s[8].toFixed(3), +s[4].toFixed(4), s[12] > 0 ? 1 : 0]); return false; });
   return { r, pts };
 }
 onmessage = async e => {
