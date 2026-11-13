@@ -142,14 +142,16 @@ There every try is also ridden 0.3 m/s faster, 0.3 m/s slower and with its trick
   - one that follows on at once (up to 3.5 m), turned 37° at most;
   - off a takeoff, a landing up to 250 m on, or a landing turned up to 115° within 60 m (a jump that turns in the air;
     each radian of turn counts as 10 m further off). The flight then bends round from the lip's way to the landing's,
-    and the plan steers in the air (`sa` 1) from the start on every jump that turns 0.5 rad or more;
+    and the plan steers in the air (`sa` 1) from the start on every jump that turns 0.5 rad or more. Anything but a
+    landing off a takeoff counts 10 m further off;
   - across bare ground up to 30 m (turned 40° at most, counted 5 m further off), as the game's lines ride from a
     landing over the hill to the next takeoff; off the end of a deck onto a landing that is a drop;
   - when the line's builder laid it out in their spot (the server's `welcome.spots.list[].lines[]`: `from` a start,
     `route` its pieces in order), the next piece of that list it can reach, whichever way it lies (a landing up to
     250 m off a takeoff, anything else up to 60 m). For a start with several, the one with the most pieces.
   Measured on the 86 laid-out lines of the map (2026-11-14): with the builder's list the trace flies 520 of their 535
-  jumps the builder's way and follows 79 of them to the end; by the pieces alone 205 jumps (version 1: 109).
+  jumps the builder's way and follows 79 of them to the end; by the pieces alone 213 jumps (version 1: 109). Most of the rest are real forks: a lip with two or three landings
+  that the pieces alone do not tell apart.
   A library line traced by an older version is traced again when it is opened and the game holds all its chunks; if
   it comes out different it is learned afresh.
 - **Memory.** Each line has one memory (`trailsai.line.<id>`, format `trails-ai-line` v3). It holds the route, the plan, the best simulated ride, the real rides, the fragile sections and the learning history. The index `trailsai.lines` has one row per line for the library list.

@@ -184,6 +184,7 @@ if (playerKeys.onKey) { try { playerKeys.onKey(e); } catch (err) { console.error
 }, true);
 const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
 const TURN_MAX = 2.0, TURN_REACH = 60, TURN_COST = 10, TURN_BEND = 0.75;
+const JUMP_OTHER = 10;
 const GROUND_REACH = 30, GROUND_DH = 0.7, GROUND_LAT = 0.35, GROUND_COST = 5, GUIDE_REACH = 60;
 const LINE_V = 2;
 const assets = () => {
@@ -284,7 +285,7 @@ else {
 if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
 if (dh > (jump ? 0.75 : 0.65)) continue;
 }
-const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0);
+const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0) + (jump && !land ? JUMP_OTHER : 0);
 if (sc < score) { score = sc; nxt = s; gap = jump || (ground && land) ? 1 : ground ? 2 : 0; }
 }
 if (!back && cur.p.kind !== 'takeoff') {

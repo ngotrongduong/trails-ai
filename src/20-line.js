@@ -7,6 +7,8 @@
   // each radian of turn counted as TURN_COST m further off. The way through the air then bends round from the lip's way
   // to the landing's (when it turns TURN_BEND rad and more), so the rider steers round it in flight.
   const TURN_MAX = 2.0, TURN_REACH = 60, TURN_COST = 10, TURN_BEND = 0.75;
+  // Off a takeoff anything but a landing counts JUMP_OTHER m further off (a landing it can reach wins over the next lip).
+  const JUMP_OTHER = 10;
   // Between pieces a line may cross bare ground (the game's own lines do, a landing to the next takeoff over the hill):
   // up to GROUND_REACH m on, turned up to GROUND_DH rad, no further to the side than GROUND_LAT a metre on, counted as
   // GROUND_COST m further off than a piece that follows on at once. Off the end of a piece onto a landing so is a drop.
@@ -124,7 +126,7 @@
           if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
           if (dh > (jump ? 0.75 : 0.65)) continue;
         }
-        const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0);
+        const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0) + (jump && !land ? JUMP_OTHER : 0);
         // (gap: 1 a flight, off a takeoff or dropping off the end of something onto a landing; 2 bare ground)
         if (sc < score) { score = sc; nxt = s; gap = jump || (ground && land) ? 1 : ground ? 2 : 0; }
       }
