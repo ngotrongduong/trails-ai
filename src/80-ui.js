@@ -37,6 +37,7 @@
 #tai .row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0}
 #tai .sw{all:unset;cursor:pointer;padding:3px 10px;border-radius:12px;background:#3a4339;font-size:12px}
 #tai .sw.on{background:#3f9c46}
+#tai .roamst{display:block;color:#97a196;font-size:11px}
 #tai .libl div{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;border-top:1px solid #2f372e}
 #tai .libl .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #tai .libl .nm.cur{font-weight:700;color:#9fe39a}
@@ -73,6 +74,8 @@
   <details><summary class="l-more"></summary>
     <div class="row"><span class="l-drive"></span><button class="sw drive"></button></div>
     <div class="row"><span class="l-share"></span><button class="sw shr"></button></div>
+    <div class="row"><span class="l-roam"></span><button class="sw roam"></button></div>
+    <small class="roamst"></small>
     <div class="row"><span class="l-lang"></span><button class="sw lang"></button></div>
     <h4 class="l-lib"></h4><div class="libl"></div>
   </details>
@@ -83,6 +86,7 @@
     $('.eye').onclick = () => setWatch(!watch.on);
     $('.drive').onclick = () => setAiDrive(!ses.aiDrive);
     $('.shr').onclick = () => { setShare(!share.on); update(); };
+    $('.roam').onclick = () => setRoam({ off: 'explore', explore: 'mine', mine: 'off' }[roam.mode]);
     $('.lang').onclick = () => { lang = lang === 'vi' ? 'en' : 'vi'; try { keep.setItem(LANG, lang); } catch { /* storage blocked */ } update(); };
     $('.ren').onclick = () => { if (!ses.mem) return; const n = prompt(tx('Tên mới cho đường này:', 'A new name for this line:'), ses.mem.name); if (n && n.trim()) { ses.mem.name = n.trim().slice(0, 40); saveMem(); update(); } };
     $('.upd').onclick = applyUpdate;
@@ -141,6 +145,13 @@
     const up = $('.upd'); up.hidden = !ses.update; up.textContent = tx('⟳ Có bản mới — Cập nhật ngay', '⟳ A newer AI — update now');
     for (const [s, on] of [['.drive', ses.aiDrive], ['.shr', share.on]]) { const e = $(s); e.classList.toggle('on', on); e.textContent = on ? tx('Bật', 'On') : tx('Tắt', 'Off'); }
     set('.lang', lang === 'vi' ? 'Tiếng Việt' : 'English');
+    // where the AI rides (see roaming)
+    set('.l-roam', tx('AI đi đâu', 'Where the AI rides'));
+    const rb = $('.roam'), rc = roamCount();
+    rb.classList.toggle('on', roam.mode !== 'off');
+    set('.roam', { off: tx('Ở đường này', 'This line'), explore: tx('Khám phá ô mới (OG)', 'New squares (OG)'), mine: tx('Đường của bạn (Builder)', 'Your lines (Builder)') }[roam.mode]);
+    set('.roamst', roam.mode === 'explore' ? tx(`AI đã thấy chạy đủ ở ${rc.squares} ô, ${rc.lands}/9 vùng. Mỗi ô ${ROAM_S} giây rồi đi tiếp.`, `The AI has seen enough riding in ${rc.squares} squares, ${rc.lands} of 9 countries. ${ROAM_S} s in each, then on.`)
+      : roam.mode === 'mine' ? tx(`Lái lần lượt các đường trong spot của bạn (${myStarts().length} đường), mỗi đường ${ROAM_MINE / 60e3} phút; lời mời trong chat đưa người khác tới chạy.`, `Rides your spot's lines in turn (${myStarts().length}), ${ROAM_MINE / 60e3} min each; the chat invites bring others to ride them.`) : '');
     // the jumps of the best ride
     const J = b ? b.jl : [];
     const jh = J.map((e, i) => `<div><span class="n">#${i + 1}</span><span class="t">${esc(trickText(e.got) || tx('không trick', 'no trick'))} <span class="g${e.g}">${GRADE_VI[e.g]}</span></span><span class="p">${pts(e.p)}</span></div>`).join('')

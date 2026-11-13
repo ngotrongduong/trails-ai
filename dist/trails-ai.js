@@ -120,7 +120,7 @@ return bare ? { exports: px } : { module: r.module, instance: { exports: px } };
 };
 const liveState = () => new Float64Array(live.ex.memory.buffer, live.ex.trails_game_state(live.g), live.SL);
 const riderSetup = () => ({ tricks: live.tricks === null ? 511 : live.tricks, bike: live.bike, tunes: { ...live.tunes } });
-const cap = { chunks: new Map(), held: new Set(), starts: [], routes: {}, ws: null };
+const cap = { chunks: new Map(), held: new Set(), starts: [], routes: {}, spots: [], ws: null };
 const routesOf = spots => {
 const out = {};
 for (const sp of (spots && Array.isArray(spots.list) ? spots.list : [])) for (const l of sp.lines || []) {
@@ -137,7 +137,7 @@ if (typeof data !== 'string' || data.length < 8) return;
 let r;
 try { r = JSON.parse(data); } catch { return; }
 if (r.t === 'chunk' && Array.isArray(r.c)) cap.chunks.set(r.c.join(','), Array.isArray(r.pieces) ? r.pieces : []);
-else if (r.t === 'welcome') { if (Array.isArray(r.starts)) cap.starts = r.starts; if (r.spots) cap.routes = routesOf(r.spots); cap.held.clear(); }
+else if (r.t === 'welcome') { if (Array.isArray(r.starts)) cap.starts = r.starts; if (r.spots) { cap.routes = routesOf(r.spots); cap.spots = (Array.isArray(r.spots.list) ? r.spots.list : []).map(sp => ({ owner: sp && sp.owner, pieces: sp && Array.isArray(sp.pieces) ? sp.pieces : [] })); } cap.held.clear(); }
 else if (r.t === 'startsdiff') {
 const m = new Map(cap.starts.map(s => [s.id, s]));
 for (const id of r.gone || []) m.delete(id);
@@ -1361,6 +1361,11 @@ async function getUp() { if (!(liveState()[13] > 0)) return; ses.aiMoved = Date.
 async function rideOnce() {
 if (!ses.want || !ses.aiDrive || ses.paused || ses.busy || share.busy || ses.ride || !ses.learner || !ses.R) return;
 if (ses.update && ses.rides > 0) { applyUpdate(); return; }
+if (roam.mode !== 'off') {
+let moved = false;
+try { moved = await roamStep(); } catch (err) { console.error(err); ui.say(err.message || String(err)); }
+if (moved || !ses.learner) { if (ses.learner) nextRide(500); return; }
+}
 if (ses.waitPlan && ses.waitPlan === ses.learner.plan && Date.now() - ses.waitAt < 300e3) { nextRide(3000); return; }
 ses.waitPlan = null;
 await getUp();
@@ -1567,6 +1572,99 @@ for (let i = 0; i < 120 && !(live.ex && live.g && bikeNow()); i++) await sleep(1
 ses.mem = lib.get(r.id);
 start();
 }
+const ROAM = 'trailsai.roam', ROAM_S = 20, ROAM_MAX = 240e3, ROAM_MINE = 15 * 60e3, ROAM_TRIES = 5;
+const SQ_X0 = -1900, SQ_Z0 = -2000, SQ = 500, SQ_N = 8;
+const LANDS = [['Jungle', 'Dunes', 'Red rock'], ['Hardwoods', null, 'Farmland'], ['Ice fields', 'High peaks', 'Pine country']];
+const roam = (() => { const r = readJSON(ROAM, {}); return { mode: ['explore', 'mine'].includes(r.mode) ? r.mode : 'off', secs: r.secs && typeof r.secs === 'object' ? r.secs : {}, leg: null, skip: new Set(), me: null, k: 0 }; })();
+const saveRoam = () => writeJSON(ROAM, { mode: roam.mode, secs: roam.secs });
+function squareAt(x, z) {
+const c = Math.floor((x - SQ_X0) / SQ), r = Math.floor((z - SQ_Z0) / SQ);
+if (c < -SQ_N || c >= 2 * SQ_N || r < -SQ_N || r >= 2 * SQ_N) return null;
+const land = LANDS[Math.floor(r / SQ_N) + 1][Math.floor(c / SQ_N) + 1] || '', m = v => ((v % SQ_N) + SQ_N) % SQ_N;
+const sq = String.fromCharCode(65 + m(c)) + (m(r) + 1);
+return { land, name: land ? `${land} ${sq}` : sq };
+}
+const landOf = name => (name.includes(' ') ? name.slice(0, name.lastIndexOf(' ')) : '');
+const sqDone = name => (roam.secs[name] || 0) >= ROAM_S;
+function roamCount() { const sq = Object.keys(roam.secs).filter(sqDone); return { squares: sq.length, lands: new Set(sq.map(landOf)).size }; }
+let roamTick = 0;
+setInterval(() => {
+const me = bikeNow();
+if (!me || me.down || !(me.v > 1)) return;
+const q = squareAt(me.x, me.z);
+if (!q) return;
+const was = sqDone(q.name);
+roam.secs[q.name] = (roam.secs[q.name] || 0) + 1;
+if (++roamTick % 15 === 0 || (!was && sqDone(q.name))) saveRoam();
+}, 1000);
+function myStarts() {
+if (!roam.me) return [];
+const S = new Map(cap.starts.map(s => [s.id, s]));
+return (cap.spots || []).filter(sp => sp.owner === roam.me).flatMap(sp => sp.pieces.filter(id => S.has(id)).map(id => S.get(id)));
+}
+async function whoAmI() {
+if (roam.me) return roam.me;
+try { const r = await fetch('/api/auth/me', { credentials: 'same-origin' }); const j = await r.json(); roam.me = j && j.user && typeof j.user.username === 'string' ? j.user.username : null; } catch { roam.me = null; }
+return roam.me;
+}
+function roamNext() {
+if (roam.mode === 'mine') {
+const list = myStarts();
+if (!list.length) return null;
+const at = ses.mem ? list.findIndex(s => s.id === ses.mem.id) : -1, s = list[(at + 1) % list.length];
+return s && (!ses.mem || s.id !== ses.mem.id) ? { s, why: tx('đường của bạn', 'your line') } : null;
+}
+const me = bikeNow(), lands = new Set(Object.keys(roam.secs).filter(sqDone).map(landOf));
+let best = null;
+for (const s of cap.starts) {
+const q = squareAt(s.x, s.z);
+if (!q || sqDone(q.name) || roam.skip.has(q.name)) continue;
+const sc = (lands.has(q.land) ? 1e6 : 0) + (me ? Math.hypot(s.x - me.x, s.z - me.z) : 0);
+if (!best || sc < best.sc) best = { s, sc, q };
+}
+return best && { s: best.s, sq: best.q.name, why: lands.has(best.q.land) ? tx(`ô mới ${best.q.name}`, `new square ${best.q.name}`) : tx(`vùng mới ${best.q.land || 'vùng giữa'} (ô ${best.q.name})`, `new country ${best.q.land || 'Open world'} (square ${best.q.name})`) };
+}
+async function roamStep() {
+if (roam.mode === 'off' || !ses.mem) return false;
+const now = Date.now(), id = ses.mem.id;
+if (!roam.leg || roam.leg.id !== id) roam.leg = { id, t0: now, had: true };
+if (roam.mode === 'explore') {
+const st = ses.mem.line.start, q = squareAt(st.x, st.z), late = now - roam.leg.t0 > ROAM_MAX;
+if (q && !sqDone(q.name) && !late) return false;
+if (q && !sqDone(q.name)) roam.skip.add(q.name);
+} else {
+if (!(await whoAmI())) return false;
+if (myStarts().some(s => s.id === id) && now - roam.leg.t0 < ROAM_MINE) return false;
+}
+for (let k = 0; k < ROAM_TRIES; k++) {
+const n = roamNext();
+if (!n) return false;
+try { await roamTo(n); return true; } catch (err) { if (n.sq) roam.skip.add(n.sq); else return false; ui.log(tx(`Không mở được đường ở ${esc(n.why)}: thử chỗ khác.`, `Could not open a line at ${esc(n.why)}: trying elsewhere.`)); }
+}
+return false;
+}
+async function roamTo(n) {
+const s = n.s, old = roam.leg;
+ses.busy = true; ui.update();
+try {
+closeLine();
+if (old && !old.had && roam.mode === 'explore') lib.forget(old.id);
+live.ex.trails_set_spawn_at(live.g, s.x, s.z, s.heading, 0);
+live.ex.trails_game_reset(live.g);
+ses.aiMoved = Date.now();
+const key = Math.floor(s.x / 256) + ',' + Math.floor(s.z / 256);
+for (let t = 0; t < 40 && !cap.chunks.has(key); t++) { await sleep(500); ses.aiMoved = Date.now(); }
+await sleep(1500); ses.aiMoved = Date.now();
+roam.leg = { id: s.id, t0: Date.now(), had: !!lib.get(s.id) };
+} finally { ses.busy = false; ui.update(); }
+ui.log(tx(`<b>Đi tới ${esc(n.why)}</b>.`, `<b>Off to ${esc(n.why)}</b>.`));
+await openLine(s.id);
+}
+function setRoam(mode) {
+roam.mode = mode; roam.leg = null; saveRoam();
+if (mode === 'mine') whoAmI().then(me => { if (!me) ui.log(tx('Chưa thấy tài khoản game của bạn (hãy đăng nhập trong game) nên chưa biết đường nào là của bạn.', 'No game account yet (sign in to the game), so the AI cannot tell which lines are yours.')); else if (!myStarts().length) ui.log(tx('Chưa thấy đường nào trong spot của bạn.', 'No lines in your spot yet.')); ui.update(); });
+ui.update();
+}
 const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 30 * 60e3, SHARE_CUTS = 6;
 const SHARE_TITLE = 'come to join my ride', SHARE_IDS = 'trailsai.share.ids', SHARE_KEEP = 3;
 const INVITE_AT = 'trailsai.invite.at', INVITE_N = 'trailsai.invite.n', INVITE_EVERY = 10 * 60e3;
@@ -1742,6 +1840,7 @@ font:13px/1.4 system-ui,-apple-system,"Segoe UI",sans-serif;color:#e8ece6;backgr
 #tai .row{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0}
 #tai .sw{all:unset;cursor:pointer;padding:3px 10px;border-radius:12px;background:#3a4339;font-size:12px}
 #tai .sw.on{background:#3f9c46}
+#tai .roamst{display:block;color:#97a196;font-size:11px}
 #tai .libl div{display:flex;align-items:center;gap:6px;font-size:12px;padding:3px 0;border-top:1px solid #2f372e}
 #tai .libl .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #tai .libl .nm.cur{font-weight:700;color:#9fe39a}
@@ -1778,6 +1877,8 @@ panel.innerHTML = `
 <details><summary class="l-more"></summary>
 <div class="row"><span class="l-drive"></span><button class="sw drive"></button></div>
 <div class="row"><span class="l-share"></span><button class="sw shr"></button></div>
+<div class="row"><span class="l-roam"></span><button class="sw roam"></button></div>
+<small class="roamst"></small>
 <div class="row"><span class="l-lang"></span><button class="sw lang"></button></div>
 <h4 class="l-lib"></h4><div class="libl"></div>
 </details>
@@ -1788,6 +1889,7 @@ $('.mn').onclick = () => panel.classList.toggle('min');
 $('.eye').onclick = () => setWatch(!watch.on);
 $('.drive').onclick = () => setAiDrive(!ses.aiDrive);
 $('.shr').onclick = () => { setShare(!share.on); update(); };
+$('.roam').onclick = () => setRoam({ off: 'explore', explore: 'mine', mine: 'off' }[roam.mode]);
 $('.lang').onclick = () => { lang = lang === 'vi' ? 'en' : 'vi'; try { keep.setItem(LANG, lang); } catch { /* storage blocked */ } update(); };
 $('.ren').onclick = () => { if (!ses.mem) return; const n = prompt(tx('Tên mới cho đường này:', 'A new name for this line:'), ses.mem.name); if (n && n.trim()) { ses.mem.name = n.trim().slice(0, 40); saveMem(); update(); } };
 $('.upd').onclick = applyUpdate;
@@ -1843,6 +1945,12 @@ $('.dot').classList.toggle('on', !!(L && L.running));
 const up = $('.upd'); up.hidden = !ses.update; up.textContent = tx('⟳ Có bản mới — Cập nhật ngay', '⟳ A newer AI — update now');
 for (const [s, on] of [['.drive', ses.aiDrive], ['.shr', share.on]]) { const e = $(s); e.classList.toggle('on', on); e.textContent = on ? tx('Bật', 'On') : tx('Tắt', 'Off'); }
 set('.lang', lang === 'vi' ? 'Tiếng Việt' : 'English');
+set('.l-roam', tx('AI đi đâu', 'Where the AI rides'));
+const rb = $('.roam'), rc = roamCount();
+rb.classList.toggle('on', roam.mode !== 'off');
+set('.roam', { off: tx('Ở đường này', 'This line'), explore: tx('Khám phá ô mới (OG)', 'New squares (OG)'), mine: tx('Đường của bạn (Builder)', 'Your lines (Builder)') }[roam.mode]);
+set('.roamst', roam.mode === 'explore' ? tx(`AI đã thấy chạy đủ ở ${rc.squares} ô, ${rc.lands}/9 vùng. Mỗi ô ${ROAM_S} giây rồi đi tiếp.`, `The AI has seen enough riding in ${rc.squares} squares, ${rc.lands} of 9 countries. ${ROAM_S} s in each, then on.`)
+: roam.mode === 'mine' ? tx(`Lái lần lượt các đường trong spot của bạn (${myStarts().length} đường), mỗi đường ${ROAM_MINE / 60e3} phút; lời mời trong chat đưa người khác tới chạy.`, `Rides your spot's lines in turn (${myStarts().length}), ${ROAM_MINE / 60e3} min each; the chat invites bring others to ride them.`) : '');
 const J = b ? b.jl : [];
 const jh = J.map((e, i) => `<div><span class="n">#${i + 1}</span><span class="t">${esc(trickText(e.got) || tx('không trick', 'no trick'))} <span class="g${e.g}">${GRADE_VI[e.g]}</span></span><span class="p">${pts(e.p)}</span></div>`).join('')
 || `<div>${tx('Chưa có cú nhảy nào.', 'No jumps yet.')}</div>`;

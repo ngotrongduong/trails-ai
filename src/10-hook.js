@@ -36,7 +36,8 @@
   // the lines, and the game's own socket (for the chat invite after a share).
   // routes: the lines builders laid out in their spots (a start and the pieces of its jumps in order), for each start
   // those from it, the one with the most pieces first: { [start id]: [{ name, ids }] }.
-  const cap = { chunks: new Map(), held: new Set(), starts: [], routes: {}, ws: null };
+  // spots: each spot's owner and pieces (for the player's own lines: see roaming).
+  const cap = { chunks: new Map(), held: new Set(), starts: [], routes: {}, spots: [], ws: null };
   const routesOf = spots => {
     const out = {};
     for (const sp of (spots && Array.isArray(spots.list) ? spots.list : [])) for (const l of sp.lines || []) {
@@ -53,7 +54,7 @@
     let r;
     try { r = JSON.parse(data); } catch { return; }
     if (r.t === 'chunk' && Array.isArray(r.c)) cap.chunks.set(r.c.join(','), Array.isArray(r.pieces) ? r.pieces : []);
-    else if (r.t === 'welcome') { if (Array.isArray(r.starts)) cap.starts = r.starts; if (r.spots) cap.routes = routesOf(r.spots); cap.held.clear(); }
+    else if (r.t === 'welcome') { if (Array.isArray(r.starts)) cap.starts = r.starts; if (r.spots) { cap.routes = routesOf(r.spots); cap.spots = (Array.isArray(r.spots.list) ? r.spots.list : []).map(sp => ({ owner: sp && sp.owner, pieces: sp && Array.isArray(sp.pieces) ? sp.pieces : [] })); } cap.held.clear(); }
     else if (r.t === 'startsdiff') {
       const m = new Map(cap.starts.map(s => [s.id, s]));
       for (const id of r.gone || []) m.delete(id);

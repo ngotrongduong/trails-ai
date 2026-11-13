@@ -184,6 +184,26 @@ The page runs the same rider on the live game:
 
 Any key the player presses hands the bike back; the learning goes on.
 
+### Where it rides, for the player's levels (src/65-roam.js)
+
+The game's level tables (checked in its code 2026-11-14) count, for OG, 1 point per 3 min riding, 10 per day with
+10 min ridden, 5 per new square and 25 per new country; for Builder, 4 per different rider and 1 per 10 runs on the
+player's lines (other riders only: the player's own runs do not count), 40 per line published, 25 per crew member,
+5 per sign, 20 for naming the spot. The panel's "Where the AI rides" switch:
+- **This line** (off): as before.
+- **New squares (OG).** Squares are 500 m: the open world (x -1900..2100, z -2000..2000) in 8 × 8, A1..H8, and the
+  eight countries round it the same, named "Dunes C4" (Jungle, Dunes, Red rock / Hardwoods, -, Farmland / Ice fields,
+  High peaks, Pine country, rows by z); 10 s of riding in one counts. The AI counts each second the bike rides along
+  (over 1 m/s) in its square, for every ride it sees. Before a ride, once the square of the line's start has had 20 s
+  (or after 4 min there), it takes the bike to the start of a square without 20 s: in a country with none first, else
+  the nearest; it waits for the ground there to load and opens the line at it. Over the real map's starts every
+  country is reached in the first 9 moves (532 squares have a start). What the player rode before the AI was loaded
+  is not known, so some squares are ridden again. Lines it came to only for this are dropped from the library when
+  it moves on.
+- **Your lines (Builder).** The lines of the spot whose owner is the player signed in (its start hills), each for
+  15 min in turn, so the chat invites bring other riders to them. Publishing, signs, naming and crew are the
+  player's own choices; the AI does none of them.
+
 ## Updating
 
 The extension's loader keeps the AI's code in localStorage and runs it on every visit.

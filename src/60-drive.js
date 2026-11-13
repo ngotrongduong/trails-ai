@@ -194,6 +194,12 @@
   async function rideOnce() {
     if (!ses.want || !ses.aiDrive || ses.paused || ses.busy || share.busy || ses.ride || !ses.learner || !ses.R) return;
     if (ses.update && ses.rides > 0) { applyUpdate(); return; }
+    // (somewhere else on the map first, for the player's levels: see roaming)
+    if (roam.mode !== 'off') {
+      let moved = false;
+      try { moved = await roamStep(); } catch (err) { console.error(err); ui.say(err.message || String(err)); }
+      if (moved || !ses.learner) { if (ses.learner) nextRide(500); return; }
+    }
     // (waiting for a plan other than the one that fell twice at the same place, 5 minutes at most)
     if (ses.waitPlan && ses.waitPlan === ses.learner.plan && Date.now() - ses.waitAt < 300e3) { nextRide(3000); return; }
     ses.waitPlan = null;

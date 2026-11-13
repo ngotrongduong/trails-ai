@@ -110,6 +110,19 @@ Cả lượt chạy cộng thêm:
 - **Mời mọi người:** cứ 10 phút, lúc bắt đầu một lượt, AI bấm một trong hai nút mời của chat, lần lượt: “Invite everyone to <tên đường>” (vào chạy cùng) và “Invite everyone to watch you” (vào xem).
   - Không có file nào tải về máy bạn.
 
+## AI giúp lên cấp OG và Builder
+
+Trong **Cài đặt & thư viện đường**, nút **AI đi đâu** có 3 chế độ:
+- **Ở đường này:** như cũ, AI học và lái một đường.
+- **Khám phá ô mới (OG):** bản đồ game chia thành ô 500 m. Chạy từ 10 giây trong một ô mới được +5 điểm OG, trong một vùng (quốc gia) mới được +25.
+  - AI đếm số giây xe chạy trong từng ô. Ô đầu đường đủ 20 giây (hoặc sau 4 phút) thì AI đưa xe tới đầu một đường ở ô chưa chạy.
+  - AI đi vùng chưa chạy trước, rồi tới ô gần nhất. Sau 9 lần đi là đã qua đủ 9 vùng.
+  - AI không biết những ô bạn chạy từ trước khi bật AI, nên đôi khi chạy lại một ô đã được tính.
+  - Thời gian chạy (+1 mỗi 3 phút) và mỗi ngày chạy đủ 10 phút (+10) cũng được tính khi AI lái.
+- **Đường của bạn (Builder):** AI lần lượt lái các đường trong spot của bạn, mỗi đường 15 phút. Lời mời trong chat đưa người khác tới chạy.
+  - Game chỉ tính lượt chạy và người chạy là **người khác**. Lượt bạn (hay AI trên xe bạn) chạy thì không được tính.
+  - Đặt tên đường (+40), cắm biển (+5), đặt tên spot (+20) và nhận người vào crew (+25) là việc bạn tự làm. AI không làm thay.
+
 ## Bộ nhớ
 
 Mọi thứ AI học nằm trong IndexedDB của trình duyệt bạn:
@@ -131,6 +144,7 @@ Bài học của bản AI cũ được tự chuyển vào thư viện ở lần 
   - `40-learn`: việc học và sổ tay trick;
   - `50-library`: thư viện đường;
   - `60-drive`: lái xe thật, đổi đường, tự cập nhật;
+  - `65-roam`: đi khám phá ô mới, lái đường của bạn;
   - `70-share`: chia sẻ;
   - `80-ui`: bảng AI;
   - `85-watch`: màn hình Xem AI tập;
@@ -157,5 +171,7 @@ It follows the track as it was built: a line its builder laid out in their spot 
 Every trick your account has unlocked is practised, as many as the air allows: several tricks in one jump, the same trick more than once (double barspins, triple tailwhips). Each line's memory goes into a library in your browser. Take the bike to another line's start and the AI saves the old line, opens the new one and carries on there.
 
 It updates itself between rides. A new best clean finished ride (30 minutes apart at most) is shared as a video titled "come to join my ride" with an invite in the game's chat, and the AI's older videos are deleted (the newest 3 kept). Every 10 minutes it also presses the chat's invite to the line or to watch it ride. The panel speaks Vietnamese by default; switch it to English in its settings.
+
+"Where the AI rides" in the settings helps with two of the game's levels. **New squares (OG)**: once the square of the line's start has had 20 s of riding, the AI takes the bike to a line in a square it has not ridden (a new country first), as new squares and countries count for OG. **Your lines (Builder)**: it rides your spot's lines in turn, 15 minutes each, so its chat invites bring other riders there (only other riders' runs count).
 
 Giấy phép: MIT.
