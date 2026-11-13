@@ -34,8 +34,8 @@
   }
   // A new memory for line route (see buildRoute).
   function newMemory(route) {
-    const { start, X, Z, KIND, W, pieces, kinds, length, back } = route;
-    return { format: LINE_FORMAT, version: 3, id: start.id, name: nameOf(String(start.id)), line: { start, X: Array.from(X), Z: Array.from(Z), KIND: Array.from(KIND), W: W ? Array.from(W) : null, pieces, kinds, length, back: !!back },
+    const { start, X, Z, KIND, W, pieces, kinds, length, back, v, design } = route;
+    return { format: LINE_FORMAT, version: 3, id: start.id, name: design || nameOf(String(start.id)), line: { start, X: Array.from(X), Z: Array.from(Z), KIND: Array.from(KIND), W: W ? Array.from(W) : null, pieces, kinds, length, back: !!back, v: v || 1, design: design || null },
       plan: null, best: null, sim: null, gen: 0, hist: [], fragile: [], rides: [], realBest: 0, setup: null, createdAt: Date.now() };
   }
   // The trick book: what every trick tried off a jump did (see the learner), kept for each set of unlocked tricks

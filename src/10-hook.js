@@ -34,7 +34,18 @@
   // ---------------------------------------------------------------- what the game receives
   // The world data the game gets from its server: the pieces of every chunk of the map near the bike, the starts of
   // the lines, and the game's own socket (for the chat invite after a share).
-  const cap = { chunks: new Map(), held: new Set(), starts: [], ws: null };
+  // routes: the lines builders laid out in their spots (a start and the pieces of its jumps in order), for each start the
+  // one with the most pieces: { [start id]: { name, ids } }.
+  const cap = { chunks: new Map(), held: new Set(), starts: [], routes: {}, ws: null };
+  const routesOf = spots => {
+    const out = {};
+    for (const sp of (spots && Array.isArray(spots.list) ? spots.list : [])) for (const l of sp.lines || []) {
+      if (!l || typeof l.from !== 'string' || !Array.isArray(l.route) || l.route.length < 2) continue;
+      const o = out[l.from];
+      if (!o || l.route.length > o.ids.length) out[l.from] = { name: String(l.name || sp.name || '').slice(0, 40) || null, ids: l.route.filter(id => typeof id === 'string') };
+    }
+    return out;
+  };
   const desc = Object.getOwnPropertyDescriptor(WebSocket.prototype, 'onmessage');
   const WRAPPED = Symbol('trailsai');
   function take(data) {
@@ -42,7 +53,7 @@
     let r;
     try { r = JSON.parse(data); } catch { return; }
     if (r.t === 'chunk' && Array.isArray(r.c)) cap.chunks.set(r.c.join(','), Array.isArray(r.pieces) ? r.pieces : []);
-    else if (r.t === 'welcome') { if (Array.isArray(r.starts)) cap.starts = r.starts; cap.held.clear(); }
+    else if (r.t === 'welcome') { if (Array.isArray(r.starts)) cap.starts = r.starts; if (r.spots) cap.routes = routesOf(r.spots); cap.held.clear(); }
     else if (r.t === 'startsdiff') {
       const m = new Map(cap.starts.map(s => [s.id, s]));
       for (const id of r.gone || []) m.delete(id);

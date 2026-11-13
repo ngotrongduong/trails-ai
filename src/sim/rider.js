@@ -83,7 +83,13 @@ const trickText = got => Object.keys(TRICK_WORDS).filter(k => got && got[k]).map
 //   m: seconds of air to keep before landing: a button trick is begun only when it will be caught by then
 //   lf: tailwhips and barspins thrown to the left
 //   h: the first button trick's buttons held up the takeoff (thrown harder)
-const freshPlan = secs => ({ v: secs.map(() => 8), pt: secs.map(s => s.pt), pl: secs.map(() => 0), pu: secs.map(() => 1), tk: secs.map(() => null) });
+// (off a jump the line turns in the air from, by TURN_SA rad and more, the rider steers round toward it from the start)
+const TURN_SA = 0.5;
+const freshPlan = secs => {
+  const p = { v: secs.map(() => 8), pt: secs.map(s => s.pt), pl: secs.map(() => 0), pu: secs.map(() => 1), tk: secs.map(() => null) };
+  if (secs.some(s => Math.abs(s.turn || 0) >= TURN_SA)) p.sa = secs.map(s => (Math.abs(s.turn || 0) >= TURN_SA ? 1 : 0));
+  return p;
+};
 
 // Rides line R (points every metre, ground heights H, sections S) with plan P. me.step(state, tick) gives back the
 // controls [pedal, brake, steer, lean, pump, buttons, whip]. The plan is me.P, which may be changed between steps;

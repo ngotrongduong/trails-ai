@@ -3,6 +3,17 @@
   // piece under each (KIND: start, takeoff, landing, air over a gap, pump, flat, berm) and half its width (W), with
   // the pieces near it that the physics needs.
   const PHYS_KINDS = ['start', 'takeoff', 'landing', 'pump', 'flat', 'berm'];
+  // A line may turn in the air: off a takeoff, a landing turned up to TURN_MAX rad from it (115°) within TURN_REACH m,
+  // each radian of turn counted as TURN_COST m further off. The way through the air then bends round from the lip's way
+  // to the landing's (when it turns TURN_BEND rad and more), so the rider steers round it in flight.
+  const TURN_MAX = 2.0, TURN_REACH = 60, TURN_COST = 10, TURN_BEND = 0.75;
+  // Between pieces a line may cross bare ground (the game's own lines do, a landing to the next takeoff over the hill):
+  // up to GROUND_REACH m on, turned up to GROUND_DH rad, no further to the side than GROUND_LAT a metre on, counted as
+  // GROUND_COST m further off than a piece that follows on at once. Off the end of a piece onto a landing so is a drop.
+  const GROUND_REACH = 30, GROUND_DH = 0.7, GROUND_LAT = 0.35, GROUND_COST = 5, GUIDE_REACH = 60;
+  // The way lines are traced: a line kept from an older way (lower LINE_V) is traced again when opened (see the drive).
+  // 2: turns in the air, bare ground between pieces, drops, the game's own laid-out lines.
+  const LINE_V = 2;
   const assets = () => {
     const names = performance.getEntriesByType('resource').map(e => e.name);
     const pick = re => names.find(n => re.test(n));
@@ -87,24 +98,35 @@
       }
     }
     if (!cur) return null;
+    const design = !back && cap.routes ? cap.routes[start.id] : null, guide = design ? design.ids : null, byId = new Map(segs.map(s => [s.p.id, s]));
+    let gk = 0;
     const chain = [], used = new Set(), gapAfter = [];
     while (cur && chain.length < 600) {
       chain.push(cur); used.add(cur);
-      let nxt = null, score = Infinity;
+      let nxt = null, score = Infinity, gap = 0;
       for (const s of segs) {
         if (used.has(s)) continue;
         // (back: the piece s whose end leads onto this one, as forward this one would go on to s)
         const a = back ? s : cur, b = back ? cur : s;
-        const [ex, ez, eh] = a.end, jump = a.p.kind === 'takeoff', [lx, lz, lh] = b.lead;
+        const [ex, ez, eh] = a.end, jump = a.p.kind === 'takeoff', land = b.p.kind === 'landing', [lx, lz, lh] = b.lead;
         const dx = lx - ex, dz = lz - ez, f = dx * Math.cos(eh) + dz * Math.sin(eh), lat = -dx * Math.sin(eh) + dz * Math.cos(eh), dh = Math.abs(wrapA(lh - eh));
         // (from a takeoff a landing up to 250 m on still joins, a big jump down a long hill flies that far; anything
         // else only up to 40 m, and nearer pieces always win; a berm's way in and out lie over the flats beside it)
-        const maxF = jump ? (b.p.kind === 'landing' ? 250 : 40) : 3.5;
+        const maxF = jump ? (land ? 250 : 40) : GROUND_REACH;
         if (f < -3.5 || f > maxF) continue;
-        if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
-        if (dh > (jump ? 0.75 : 0.65)) continue;
-        const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * 3;
-        if (sc < score) { score = sc; nxt = s; }
+        // (a landing turned from the takeoff's way, up to TURN_MAX, near enough to steer round to in the air: a line
+        // that turns in flight; counted as further off the more it turns, so a landing straight ahead at the same
+        // distance wins)
+        const turn = jump && land && dh > 0.75, ground = !jump && f > 3.5;
+        if (turn) { if (dh > TURN_MAX || f < 2 || Math.hypot(f, lat) > TURN_REACH || Math.abs(lat) > 3 + 1.3 * f) continue; }
+        else if (ground) { if (dh > GROUND_DH || Math.abs(lat) > 1.5 + GROUND_LAT * f) continue; }
+        else {
+          if (Math.abs(lat) > 1.5 + Math.min(40, Math.max(0, f)) * (jump ? 0.45 : 0.3)) continue;
+          if (dh > (jump ? 0.75 : 0.65)) continue;
+        }
+        const sc = Math.abs(f) + Math.abs(lat) * 2 + dh * (turn ? TURN_COST : 3) + (ground ? GROUND_COST : 0);
+        // (gap: 1 a flight, off a takeoff or dropping off the end of something onto a landing; 2 bare ground)
+        if (sc < score) { score = sc; nxt = s; gap = jump || (ground && land) ? 1 : ground ? 2 : 0; }
       }
       // A takeoff laid on top of a flat, part way along it: the bike rides up it there, whatever lies past it
       // (cur.cut: how far along the flat its foot is).
@@ -122,9 +144,25 @@
             run += L;
           }
         }
-        if (on) { cur.cut = along; nxt = on; }
+        if (on) { cur.cut = along; nxt = on; gap = 0; }
       }
-      gapAfter.push(nxt && (back ? nxt : cur).p.kind === 'takeoff' ? 1 : 0);
+      // The game's own line from this start, when its builder laid one out: its pieces in order. The line goes on to the
+      // next of them it can reach (a landing up to 250 m off a takeoff, anything else up to GUIDE_REACH m over the
+      // ground), whichever way it lies; a piece other than a takeoff that follows on at once and leads nearer comes first.
+      if (guide) {
+        for (let k = gk; k < guide.length; k++) if (guide[k] === cur.p.id) { gk = k + 1; break; }
+        while (gk < guide.length && !byId.has(guide[gk])) gk++;
+        const g = gk < guide.length ? byId.get(guide[gk]) : null;
+        if (g && !used.has(g) && nxt !== g) {
+          const [ex, ez, eh] = cur.end, jump = cur.p.kind === 'takeoff', [lx, lz] = g.lead, dx = lx - ex, dz = lz - ez;
+          const f = dx * Math.cos(eh) + dz * Math.sin(eh), d = Math.hypot(dx, dz);
+          const toward = nxt && !jump && gap === 0 && nxt.p.kind !== 'takeoff' && Math.hypot(lx - nxt.end[0], lz - nxt.end[1]) < d - 1;
+          if (f > -3.5 && d < (jump && g.p.kind === 'landing' ? 250 : GUIDE_REACH) && !toward) {
+            delete cur.cut; nxt = g; gap = jump || (g.p.kind === 'landing' && d > 3.5) ? 1 : d > 3.5 ? 2 : 0;
+          }
+        }
+      }
+      gapAfter.push(nxt ? gap : 0);
       cur = nxt;
     }
     const raw = [], flip = { takeoff: 'landing', landing: 'takeoff' };
@@ -134,7 +172,7 @@
       hw = s.p.params && s.p.params.width > 0 ? s.p.params.width / 2 : 0;
       if (back) {
         const kd = flip[s.p.kind] || s.p.kind;
-        add(s.end[0], s.end[1], ci && gapAfter[ci - 1] ? 'air' : kd);
+        add(s.end[0], s.end[1], ci && gapAfter[ci - 1] ? gapAfter[ci - 1] === 2 ? 'flat' : 'air' : kd);
         for (let i = s.pts.length - 1; i >= 0; i--) add(s.pts[i][0], s.pts[i][1], kd);
       } else if (s.cut !== undefined) {
         let run = 0;
@@ -146,7 +184,22 @@
         }
       } else {
         for (const q of s.pts) add(q[0], q[1], s.p.kind);
-        add(s.end[0], s.end[1], gapAfter[ci] ? 'air' : s.p.kind);
+        add(s.end[0], s.end[1], gapAfter[ci] === 1 ? 'air' : s.p.kind);
+        const nx = chain[ci + 1];
+        // (bare ground between two pieces: ridden over as flat)
+        if (gapAfter[ci] === 2 && nx) add(nx.pts[0][0], nx.pts[0][1], 'flat');
+        // (a flight that turns: a curve from the lip's way round to the landing's, as the rider steers it)
+        if (gapAfter[ci] === 1 && nx) {
+          const [x0, z0, h0] = s.end, [x1, z1] = nx.pts[0], h1 = nx.lead[2], c = Math.hypot(x1 - x0, z1 - z0);
+          if (Math.abs(wrapA(h1 - h0)) > TURN_BEND && c > 2) {
+            const k = 0.4 * c, n = Math.ceil(c);
+            for (let i = 1; i < n; i++) {
+              const t = i / n, a = (1 - t) ** 3, b = 3 * (1 - t) ** 2 * t, d = 3 * (1 - t) * t * t, e = t ** 3;
+              add(a * x0 + b * (x0 + k * Math.cos(h0)) + d * (x1 - k * Math.cos(h1)) + e * x1,
+                a * z0 + b * (z0 + k * Math.sin(h0)) + d * (z1 - k * Math.sin(h1)) + e * z1, 'air');
+            }
+          }
+        }
       }
       if (!ci) n0 = raw.length;
     });
@@ -170,7 +223,7 @@
     const pieces = near.filter(p => nearLine(p.x, p.z, p.kind === 'shape' || p.kind === 'ground' ? 70 : 35));
     const kinds = {};
     chain.forEach(s => { kinds[s.p.kind] = (kinds[s.p.kind] || 0) + 1; });
-    return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds };
+    return { start: { id: start.id, x: start.x, z: start.z, heading: start.heading }, X, Z, KIND, W, length: X.length, pieces, kinds, v: LINE_V, design: design ? design.name : null };
   }
   // Half the width of the piece under each point of a line kept from before lines carried it: the widest piece whose
   // way passes within 2 m of the point, else 0.
@@ -195,6 +248,10 @@
       return w;
     });
   }
+  // The game holds every chunk a line's pieces sit in (so tracing it again finds them all).
+  const lineLoaded = line => line.pieces.every(p => cap.chunks.has(Math.floor(p.x / 256) + ',' + Math.floor(p.z / 256)));
+  // Two traces of a line are the same: the same points (within 5 cm) over the same kinds of piece.
+  const sameLine = (a, b) => a.length === b.length && Array.from(a.X).every((x, i) => Math.abs(x - b.X[i]) < 0.05 && Math.abs(a.Z[i] - b.Z[i]) < 0.05 && a.KIND[i] === b.KIND[i]);
   // A line is out of date when the game now holds the chunk one of its pieces sits in, and the piece is gone or moved.
   function lineStale(line) {
     for (const p of line.pieces) {

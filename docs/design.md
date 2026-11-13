@@ -137,6 +137,21 @@ There every try is also ridden 0.3 m/s faster, 0.3 m/s slower and with its trick
 ## Lines and the library
 
 - **Opening a line.** Start finds the route at the bike: a known line whose start is within 15 m, or the route from the start hill or piece at the bike, run back up to 40 m.
+- **Tracing a line** (`buildRoute`, tracer version `LINE_V` 2). From the piece the start sits on, piece by piece, each
+  time the nearest piece that goes on from the end of this one:
+  - one that follows on at once (up to 3.5 m), turned 37° at most;
+  - off a takeoff, a landing up to 250 m on, or a landing turned up to 115° within 60 m (a jump that turns in the air;
+    each radian of turn counts as 10 m further off). The flight then bends round from the lip's way to the landing's,
+    and the plan steers in the air (`sa` 1) from the start on every jump that turns 0.5 rad or more;
+  - across bare ground up to 30 m (turned 40° at most, counted 5 m further off), as the game's lines ride from a
+    landing over the hill to the next takeoff; off the end of a deck onto a landing that is a drop;
+  - when the line's builder laid it out in their spot (the server's `welcome.spots.list[].lines[]`: `from` a start,
+    `route` its pieces in order), the next piece of that list it can reach, whichever way it lies (a landing up to
+    250 m off a takeoff, anything else up to 60 m). For a start with several, the one with the most pieces.
+  Measured on the 86 laid-out lines of the map (2026-11-14): with the builder's list the trace flies 520 of their 535
+  jumps the builder's way and follows 79 of them to the end; by the pieces alone 205 jumps (version 1: 109).
+  A library line traced by an older version is traced again when it is opened and the game holds all its chunks; if
+  it comes out different it is learned afresh.
 - **Memory.** Each line has one memory (`trailsai.line.<id>`, format `trails-ai-line` v3). It holds the route, the plan, the best simulated ride, the real rides, the fragile sections and the learning history. The index `trailsai.lines` has one row per line for the library list.
 - **Switching lines.** When the bike stands still 2.5 s at least 25 m from the current line's start, the AI saves the line and opens the one at the bike, from the library or fresh, and learns on there.
 - **Old memories.** The old AI's memories (`trailsai.v2.*` plain lines) are converted once into the new shape, and the originals are kept:

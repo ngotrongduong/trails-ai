@@ -39,10 +39,17 @@
       }
       if (ses.mem && ses.mem.id === mem.id && ses.learner) return;
       closeLine();
-      // a line of the library the game now has otherwise (pieces moved or gone): traced again, learned again
-      if (lineStale(mem.line)) {
+      // a line of the library the game now has otherwise (pieces moved or gone), or traced an older way (LINE_V): traced
+      // again, and learned again unless it comes out the same
+      const stale = lineStale(mem.line), older = (mem.line.v || 1) < LINE_V && lineLoaded(mem.line);
+      if (stale || older) {
         const r = await buildRoute(mem.line.start, mem.line.back);
-        if (r) { const fresh = newMemory(r); fresh.name = mem.name; fresh.rides = mem.rides; mem = fresh; ui.log(tx('Đường này đã bị sửa trong game: AI dò lại và học lại từ đầu.', 'This line has been changed in the game: the AI traces it again and learns it afresh.')); }
+        if (r && !stale && sameLine(r, mem.line)) mem.line.v = r.v;
+        else if (r) {
+          const fresh = newMemory(r); fresh.name = mem.name; fresh.rides = mem.rides; mem = fresh;
+          ui.log(stale ? tx('Đường này đã bị sửa trong game: AI dò lại và học lại từ đầu.', 'This line has been changed in the game: the AI traces it again and learns it afresh.')
+            : tx('AI dò lại đường này theo cách mới (theo đúng thiết kế của track: lăn qua đất giữa các chi tiết, rẽ trên không) và học lại từ đầu.', 'The AI traces this line again the new way (as the track is laid out: over the ground between pieces, turning in the air) and learns it afresh.'));
+        }
       }
       if (!mem.line.W) mem.line.W = await widthsOf(mem.line);
       ses.mem = mem;
@@ -67,7 +74,7 @@
       ses.R = { X: g.X, Z: g.Z, KIND: g.KIND, W: g.W, PZ: g.PZ, length: g.X.length }; ses.H = g.H; ses.secs = L.secs;
       if (!mem.plan) lib.put(Object.assign(mem, { plan: L.plan, best: keepBest(L.best), setup, sim: SIM_ID }));
       ui.log(got.fromMemory ? tx(`Mở <b>${esc(mem.name)}</b> từ thư viện: ${L.best.game} điểm trong mô phỏng${L.best.end === 'finish' ? ', về đích' : ''}. Học tiếp.`, `Opened <b>${esc(mem.name)}</b> from the library: ${L.best.game} points in the simulation${L.best.end === 'finish' ? ', to the end' : ''}. Learning on.`)
-        : tx(`Đường mới <b>${esc(mem.name)}</b> (${mem.line.length} m, ${L.secs.filter(s => s.jump).length} cú nhảy). Bắt đầu học.`, `New line <b>${esc(mem.name)}</b> (${mem.line.length} m, ${L.secs.filter(s => s.jump).length} jumps). Learning starts.`));
+        : tx(`Đường mới <b>${esc(mem.name)}</b> (${mem.line.length} m, ${L.secs.filter(s => s.jump).length} cú nhảy${mem.line.design ? ', theo đúng đường người xây track vẽ sẵn' : ''}). Bắt đầu học.`, `New line <b>${esc(mem.name)}</b> (${mem.line.length} m, ${L.secs.filter(s => s.jump).length} jumps${mem.line.design ? ', the way the track builder laid it out' : ''}). Learning starts.`));
       if (!L.pool.snapOk) throw new Error(tx('Trạng thái vật lý không lưu lại được trên máy này, AI không học được.', 'The physics state cannot be saved on this computer, so the AI cannot learn.'));
       ses.t0 = Date.now(); ses.tries = 0; ses.lastTries = 0; ses.rs = [];
       if (ses.want) L.run().catch(err => { console.error(err); ui.log(tx('Lỗi khi học: ', 'Error while learning: ') + esc(err.message || err)); });

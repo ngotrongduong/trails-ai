@@ -281,6 +281,8 @@
           out.push({ p });
         }
         if (nd.plan.tk[k]) { const p = clonePlan(nd.plan); p.tk[k] = null; out.push({ p }); }
+        // (a jump the line turns in the air from: steered round hard and gently, if the plan does not already)
+        if (Math.abs(s.turn || 0) >= TURN_SA) for (const a of [1, 0.5]) if ((nd.plan.sa ? nd.plan.sa[k] || 0 : 0) !== a) { const p = clonePlan(nd.plan); setPer(p, 'sa', k, a); out.push({ p }); }
       }
       for (let i = 0; i < n; i++) out.push({ p: Math.random() < wild ? this.wildTry(nd.plan, k) : this.secTry(nd.plan, k, wide) });
       return out;

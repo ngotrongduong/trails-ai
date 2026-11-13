@@ -46,19 +46,25 @@ function addLine(route, setup) {
   S = sections();
   R.PZ = pumpZones();
 }
-// Cut the line into sections: one ends at every takeoff lip, the others every 40 m. A jump's pt: the slope to land on.
+// Cut the line into sections: one ends at every takeoff lip, the others every 40 m. A jump's pt: the slope to land on;
+// its turn: how far the line turns in the air from the lip to the landing (rad, + to the left of the way it goes).
 function sections() {
   const N = R.length, out = [];
   let a = 0, nl = -1;
   const nextLand = new Int32Array(N).fill(-1);
   for (let i = N - 1; i >= 0; i--) { if (R.KIND[i] === 'landing') nl = i; nextLand[i] = nl; }
   const isT = i => i < N && R.KIND[i] === 'takeoff';
+  const way = i => { const p = clamp(i, 0, N - 2); return Math.atan2(R.Z[p + 1] - R.Z[p], R.X[p + 1] - R.X[p]); };
   for (let i = 0; i < N; i++) {
     const lip = isT(i) && !isT(i + 1);
     if (lip || i - a >= 40 || i === N - 1) {
-      let pt = 0;
-      if (lip) { const q = nextLand[i], j = q >= 0 && q - i < 45 ? q : Math.min(N - 5, i + 12); pt = clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2); }
-      out.push({ a, b: i, jump: lip, pt: +pt.toFixed(3) });
+      let pt = 0, turn = 0;
+      if (lip) {
+        const q = nextLand[i], j = q >= 0 && q - i < 45 ? q : Math.min(N - 5, i + 12);
+        pt = clamp(Math.atan2(H[Math.min(N - 1, j + 4)] - H[j], 4), -0.7, 0.2);
+        if (q >= 0 && q - i < 80) turn = wrapA(way(q + 3) - way(i - 2));
+      }
+      out.push({ a, b: i, jump: lip, pt: +pt.toFixed(3), turn: +turn.toFixed(3) });
       a = i + 1;
     }
   }
