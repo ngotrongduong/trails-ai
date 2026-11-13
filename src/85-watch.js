@@ -192,8 +192,8 @@
     g.fillText(tx(`${c.rides.length} xe thử cùng lúc · ${c.nKept} giữ lại · ${c.nCrash} ngã · ${c.nRound} né cú nhảy · ${pts(c.tries)} lần thử trong lượt này`,
       `${c.rides.length} bikes at once · ${c.nKept} kept · ${c.nCrash} fell · ${c.nRound} went round a jump · ${pts(c.tries)} tries this sweep`), 16, 40);
     if (best) {
-      const s = tx(`Tốt nhất: ${pts(best.game)} điểm · ${best.end === 'finish' ? 'về đích' : `tới ${best.prog} m`} · ${rideTricks(best)} trick · combo ×${rideCombo(best)}`,
-        `Best: ${pts(best.game)} points · ${best.end === 'finish' ? 'to the end' : `to ${best.prog} m`} · ${rideTricks(best)} tricks · combo ×${rideCombo(best)}`);
+      const s = tx(`Tốt nhất: ${pts(rideShow(best))} điểm trình diễn · ${best.end === 'finish' ? 'về đích' : `tới ${best.prog} m`} · ${rideTricks(best)} trick · nhiều nhất ${rideMost(best)} trick một cú`,
+        `Best: ${pts(rideShow(best))} show points · ${best.end === 'finish' ? 'to the end' : `to ${best.prog} m`} · ${rideTricks(best)} tricks · at most ${rideMost(best)} in one jump`);
       g.fillStyle = '#f0c96a'; g.textAlign = 'right'; g.fillText(s, W - 16, 22); g.textAlign = 'left';
     }
     let lx = 16;

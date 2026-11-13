@@ -29,6 +29,12 @@ const btrickTime = (c, n) => { const d = BTRICKS[c]; return d.turn ? d.turn * n 
 const VFREE = 17.5;
 // when to pump through a dip: from 0.1 m past where it starts to 0.2 m past its end (as the game's Training)
 const PUMP0 = [0.1, 0.2];
+// A manual (plan mn: 1 on gentle ground, 2 on slopes too): rolling, no pedals, UP held to lift the front, then fed
+// whenever the game's balance meter (s[47], -1 front down .. 1 looping out) drops below MANUAL_BAL0. Measured in the
+// game's physics on long level ground: so the bike stays on its back wheel 10 s and more and hardly slows; holding UP
+// all the time loops out in 3 s. Only where the ground 4 m ahead is no steeper than MANUAL_SLOPE[mn] and no takeoff
+// is within MANUAL_CLEAR m ahead.
+const MANUAL_BAL0 = -0.2, MANUAL_SLOPE = [0, 0.06, 0.15], MANUAL_CLEAR = 8;
 
 // ---- points
 // What one landing is worth. The game gives points for a landing only in Train (base 160 buttery, 140 clean, 100
@@ -67,7 +73,8 @@ const trickText = got => Object.keys(TRICK_WORDS).filter(k => got && got[k]).map
 // ---- the plan
 // A plan has, per section of the line: v (speed to hold, or vs: one for each equal part of the section), pl (pull up
 // that many metres before a lip), pu (how hard to pump in the dips), ph (pump down the start hill too), lg (the rider's
-// weight on the ground), pt (the bike's angle to hold in the air, rad), sa (steering in the air toward the line), and off
+// weight on the ground), pt (the bike's angle to hold in the air, rad), sa (steering in the air toward the line), mn (a
+// manual where the ground lets it: see MANUAL_BAL0), and off
 // a jump tk, its trick program (null: none):
 //   f: 1 a backflip (the pedals held up the takeoff, then let go round)
 //   s: a spin, -1 left, 1 right (the whip held up the takeoff), let go sr × 100° round (3.3 a 360, 6.9 a 720, ...)
@@ -167,6 +174,13 @@ function makeRider(R, H, S, P, jit) {
         if (tk.h && tk.q && tk.q.length && S[sec].jump && idx >= S[sec].b - 2) btn |= BTRICKS[tk.q[0][0]].b | (tk.lf ? BTN.LEFT : 0);
       }
       if (P.lg && P.lg[sec]) lean = P.lg[sec];
+      // a manual where the plan has one and the ground lets it
+      const mn = P.mn ? P.mn[sec] || 0 : 0;
+      if (mn && !onT && Math.abs(H[look(4)] - H[idx]) / 4 <= MANUAL_SLOPE[mn]) {
+        let clear = true;
+        for (let i = idx; i < Math.min(N, idx + MANUAL_CLEAR); i++) if (R.KIND[i] === 'takeoff' || R.KIND[i] === 'air') { clear = false; break; }
+        if (clear) { pedal = 0; brake = 0; pump = 0; lean = 0; if (!(s[S_.MANUAL] > 0) || s[S_.MANUAL_BAL] < MANUAL_BAL0) btn |= BTN.UP; }
+      }
     } else {
       const dp = wrapA(s[4] - me.prevP) * 30;
       me.rot += wrapA(s[4] - me.prevP);

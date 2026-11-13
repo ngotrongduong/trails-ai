@@ -4,25 +4,55 @@
   const clonePlan = p => JSON.parse(JSON.stringify(p));
   const clampV = v => clamp(v, 2, 18);
   const planFits = (p, secs) => !!p && ['v', 'pt', 'pl', 'pu', 'tk'].every(k => Array.isArray(p[k]) && p[k].length === secs.length)
-    && ['vs', 'lg', 'sa', 'ph', 'pc'].every(k => p[k] === undefined || (Array.isArray(p[k]) && p[k].length === secs.length));
+    && ['vs', 'lg', 'sa', 'ph', 'pc', 'mn'].every(k => p[k] === undefined || (Array.isArray(p[k]) && p[k].length === secs.length));
+  // ---- the show
+  // What the AI rides for: a show of skill, every jump worth what it shows by itself (not the game's streak, which
+  // makes a jump worth what the jumps before it were). A jump (a landing: jl entry) is worth
+  // - its landing: SHOW_LAND by the game's grade (buttery 160 … cased 0);
+  // - plus its tricks, each by how hard it is (SHOW_TRICK: the game's Train points for it + 25 × its skill points),
+  //   every turn counted (a 720 two 360s, a triple tailwhip three tailwhips), × the combo: 1 + SHOW_KIND for every
+  //   kind of trick in the jump after the first, + SHOW_MORE for every trick of a kind already in it. So a backflip
+  //   alone is 590 on a clean landing; a backflip 360 tailwhip 1890; a backflip 720 double tailwhip barspin 4265.
+  // A ride is worth its jumps, + SHOW_VARIETY for every kind of trick it lands somewhere (the manual too), + MANUAL_W a
+  // second on the back wheel, in manuals of a second or more (those the game keeps: the longer, the more).
+  const SHOW_LAND = [0, 160, 140, 100, 50, 0], SHOW_KIND = 0.5, SHOW_MORE = 0.25, SHOW_VARIETY = 300, MANUAL_W = 60;
+  const SHOW_TRICK = { flip: 450, spin: 300, whip: 150, tailwhip: 125, barspin: 75, table: 125, tbog: 75, xup: 100 };
+  // a landing's tricks: n of them (every turn counted), k kinds, sum of what they are worth
+  const tricksIn = got => {
+    let n = 0, k = 0, sum = 0;
+    for (const [key, w] of Object.entries(SHOW_TRICK)) {
+      const c = got ? key === 'spin' ? Math.round((got.spin || 0) / 360) : got[key] || 0 : 0;
+      if (c > 0) { n += c; k++; sum += w * c; }
+    }
+    if (got && got.spin && got.table) sum += 250;
+    return { n, k, sum };
+  };
+  const tricksOf = got => tricksIn(got).n;
+  const jumpShow = e => { const t = tricksIn(e.got); return (SHOW_LAND[e.g] || 0) + (t.n ? t.sum * (1 + SHOW_KIND * (t.k - 1) + SHOW_MORE * (t.n - t.k)) : 0); };
+  // (lands: jl entries, man: seconds of manual)
+  const showOf = (lands, man) => {
+    const kinds = new Set();
+    let v = MANUAL_W * (man || 0);
+    for (const e of lands || []) { v += jumpShow(e); for (const key of Object.keys(SHOW_TRICK)) if (e.got && e.got[key]) kinds.add(key); }
+    if (man >= 1) kinds.add('manual');
+    return Math.round(v + SHOW_VARIETY * kinds.size);
+  };
+  const rideShow = r => showOf(r.jl, r.man);
+  const rideTricks = r => (r.jl || []).reduce((a, e) => a + tricksOf(e.got), 0);
+  // the most tricks in one jump
+  const rideMost = r => Math.max(0, ...(r.jl || []).map(e => tricksOf(e.got)));
   // Ride a beats ride b: all the way first; then the further; at the end, the more it is worth (judged); then the
-  // faster. What a ride is worth: its points, and on top of them
-  // - TRICK_W for every trick landed (a 720 two, a double barspin two);
-  // - COMBO_W × the combo at every landing (the game's streak: the 1st good landing in a row 1, the 5th 5, so a long
-  //   combo is worth more than the same landings broken up);
+  // faster. What a ride is worth: its show, and
   // - less TIME_COST a second the ride took (to the end, or to where it is);
   // - less CASED_COST a cased landing (a search that cannot find the speed for a jump would settle for casing it);
   // - less OFF_COST a metre ridden off the line (one that cannot clear a jump would ride round it; riding round a
   //   jump's lip ends the ride there: see the worker).
-  const CASED_COST = 200, OFF_COST = 60, TRICK_W = 30, COMBO_W = 15, TIME_COST = 20;
+  const CASED_COST = 200, OFF_COST = 60, TIME_COST = 20;
   const done = r => r.end === 'finish';
   const far = r => (done(r) ? Infinity : r.prog);
-  const tricksOf = got => (got ? (got.flip || 0) + (got.spin ? Math.round(got.spin / 360) : 0) + (got.whip || 0) + (got.tailwhip || 0) + (got.barspin || 0) + (got.table || 0) + (got.tbog || 0) + (got.xup || 0) : 0);
-  const rideTricks = r => (r.jl || []).reduce((a, e) => a + tricksOf(e.got), 0);
-  const rideCombo = r => Math.max(0, ...(r.jl || []).map(e => e.st || 0));
   const judged = r => {
-    let v = (r.game || 0) - OFF_COST * (r.offM || 0) - TIME_COST * (r.ticks || 0) / 60;
-    for (const e of r.jl || []) v += TRICK_W * tricksOf(e.got) + COMBO_W * (e.st || 0) - (e.g === 5 ? CASED_COST : 0);
+    let v = rideShow(r) - OFF_COST * (r.offM || 0) - TIME_COST * (r.ticks || 0) / 60;
+    for (const e of r.jl || []) if (e.g === 5) v -= CASED_COST;
     return v;
   };
   const beats = (a, b) => !b || far(a) > far(b) || (far(a) === far(b) && (judged(a) !== judged(b) ? judged(a) > judged(b)
@@ -91,7 +121,7 @@
   function drawTricks(rows, air, mask) {
     if (Math.random() < 0.15) return heldMove();
     const w = bookWeights(rows, air, mask), has = c => w[c] > 0;
-    const sum = Object.values(w).reduce((a, x) => a + x, 0) || 1, want = c => has(c) && Math.random() < Math.min(0.85, 1.6 * w[c] / sum + 0.08);
+    const sum = Object.values(w).reduce((a, x) => a + x, 0) || 1, want = c => has(c) && Math.random() < Math.min(0.85, 1.6 * w[c] / sum + 0.2);
     const tk = {};
     let left = air - 0.35;
     if (want('F') && left > 0.6) { tk.f = 1; left -= 0.35; }
@@ -201,6 +231,7 @@
       if (Math.random() < 0.15 * wide) { const now = p.pc ? p.pc[k] || 0 : 0; setPer(p, 'pc', k, pick(PUMP_WAYS.filter(w => w !== now))); if (!p.pu[k]) p.pu[k] = 1; }
       if (this.onHill(k) && Math.random() < 0.2 * wide) { setPer(p, 'ph', k, p.ph && p.ph[k] ? 0 : 1); if (p.ph && p.ph[k] && !p.pu[k]) p.pu[k] = 1; }
       if (Math.random() < 0.12 * wide) setPer(p, 'lg', k, pick(LEANS));
+      if (Math.random() < 0.15 * wide) { const now = p.mn ? p.mn[k] || 0 : 0; setPer(p, 'mn', k, pick([0, 1, 2].filter(m => m !== now))); }
       if (s.jump) {
         if (Math.random() < 0.25 * wide) setPer(p, 'sa', k, pick(AIR_STEERS));
         this.trickFor(p, k, wide);
@@ -228,6 +259,7 @@
       setPer(p, 'pc', k, pick(PUMP_PICK));
       if (this.onHill(k)) setPer(p, 'ph', k, p.pu[k] && Math.random() < 0.5 ? 1 : 0);
       if (Math.random() < 0.4) setPer(p, 'lg', k, pick(LEANS));
+      setPer(p, 'mn', k, Math.random() < 0.3 ? pick([1, 2]) : 0);
       return p;
     }
     // First round from partial ride nd: the plan as it is, one with no speed limit, a grid of take-off speeds by angles
@@ -238,6 +270,8 @@
       if (this.onHill(k) && !(nd.plan.ph && nd.plan.ph[k] && nd.plan.pu[k] >= 1)) { const p = clonePlan(nd.plan); setPer(p, 'ph', k, 1); p.pu[k] = 1; out.push({ p }); }
       // (pumped hard each other way: through the dips, where the ground rises, where it falls away)
       for (const w of PUMP_WAYS) if (w !== (nd.plan.pc ? nd.plan.pc[k] || 0 : 0) || nd.plan.pu[k] < 1) { const p = clonePlan(nd.plan); setPer(p, 'pc', k, w); p.pu[k] = 1; out.push({ p }); }
+      // (a manual each way the plan has not: on gentle ground, on slopes too)
+      for (const m of [1, 2]) if (m !== (nd.plan.mn ? nd.plan.mn[k] || 0 : 0)) { const p = clonePlan(nd.plan); setPer(p, 'mn', k, m); out.push({ p }); }
       if (s.jump) {
         for (const dv of [-1.2, -0.6, 0.6, 1.2, 1.8]) for (const da of [-0.1, 0, 0.1]) {
           const p = clonePlan(nd.plan), u = p.vs && p.vs[k];
@@ -263,7 +297,7 @@
       p.pt[k] = one().pt[k] + gauss() * sp;
       p.pl[k] = one().pl[k]; p.pu[k] = one().pu[k];
       const t = one().tk[k]; p.tk[k] = t && Math.random() < 0.4 ? nudgeTricks(t, this.book, this.airOf(k), this.setup.tricks) : t ? clonePlan(t) : null;
-      for (const key of ['lg', 'sa', 'ph', 'pc']) { const w = one(); if (w[key] || p[key]) setPer(p, key, k, w[key] ? w[key][k] : 0); }
+      for (const key of ['lg', 'sa', 'ph', 'pc', 'mn']) { const w = one(); if (w[key] || p[key]) setPer(p, key, k, w[key] ? w[key][k] : 0); }
       return { p };
     }
     // Rides tries cs (each {nd, p}) from their partial rides, spread over the workers. jitOnly: each c is a try c.of

@@ -14,7 +14,7 @@
   // learning workers: all the computer's threads but 2 for the game (a worker takes about 220 MB)
   const workerCount = () => Math.max(2, (navigator.hardwareConcurrency || 4) - 2);
   // the best ride in the simulation, as the memory keeps it (its landings without what only the search needs)
-  const keepBest = b => b && { end: b.end, prog: b.prog, game: b.game, train: b.train, xp: b.xp, vAvg: b.vAvg, crashSec: b.crashSec, ticks: b.ticks, offM: b.offM || 0,
+  const keepBest = b => b && { end: b.end, prog: b.prog, game: b.game, train: b.train, xp: b.xp, vAvg: b.vAvg, crashSec: b.crashSec, ticks: b.ticks, offM: b.offM || 0, man: b.man || 0, manN: b.manN || 0, manLong: b.manLong || 0,
     jl: b.jl.map(e => ({ k: e.k, a: e.a, g: e.g, p: e.p, st: e.st || 0, got: e.got })) };
   function saveMem() {
     const L = ses.learner, m = ses.mem;
@@ -50,9 +50,9 @@
         // (the learner counts its tries from 0 again every sweep)
         progress: p => { const was = ses.lastTries || 0; ses.tries += p.tries >= was ? p.tries - was : p.tries; ses.lastTries = p.tries; ui.update(); },
         better: b => {
-          const n = rideTricks(b), c = rideCombo(b), sec = (b.ticks / 60).toFixed(1);
-          ui.log(tx(`Tìm được cách đi tốt hơn: <b>${b.game} điểm</b>${b.end === 'finish' ? `, về đích trong ${sec} s` : `, tới ${b.prog} m`}, ${n} trick, combo dài nhất ×${c}.`,
-            `Found a better way: <b>${b.game} points</b>${b.end === 'finish' ? `, to the end in ${sec} s` : `, to ${b.prog} m`}, ${n} tricks, longest combo ×${c}.`));
+          const n = rideTricks(b), c = rideMost(b), sec = (b.ticks / 60).toFixed(1), man = b.man >= 1 ? `, Manual ${b.man.toFixed(1)} s` : '';
+          ui.log(tx(`Tìm được cách đi tốt hơn: <b>${rideShow(b)} điểm trình diễn</b> (${b.game} điểm game)${b.end === 'finish' ? `, về đích trong ${sec} s` : `, tới ${b.prog} m`}, ${n} trick, nhiều nhất ${c} trick một cú${man}.`,
+            `Found a better way: <b>${rideShow(b)} show points</b> (${b.game} game points)${b.end === 'finish' ? `, to the end in ${sec} s` : `, to ${b.prog} m`}, ${n} tricks, at most ${c} in one jump${man}.`));
         },
         saved: () => { ses.lastTries = 0; saveMem(); ui.update(); },
         round: r => watchRound(r),
@@ -130,7 +130,10 @@
     live.ex.trails_game_reset(live.g);
     if (inviteDue()) try { inviteNow(ui.log); } catch (err) { console.error(err); }
     const R = ses.R, N = R.length, plan = clonePlan(L.plan), rider = makeRider(R, ses.H, ses.secs, plan);
-    const d = ses.ride = { plan, plan0: clonePlan(plan), tr: [], swapT: -1, setup: riderSetup(), rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, expect: L.best };
+    const d = ses.ride = { plan, plan0: clonePlan(plan), tr: [], swapT: -1, setup: riderSetup(), rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, man: 0, manCur: 0, manLong: 0, expect: L.best };
+    // (a manual held a second or more, as the game keeps them: counted in ticks)
+    const manEnd = () => { if (d.manCur >= 60) { d.man += d.manCur; d.manLong = Math.max(d.manLong, d.manCur); } d.manCur = 0; };
+    d.manSec = () => { if (d.manCur) manEnd(); return +(d.man / 60).toFixed(1); };
     // a newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
     // gets the states the simulation scored, so its score holds for the rest of this ride too
     const swap = () => {
@@ -139,7 +142,7 @@
       d.known = p;
       const upto = Math.min(ses.secs.length - 1, Math.max(rider.sec, rider.airSec) + 1), same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
       for (const k of ['as', 'pk']) if (!same(p[k], plan[k])) return;
-      for (const k of ['v', 'pt', 'pl', 'pu', 'tk', 'vs', 'lg', 'sa', 'ph', 'pc']) for (let i = 0; i <= upto; i++) if (!same(p[k] && p[k][i], plan[k] && plan[k][i])) return;
+      for (const k of ['v', 'pt', 'pl', 'pu', 'tk', 'vs', 'lg', 'sa', 'ph', 'pc', 'mn']) for (let i = 0; i <= upto; i++) if (!same(p[k] && p[k][i], plan[k] && plan[k][i])) return;
       for (const k of Object.keys(plan)) delete plan[k];
       Object.assign(plan, clonePlan(p));
       if (d.swapT < 0) d.swapT = d.t;
@@ -150,6 +153,7 @@
         const s = liveState(), t = d.t;
         if (d.seq === null) d.seq = s[16];
         if (s[13] > 0) { setTimeout(() => endRide('crash'), 0); return null; }
+        if (s[46] > 0) d.manCur++; else if (d.manCur) manEnd();
         if (s[16] !== d.seq) {
           d.seq = s[16];
           if ((s[15] | 0) > 0) { const lp = landPoints(s, d.streak); d.streak = lp.streak; d.pending = { t, e: { k: rider.airSec, i: rider.idx, a: +s[14].toFixed(2), g: lp.g, p: lp.p, train: lp.train, xp: lp.xp, got: lp.got } }; }
@@ -199,13 +203,14 @@
     const L = ses.learner, m = Math.max(0, d.rider.idx - (L ? L.N - ses.mem.line.length : 0));
     if (why === 'finish') live.drive = { hold: true, step: () => [0, 127, 0, 0, 0, 0, 0] };
     ses.rides++;
-    const rec = { at: Date.now(), end: why, m, game: d.game, train: d.train, xp: d.xp, lands: d.lands.map(e => [e.k, e.g, e.p, trickText(e.got)]), swaps: d.swaps };
+    const man = d.manSec ? d.manSec() : 0;
+    const rec = { at: Date.now(), end: why, m, game: d.game, train: d.train, xp: d.xp, man, lands: d.lands.map(e => [e.k, e.g, e.p, trickText(e.got)]), swaps: d.swaps };
     ses.last = rec;
     const record = why === 'finish' && !!ses.mem && d.game > (ses.mem.realBest || 0);
     if (ses.mem) { ses.mem.rides = (ses.mem.rides || []).concat([rec]).slice(-10); if (why === 'finish') ses.mem.realBest = Math.max(ses.mem.realBest || 0, d.game);
       // (and the furthest real ride that did not get there, while none has)
       else if (why !== 'player') { const f = ses.mem.realFar; if (!f || m > f.m || (m === f.m && d.game > f.game)) ses.mem.realFar = { m, game: d.game }; } }
-    ui.log(tx(`<b>Lái thật:</b> ${END_WORDS[why][0]} sau ${m} m, <b>${d.game} điểm</b> (Train ${d.train}, kỹ năng ${d.xp}).`, `<b>Real ride:</b> ${END_WORDS[why][1]} after ${m} m, <b>${d.game} points</b> (Train ${d.train}, skill ${d.xp}).`));
+    ui.log(tx(`<b>Lái thật:</b> ${END_WORDS[why][0]} sau ${m} m, <b>${d.game} điểm</b> (Train ${d.train}, kỹ năng ${d.xp})${man ? `, Manual ${man} s` : ''}, ${showOf(d.lands, man)} điểm trình diễn.`, `<b>Real ride:</b> ${END_WORDS[why][1]} after ${m} m, <b>${d.game} points</b> (Train ${d.train}, skill ${d.xp})${man ? `, manual ${man} s` : ''}, ${showOf(d.lands, man)} show points.`));
     // What the real ride shows: where it fell (or came down flat or cased) and the simulation of the same plan did not,
     // the simulation was too hopeful there: that section is fragile from now on (learned with room to spare).
     if (L && why !== 'player' && d.expect) {

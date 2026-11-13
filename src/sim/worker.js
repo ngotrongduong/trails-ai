@@ -112,7 +112,8 @@ function Ep(P, jit) {
   const s = state(), N = R.length;
   const E = { P, jit: jit || null, N, t: 0, idx: 0, prog: 0, seq: s[16], stall: 0, crash: 0, end: 'timeout', done: null,
     maxT: Math.min(120000, Math.round(N / 2.5 * 60) + 600), vr: new Float32Array(N), pending: null, landT: -1e9,
-    progAt: 0, progT: 0, offM: 0, round: 0, jl: [], game: 0, train: 0, xp: 0, streak: 0, airP: 0, tail: -1, calm: 0, halt: 0, held: -1, vTail: 0, bigLand: -1 };
+    progAt: 0, progT: 0, offM: 0, round: 0, jl: [], game: 0, train: 0, xp: 0, streak: 0, airP: 0, tail: -1, calm: 0, halt: 0, held: -1, vTail: 0, bigLand: -1,
+    man: 0, manCur: 0, manN: 0, manLong: 0 };
   E.rider = makeRider(R, H, S, P, E.jit);
   return E;
 }
@@ -145,6 +146,7 @@ function go(E, stop) {
     l.trails_game_step(g, inp[0], inp[1], inp[2], inp[3], inp[4], inp[5], inp[6]);
     s = state();
     if (s[13] > 0) { E.crash = s[13]; E.end = 'crash'; E.pending = null; return fin(E, s); }
+    if (s[46] > 0) E.manCur++; else if (E.manCur) manEnd(E);
     if (s[12] > 0) E.airP = s[4];
     if (s[16] !== E.seq) {
       E.seq = s[16];
@@ -162,6 +164,9 @@ function go(E, stop) {
   }
   return fin(E, state());
 }
+// A manual ended: the game keeps one of a second or more (its time and metres count); so does the AI (steps)
+const MAN_MIN = 60;
+function manEnd(E) { if (E.manCur >= MAN_MIN) { E.man += E.manCur; E.manN++; E.manLong = Math.max(E.manLong, E.manCur); } E.manCur = 0; }
 // What a ride got, at its end (final) or so far (a ride stopped on the way).
 function summary(E, s, final) {
   const rider = E.rider, t = E.t, prog = E.prog;
@@ -170,7 +175,8 @@ function summary(E, s, final) {
   const pace = 0.05 * Math.min(20, E.vr[Math.max(0, prog - 5)]);
   const vEnd = E.tail >= 0 ? E.vTail : +Math.abs(s[8]).toFixed(2), vAvg = +(prog / Math.max(1, t) * 60).toFixed(2);
   return { fit: prog + pace + E.game / 1000, prog, crash: E.crash, end: final ? E.end : 'riding', ticks: t, sec, crashSec,
-    game: E.game, train: E.train, xp: E.xp, streak: E.streak, jl: E.jl.slice(), vEnd, vAvg, offM: E.offM, round: E.round };
+    game: E.game, train: E.train, xp: E.xp, streak: E.streak, jl: E.jl.slice(), vEnd, vAvg, offM: E.offM, round: E.round,
+    man: +((E.man + (E.manCur >= MAN_MIN ? E.manCur : 0)) / 60).toFixed(2), manN: E.manN + (E.manCur >= MAN_MIN ? 1 : 0), manLong: +(Math.max(E.manLong, E.manCur >= MAN_MIN ? E.manCur : 0) / 60).toFixed(2) };
 }
 function fin(E, s) { return E.done = summary(E, s, true); }
 

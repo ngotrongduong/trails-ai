@@ -37,6 +37,11 @@ section:
 - `pl` pull up that many metres before the lip.
 - `pu` how hard to pump (a fresh plan: 1), `pc` how to pump: through the dips the game's Training marks (0), wherever the ground 1 to 3 m ahead falls away (1, as the old AI did), or wherever it rises (2: a dip's far side, a roller's or a lip's face). `ph` pump down the start hill too. Measured on 6 lines with the pedals on: pumped where the ground rises or in the dips the bike gains 0.5-2 m/s; where it falls away, or all the time, it soon goes over.
 - `lg` the rider's weight on the ground, `sa` steering in the air.
+- `mn` ride a manual (on the back wheel): 1 where the ground 4 m ahead is no steeper than 6 %, 2 up to 15 %; never
+  within 8 m of a takeoff. Pedals, brake, pump and weight are let go and UP is pressed while the bike is not yet in a
+  manual or the game's balance meter (s[47], −1 front down … 1 looping out) is below −0.2. Measured in the game's
+  physics on long level ground: so the bike stays up 10 s and more and hardly slows; holding UP all the time loops out
+  in 3 s. Bumps and rises end a manual within 2 s.
 - `tk` the trick program of a jump:
   - `f` backflip;
   - `s` spin left/right, let go at `sr` × 100°, the air angle left alone up to `sf`° round (default `sr` × 100 + 20);
@@ -69,12 +74,24 @@ A landing counts once the bike has been 0.5 s on the ground without a crash. Its
 
 The AI's points for a landing: Train + 25 × skill points + 15 for every turn a trick went round more than once.
 
+The game's points are shown, but the AI learns by **show points**: a ride as a show of skill, every jump worth what
+it shows by itself (the game's streak makes a jump worth what the jumps before it were; the show does not).
+
+- A jump: its landing (buttery 160, clean 140, sketchy 100, flat 50, cased 0), plus its tricks, each by how hard it is
+  (the game's Train points for it + 25 × its skill points: backflip 450, 360 300, whip 150, tailwhip 125, table 125,
+  X-up 100, barspin 75, T-bog 75, +250 a 360 table), every turn counted (a 720 two 360s, a triple tailwhip three),
+  × the combo: 1 + 0.5 for every kind of trick in the jump after the first + 0.25 for every trick of a kind already in
+  it. A clean backflip alone is 590; a backflip 360 tailwhip 1890; a backflip 720 double tailwhip barspin 4265.
+- A ride: its jumps, + 300 for every kind of trick it lands somewhere (the manual too), + 60 a second in manuals of a
+  second or more (those the game keeps; the longer, the more).
+
+The game counts a held trick (table, T-bog, X-up) once a landing however long it is held; tailwhips and barspins
+turn by turn.
+
 Rides are compared in this order:
 1. Finished beats not finished.
 2. Then the further.
-3. Then what it is worth: its points, + 30 for every trick landed (a 720 two, a double barspin two), + 15 × the combo
-   at every landing (the game's streak: the 5th good landing in a row 5, so a long combo is worth more than the same
-   landings broken up), − 20 a second the ride took, − 200 a cased landing, − 60 a metre ridden off the line.
+3. Then what it is worth: its show points (below), − 20 a second the ride took, − 200 a cased landing, − 60 a metre ridden off the line.
 4. Then the faster.
 
 **Staying on the line.** Each point of the line knows half the width of the piece under it: the piece's own width,

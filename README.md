@@ -36,7 +36,7 @@ Chi tiết ở [docs/design.md](docs/design.md). Tóm tắt:
 
 - **Đọc đường.** AI đọc các chi tiết của đường từ dữ liệu game: dốc xuất phát, mép nhảy, dốc đáp, mô pump, cua. Nó nối chúng thành một lộ trình chia từng mét. Mỗi cú nhảy là một đoạn, phần còn lại cứ 40 m một đoạn.
 - **Mô phỏng thật.** Mỗi luồng chạy đúng file vật lý (WebAssembly) của game, nên cách đi nào chạy được trong mô phỏng thì ngoài game cũng chạy y như vậy. Trạng thái của xe được lưu ở đầu mỗi đoạn. Nhờ vậy thử một cách mới ở mét 800 chỉ tốn vài mét chạy.
-- **Kế hoạch.** Mỗi đoạn có vài con số: tốc độ (có thể chia phần), góc xe khi bay, nhấc xe trước mép, pump mạnh bao nhiêu và pump kiểu nào, dồn người, đánh lái trên không. Cú nhảy có thêm **chương trình trick**.
+- **Kế hoạch.** Mỗi đoạn có vài con số: tốc độ (có thể chia phần), góc xe khi bay, nhấc xe trước mép, pump mạnh bao nhiêu và pump kiểu nào, dồn người, đánh lái trên không, có đi manual không. Cú nhảy có thêm **chương trình trick**.
 
 - **Pump để lấy tốc độ.** AI pump ngay từ đầu, rồi thử ba kiểu pump: qua các chỗ trũng (như phần Training của game chỉ), ở mặt dốc đi lên (bờ bên kia chỗ trũng, mặt mô, mặt mép nhảy), hoặc ở chỗ đất đổ xuống. Đo trên 6 đường: pump ở mặt dốc lên hoặc qua chỗ trũng giúp xe nhanh thêm 0,5–2 m/s, đủ để bay qua những cú nhảy dài hơn.
 - **Không đi đường vòng.** Mỗi điểm trên đường biết bề rộng thật của chi tiết đường ở đó. Xe chạy lệch ra ngoài mép quá 1 m ngay cạnh mép nhảy là bị coi như né cú nhảy: lượt đó dừng ở đó, như bị ngã. Lệch ra ngoài ở chỗ khác thì bị trừ 60 điểm cho mỗi mét.
@@ -46,15 +46,18 @@ Chi tiết ở [docs/design.md](docs/design.md). Tóm tắt:
 
 ## Trick
 
-AI tập mọi trick mà tài khoản của bạn đã mở: **backflip, 360/720/1080, whip, tailwhip, barspin, table, T-bog, X-up, 360 table**. AI không bao giờ tự bấm “Unlock tricks”.
+AI tập cả 9 trick của game mà tài khoản của bạn đã mở: **barspin, whip, T-bog, X-up, tailwhip, table, 360 (cả 720, 1080), backflip và manual**, cùng những tổ hợp như 360 table. AI không bao giờ tự bấm “Unlock tricks”.
 
 - **Nhiều trick một cú nhảy:** backflip cùng 360, rồi một chuỗi trick nút lần lượt (ví dụ table → tailwhip → barspin).
 - **Một trick nhiều lần:** tailwhip ×2, barspin ×3…
   - Trick sau chỉ bắt đầu khi trick trước đã bắt lại xe.
   - Một trick chỉ bắt đầu khi còn đủ thời gian bay để bắt lại xe trước lúc chạm đất. Đo trong game: tailwhip mất 0,6 s một vòng, barspin 0,37 s.
+- **Manual (đi bánh sau):** trên đường bằng hoặc dốc thoải, AI có thể nhấc bánh trước và giữ thăng bằng trên bánh sau. Nó nhìn thanh thăng bằng của game: xe sắp chúi xuống thì kéo lên, xe sắp lật ngửa thì thả ra. Đo trong game: giữ được hơn 10 giây mà gần như không mất tốc độ (kéo liên tục thì 3 giây là lật). AI tự thử đoạn nào nên đi manual; không bao giờ đi manual sát mép nhảy.
 - **Sổ tay trick:** mỗi lần thử trick được ghi lại: bay bao lâu, trick gì, đáp được không. AI chọn trick như chọn máy đánh bạc nhiều cần. Trick đáng nhiều điểm và hay thành công với thời gian bay đó được thử nhiều hơn. Trick còn ít lần thử vẫn được thử tiếp.
 
-Điểm AI tính cho mỗi cú đáp:
+Điểm game là của game: điểm Train nhân theo chuỗi đáp đẹp liên tiếp (tới ×5), cộng điểm kỹ năng. AI vẫn hiện điểm game, nhưng nó **học theo điểm trình diễn** ở dưới.
+
+Điểm game, mỗi cú đáp:
 
 | | Điểm |
 |---|---|
@@ -62,14 +65,33 @@ AI tập mọi trick mà tài khoản của bạn đã mở: **backflip, 360/720
 | Backflip · Whip · mỗi nửa vòng xoay (360 = 200, 720 = 400, 1080 = 600) | +300 · +100 · +100 |
 | Chuỗi đáp đẹp liên tiếp (Flat/Cased làm mất chuỗi) | × tới 5 |
 | Điểm kỹ năng của game, mỗi loại trick một lần mỗi cú: whip 2, 360 4, backflip 6, barspin 3, T-bog 3, X-up 4, tailwhip 5, table 5, 360 table +10 | × 25 |
-| Mỗi vòng trick lặp thêm (barspin ×2, tailwhip ×3…) | +15 |
 
-Khi so hai cách đi, AI còn tính thêm những khoản thưởng/phạt riêng của nó (không cộng vào điểm game):
+Trick giữ nút (table, T-bog, X-up) game chỉ tính một lần mỗi cú nhảy, dù giữ bao lâu. Tailwhip và barspin thì mỗi vòng được đếm riêng.
+
+### Điểm trình diễn: AI học theo điểm này
+
+Mỗi lượt chạy là một màn trình diễn kỹ năng. **Mỗi cú nhảy được chấm riêng**, không phụ thuộc cú trước. Cú nhảy càng nhiều trick cùng lúc thì càng được nhân điểm.
+
+| Mỗi cú nhảy | Điểm |
+|---|---|
+| Cú đáp: Buttery · Clean · Sketchy · Flat · Cased | 160 · 140 · 100 · 50 · 0 |
+| Mỗi trick (theo độ khó; mỗi vòng đều tính: 720 = hai 360, tailwhip ×3 = ba tailwhip): backflip 450 · 360 300 · whip 150 · tailwhip 125 · table 125 · X-up 100 · barspin 75 · T-bog 75 · 360 table +250 | cộng lại |
+| Hệ số combo cho tổng điểm trick: thêm 0,5 cho mỗi **loại** trick sau loại đầu, thêm 0,25 cho mỗi lần lặp lại | × (1 + 0,5 × (số loại − 1) + 0,25 × số lần lặp) |
+
+Ví dụ với cú đáp Clean:
+
+| Cú nhảy | Cách tính | Điểm |
+|---|---|---|
+| Backflip | 140 + 450 | 590 |
+| Backflip + 360 + tailwhip | 140 + 875 × 2 | 1.890 |
+| Backflip + 720 + tailwhip ×2 + barspin | 140 + 1.375 × 3 | 4.265 |
+
+Cả lượt chạy cộng thêm:
 
 | Thưởng / phạt | Giá trị |
 |---|---|
-| Mỗi trick đáp được (720 tính 2, barspin ×2 tính 2) | +30 |
-| Combo: mỗi cú đáp đẹp liên tiếp × độ dài combo lúc đó (cú thứ 5 liên tiếp +75) | +15 × combo |
+| Mỗi **loại** kỹ năng đã dùng trong lượt (kể cả manual) | +300 |
+| Mỗi giây giữ manual (manual từ 1 giây trở lên, giữ càng lâu càng nhiều) | +60 |
 | Mỗi giây chạy (về đích càng nhanh càng tốt) | −20 |
 | Mỗi cú đáp cased | −200 |
 | Mỗi mét chạy lệch ra ngoài đường | −60 |
