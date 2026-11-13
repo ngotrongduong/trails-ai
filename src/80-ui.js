@@ -118,7 +118,7 @@
     set('.l-log', tx('Nhật ký', 'Log'));
     set('.l-more', tx('Cài đặt & thư viện đường', 'Settings & library'));
     set('.l-drive', tx('AI lái xe thật', 'AI rides for real'));
-    set('.l-share', tx('Chia sẻ video (5 phút/lần)', 'Share a video (every 5 min)'));
+    set('.l-share', tx('Chia sẻ lượt kỷ lục, mời mọi người', 'Share record rides, invite everyone'));
     set('.l-lang', tx('Ngôn ngữ', 'Language'));
     set('.l-lib', tx('Thư viện đường', 'Library of lines'));
     $('.mn').title = tx('Thu gọn', 'Fold'); $('.ren').title = tx('Đổi tên', 'Rename'); $('.eye').title = tx('Xem AI tập', 'Watch the AI learn');

@@ -1148,6 +1148,7 @@ await getUp();
 const st = ses.mem.line.start, L = ses.learner;
 live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
 live.ex.trails_game_reset(live.g);
+if (inviteDue()) try { inviteNow(ui.log); } catch (err) { console.error(err); }
 const R = ses.R, N = R.length, plan = clonePlan(L.plan), rider = makeRider(R, ses.H, ses.secs, plan);
 const d = ses.ride = { plan, rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, expect: L.best };
 const swap = () => {
@@ -1212,6 +1213,7 @@ if (why === 'finish') live.drive = { hold: true, step: () => [0, 127, 0, 0, 0, 0
 ses.rides++;
 const rec = { at: Date.now(), end: why, m, game: d.game, train: d.train, xp: d.xp, lands: d.lands.map(e => [e.k, e.g, e.p, trickText(e.got)]), swaps: d.swaps };
 ses.last = rec;
+const record = why === 'finish' && !!ses.mem && d.game > (ses.mem.realBest || 0);
 if (ses.mem) { ses.mem.rides = (ses.mem.rides || []).concat([rec]).slice(-10); if (why === 'finish') ses.mem.realBest = Math.max(ses.mem.realBest || 0, d.game);
 else if (why !== 'player') { const f = ses.mem.realFar; if (!f || m > f.m || (m === f.m && d.game > f.game)) ses.mem.realFar = { m, game: d.game }; } }
 ui.log(tx(`<b>Lái thật:</b> ${END_WORDS[why][0]} sau ${m} m, <b>${d.game} điểm</b> (Train ${d.train}, kỹ năng ${d.xp}).`, `<b>Real ride:</b> ${END_WORDS[why][1]} after ${m} m, <b>${d.game} points</b> (Train ${d.train}, skill ${d.xp}).`));
@@ -1224,7 +1226,7 @@ if (newly.length) ui.log(tx(`Mô phỏng lạc quan quá ở đoạn ${newly.joi
 if (lineStale(ses.mem.line)) ui.log(tx('<b>Đường trong game đã khác bộ nhớ</b> (có người sửa). Lần mở sau AI sẽ dò lại.', '<b>The line in the game differs from the memory</b> (someone changed it). The AI traces it again next time it opens it.'));
 }
 saveMem(); ui.update();
-if (why === 'finish' && shareDue() && ses.mem) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
+if (record && shareDue()) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
 if (ses.want && ses.aiDrive && !ses.paused) nextRide(why === 'finish' ? 1500 : 2500);
 }
 playerKeys.onKey = () => {
@@ -1282,11 +1284,45 @@ for (let i = 0; i < 120 && !(live.ex && live.g && bikeNow()); i++) await sleep(1
 ses.mem = lib.get(r.id);
 start();
 }
-const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 5 * 60e3, SHARE_CUTS = 6;
+const SHARE = 'trailsai.share', SHARE_AT = 'trailsai.share.at', SHARE_EVERY = 30 * 60e3, SHARE_CUTS = 6;
+const SHARE_TITLE = 'come to join my ride', SHARE_IDS = 'trailsai.share.ids', SHARE_KEEP = 3;
+const INVITE_AT = 'trailsai.invite.at', INVITE_N = 'trailsai.invite.n', INVITE_EVERY = 10 * 60e3;
 const share = { on: (() => { try { return keep.getItem(SHARE) !== '0'; } catch { return true; } })(), busy: false };
-const shareAt = () => +(keep.getItem(SHARE_AT) || 0) || 0;
-const shareDue = () => share.on && !share.busy && Date.now() - shareAt() >= SHARE_EVERY;
+const stamp = k => +(keep.getItem(k) || 0) || 0;
+const setStamp = (k, v) => { try { keep.setItem(k, String(v)); } catch { /* storage blocked */ } };
+const shareDue = () => share.on && !share.busy && Date.now() - stamp(SHARE_AT) >= SHARE_EVERY;
+const inviteDue = () => share.on && !share.busy && Date.now() - stamp(INVITE_AT) >= INVITE_EVERY && cap.ws && cap.ws.readyState === 1;
 function setShare(on) { share.on = on; try { keep.setItem(SHARE, on ? '1' : '0'); } catch { /* storage blocked */ } }
+function chatSend(text) {
+const form = document.querySelector('form.mp-say'), field = form && form.querySelector('input');
+if (!field) return false;
+field.value = text;
+field.dispatchEvent(new Event('input', { bubbles: true }));
+form.requestSubmit();
+return true;
+}
+function inviteNow(say) {
+const n = stamp(INVITE_N), watch = n % 2 === 1;
+if (!chatSend(watch ? '/watchme come watch my ride' : `/invite ${SHARE_TITLE}`)) return;
+setStamp(INVITE_AT, Date.now()); setStamp(INVITE_N, n + 1);
+say(watch ? tx('Đã mời mọi người trong chat <b>vào xem</b> AI lái.', 'Invited everyone in chat <b>to watch</b> the AI ride.') : tx('Đã mời mọi người trong chat <b>vào chạy cùng</b> trên đường này.', 'Invited everyone in chat <b>to ride</b> this line too.'));
+}
+async function pruneVideos() {
+let ids = [];
+try { ids = JSON.parse(keep.getItem(SHARE_IDS) || '[]'); } catch { /* none kept */ }
+const r = await fetch('/api/replays?mine=1', { credentials: 'include' });
+if (!r.ok) return 0;
+const all = (await r.json()).replays || [];
+const ours = all.filter(v => ids.includes(v.id) || /^AI Trails · /.test(v.title || '') || v.title === SHARE_TITLE).sort((a, b) => b.createdAt - a.createdAt);
+let gone = 0;
+for (const v of ours.slice(SHARE_KEEP)) {
+const d = await fetch(`/api/replays/${encodeURIComponent(v.id)}`, { method: 'DELETE', credentials: 'include' });
+if (d.ok) gone++;
+}
+const live = new Set(all.map(v => v.id));
+try { keep.setItem(SHARE_IDS, JSON.stringify(ids.filter(id => live.has(id)).slice(-20))); } catch { /* storage blocked */ }
+return gone;
+}
 const key = (code, k, shiftKey) => { for (const type of ['keydown', 'keyup']) document.body.dispatchEvent(new KeyboardEvent(type, { key: k, code, shiftKey: !!shiftKey, bubbles: true })); };
 const until = async (f, ms) => { for (const t0 = Date.now(); Date.now() - t0 < ms; await sleep(250)) { const v = f(); if (v) return v; } return null; };
 const sharePanel = () => { const c = [...document.querySelectorAll('.rp-caps')].find(e => e.textContent === 'Share this run'); return c && c.parentElement; };
@@ -1367,19 +1403,24 @@ if (!(await until(shut, 1500))) { key('KeyP', 'p'); await until(shut, 3000); }
 }
 async function shareGood(st, m, pts, say) {
 share.busy = true;
-try { keep.setItem(SHARE_AT, String(Date.now())); } catch { /* storage blocked */ }
+setStamp(SHARE_AT, Date.now());
 try {
-const { link, cuts, film } = await shareRun(`AI Trails · ${m} m · ${pts} pts`.slice(0, 60));
+const { link, cuts, film } = await shareRun(SHARE_TITLE);
+const id = (link.match(/\/r\/([^/?#]+)/) || [])[1];
+if (id) { let ids = []; try { ids = JSON.parse(keep.getItem(SHARE_IDS) || '[]'); } catch { /* none kept */ } ids.push(id); try { keep.setItem(SHARE_IDS, JSON.stringify(ids.slice(-20))); } catch { /* storage blocked */ } }
+let invited = chatSend(`/invite ${SHARE_TITLE} ${link}`);
 const ws = cap.ws;
-let invited = false;
-if (ws && ws.readyState === 1 && st && num(st.x) && num(st.z)) {
-ws.send(JSON.stringify({ t: 'chat', text: `My AI just rode this line to the end, no falls, ${pts} pts. Watch: ${link} · come ride it!`.slice(0, 200), invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
+if (!invited && ws && ws.readyState === 1 && st && num(st.x) && num(st.z)) {
+ws.send(JSON.stringify({ t: 'chat', text: `${SHARE_TITLE} ${link}`.slice(0, 200), invite: { x: st.x, z: st.z, heading: st.heading || 0 } }));
 invited = true;
 }
-say(tx(`<b>Đã chia sẻ lượt chạy</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>.${cuts ? ` Video cắt ${cuts} lần camera.` : ''}${film ? ' Đã làm thành video 720p.' : ''}${invited ? ' Đã mời mọi người trong chat.' : ' Chưa gửi được lời mời (game chưa kết nối máy chủ).'}`,
-`<b>Shared the ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>.${cuts ? ` ${cuts} camera cuts.` : ''}${film ? ' Made into a 720p video.' : ''}${invited ? ' Invited everyone in chat.' : ' Could not invite in chat (not connected).'}`));
+if (invited) setStamp(INVITE_AT, Date.now());
+let gone = 0;
+try { gone = await pruneVideos(); } catch (err) { console.error(err); }
+say(tx(`<b>Đã chia sẻ lượt tốt nhất</b> (${m} m, ${pts} điểm): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>.${cuts ? ` Video cắt ${cuts} lần camera.` : ''}${film ? ' Đã làm thành video 720p.' : ''}${invited ? ' Đã mời mọi người trong chat.' : ' Chưa gửi được lời mời (game chưa kết nối máy chủ).'}${gone ? ` Đã xoá ${gone} video cũ của AI.` : ''}`,
+`<b>Shared the best ride</b> (${m} m, ${pts} points): <a href="${esc(link)}" target="_blank" rel="noopener">${esc(link)}</a>.${cuts ? ` ${cuts} camera cuts.` : ''}${film ? ' Made into a 720p video.' : ''}${invited ? ' Invited everyone in chat.' : ' Could not invite in chat (not connected).'}${gone ? ` Deleted ${gone} older AI videos.` : ''}`));
 } catch (err) {
-say(tx(`<b>Chưa chia sẻ được:</b> ${esc(err && err.message || err)}. Thử lại ở lượt đẹp sau 5 phút nữa.`, `<b>Could not share:</b> ${esc(err && err.message || err)}. Trying again on a good ride in 5 minutes.`));
+say(tx(`<b>Chưa chia sẻ được:</b> ${esc(err && err.message || err)}. Thử lại ở lượt kỷ lục sau 30 phút nữa.`, `<b>Could not share:</b> ${esc(err && err.message || err)}. Trying again on a record ride in 30 minutes.`));
 } finally { share.busy = false; }
 }
 const CSS = `
@@ -1497,7 +1538,7 @@ set('.l-last', tx('Lượt lái thật gần nhất', 'Last real ride'));
 set('.l-log', tx('Nhật ký', 'Log'));
 set('.l-more', tx('Cài đặt & thư viện đường', 'Settings & library'));
 set('.l-drive', tx('AI lái xe thật', 'AI rides for real'));
-set('.l-share', tx('Chia sẻ video (5 phút/lần)', 'Share a video (every 5 min)'));
+set('.l-share', tx('Chia sẻ lượt kỷ lục, mời mọi người', 'Share record rides, invite everyone'));
 set('.l-lang', tx('Ngôn ngữ', 'Language'));
 set('.l-lib', tx('Thư viện đường', 'Library of lines'));
 $('.mn').title = tx('Thu gọn', 'Fold'); $('.ren').title = tx('Đổi tên', 'Rename'); $('.eye').title = tx('Xem AI tập', 'Watch the AI learn');

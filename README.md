@@ -78,9 +78,11 @@ Khi so hai cách đi, AI còn tính thêm những khoản thưởng/phạt riên
 ## Tự cập nhật và chia sẻ
 
 - **Tự cập nhật:** cứ 20 phút extension xem có bản AI mới không. Có thì AI lưu bộ nhớ, tải lại trang giữa hai lượt, rồi tự chạy tiếp đúng đường đang học.
-- **Chia sẻ lượt đẹp:** cứ 5 phút một lần, lượt nào về đích không ngã thì AI chia sẻ để được thêm điểm Creator.
-  - AI cắt camera, làm video 720p trong trình sửa của game, đặt tiêu đề rồi tạo link.
-  - Sau đó AI mời mọi người trong chat vào chạy.
+- **Chia sẻ lượt kỷ lục:** chỉ lượt lái thật về đích không ngã và cao điểm hơn mọi lượt trước trên đường đó mới được làm video, nhiều nhất 30 phút một lần (để được thêm điểm Creator).
+  - AI cắt camera, làm video 720p trong trình sửa của game, đặt tiêu đề “come to join my ride” rồi tạo link.
+  - Sau đó AI mời mọi người trong chat vào chạy, kèm link.
+  - Video cũ của AI tự bị xoá, chỉ giữ 3 video mới nhất. Video bạn tự làm thì AI không đụng tới.
+- **Mời mọi người:** cứ 10 phút, lúc bắt đầu một lượt, AI bấm một trong hai nút mời của chat, lần lượt: “Invite everyone to <tên đường>” (vào chạy cùng) và “Invite everyone to watch you” (vào xem).
   - Không có file nào tải về máy bạn.
 
 ## Bộ nhớ
@@ -127,6 +129,6 @@ An AI that teaches itself to ride **one line you choose** in Trails: The Game:
 
 Every trick your account has unlocked is practised, as many as the air allows: several tricks in one jump, the same trick more than once (double barspins, triple tailwhips). Each line's memory goes into a library in your browser. Take the bike to another line's start and the AI saves the old line, opens the new one and carries on there.
 
-It updates itself between rides. Every 5 minutes, a clean finished ride is shared as a video with an invite in the game's chat. The panel speaks Vietnamese by default; switch it to English in its settings.
+It updates itself between rides. A new best clean finished ride (30 minutes apart at most) is shared as a video titled "come to join my ride" with an invite in the game's chat, and the AI's older videos are deleted (the newest 3 kept). Every 10 minutes it also presses the chat's invite to the line or to watch it ride. The panel speaks Vietnamese by default; switch it to English in its settings.
 
 Giấy phép: MIT.

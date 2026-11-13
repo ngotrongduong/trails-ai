@@ -95,7 +95,7 @@ table{border-collapse:collapse;width:100%;font-size:15px}td{border-top:1px solid
 <li>Bấm <b>▶ Bắt đầu</b>. AI nhận đường ở chỗ xe đứng, học trong mô phỏng trên máy bạn (dùng gần hết CPU) và lái xe thật của bạn từ đầu đường, lượt này đến lượt khác. Tìm được cách tốt hơn là lượt sau dùng ngay.</li>
 <li>Muốn lái lấy: bấm phím lái bất kỳ, AI nhường xe nhưng vẫn học tiếp. Đưa xe về đầu đường (hoặc tới đầu một đường khác) rồi đứng yên khoảng 3 giây: AI tự lái tiếp. Đường khác thì AI lưu đường cũ, mở bộ nhớ của đường mới (hoặc bắt đầu học nó) và học tiếp ở đó.</li>
 <li>Mọi đường đã học nằm trong <b>Thư viện đường</b> (mục Cài đặt ở cuối bảng): đổi tên, hoặc quên một đường.</li>
-<li>Lượt nào về đích không ngã thì cứ 5 phút một lần AI chia sẻ thành video (cắt camera, làm video 720p trong trình sửa của game) và mời mọi người trong chat vào chạy.</li>
+<li>Lượt lái thật nào về đích không ngã và đạt điểm cao nhất từ trước tới giờ thì AI làm thành video “come to join my ride” (nhiều nhất 30 phút một lần), mời mọi người trong chat vào chạy và xoá video cũ của AI (giữ 3 cái mới nhất). Cứ 10 phút AI cũng bấm nút mời mọi người vào chạy cùng hoặc vào xem.</li>
 </ol>
 </div>
 

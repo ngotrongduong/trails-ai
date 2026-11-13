@@ -21,7 +21,7 @@ the game. Everything else the earlier versions did is gone:
 | `src/40-learn.js` | the learner (beam search over the plan) and the trick book |
 | `src/50-library.js` | one memory per line, the library index, migration of the old AI's memories |
 | `src/60-drive.js` | the session: open a line, learn it, ride it in the game, switch lines, update the AI |
-| `src/70-share.js` | share a clean finished ride every 5 minutes: video cuts, 720p video, title, link, chat invite |
+| `src/70-share.js` | share a new best clean finished ride (30 minutes apart at most): video cuts, 720p video, the title "come to join my ride", link, chat invite (`/invite` typed into the game's chat box), then the AI's videos beyond the newest 3 deleted (`DELETE /api/replays/<id>`, as Home › Videos does). Every 10 minutes at a ride's start, `/invite` or `/watchme` in turn. |
 | `src/80-ui.js` | the panel |
 | `src/85-watch.js` | the "watch the AI learn" screen (👁). While it is open the roll messages carry `trace: true`, and the worker records `[place along the line, height, x, z]` every 3 steps of each try. After each section's selection the learner hands the round to `on.round` (`{gen, k, K, backs, tries, best, rides: [{tr, end, kid, prog, round, game, kept}]}`) and drops the paths. The screen replays all rides at once, side view or from above (the map turned so the section runs left to right, pieces at their width), with the whole line in a strip below. |
 

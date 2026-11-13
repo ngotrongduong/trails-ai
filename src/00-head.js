@@ -14,9 +14,11 @@
 // - Every line it has learned is kept in this browser (its library). Taken somewhere else and stood still, the bike
 //   is on another line: the AI saves the one it was on, loads the memory of the new one (or starts it fresh) and
 //   learns on there.
-// - Every 5 minutes at most, a ride to the end without a fall is shared as the game's replay (cut into a video in
-//   the game's editor, for the game's Creator score) with an invite to everyone in the chat.
-// - Nothing is sent to the game's server except what a player sends: the share, the chat invite.
+// - A new best ride to the end without a fall, every 30 minutes at most, is shared as the game's replay (cut into a
+//   video in the game's editor, for the game's Creator score, titled "come to join my ride") with an invite to
+//   everyone in the chat; the AI's older videos are deleted (the newest 3 kept). Every 10 minutes it also presses one
+//   of the chat's invites: to the line, or to watch it ride.
+// - Nothing is sent to the game's server except what a player sends: the share, the chat invites, deleting a video.
 (function TAI() {
   'use strict';
   // the browser extension runs the AI before the game starts (__taiDirect), so it needs no frame

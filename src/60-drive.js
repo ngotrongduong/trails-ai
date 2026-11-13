@@ -114,6 +114,7 @@
     const st = ses.mem.line.start, L = ses.learner;
     live.ex.trails_set_spawn_at(live.g, st.x, st.z, st.heading, 0);
     live.ex.trails_game_reset(live.g);
+    if (inviteDue()) try { inviteNow(ui.log); } catch (err) { console.error(err); }
     const R = ses.R, N = R.length, plan = clonePlan(L.plan), rider = makeRider(R, ses.H, ses.secs, plan);
     const d = ses.ride = { plan, rider, known: L.plan, t: 0, seq: null, streak: 0, game: 0, train: 0, xp: 0, lands: [], pending: null, far: -1, farT: 0, calm: 0, coast: null, bigLand: -1, swaps: 0, expect: L.best };
     // a newer plan fits the bike where it is only if it rides the part already passed the same way: the game then
@@ -183,6 +184,7 @@
     ses.rides++;
     const rec = { at: Date.now(), end: why, m, game: d.game, train: d.train, xp: d.xp, lands: d.lands.map(e => [e.k, e.g, e.p, trickText(e.got)]), swaps: d.swaps };
     ses.last = rec;
+    const record = why === 'finish' && !!ses.mem && d.game > (ses.mem.realBest || 0);
     if (ses.mem) { ses.mem.rides = (ses.mem.rides || []).concat([rec]).slice(-10); if (why === 'finish') ses.mem.realBest = Math.max(ses.mem.realBest || 0, d.game);
       // (and the furthest real ride that did not get there, while none has)
       else if (why !== 'player') { const f = ses.mem.realFar; if (!f || m > f.m || (m === f.m && d.game > f.game)) ses.mem.realFar = { m, game: d.game }; } }
@@ -198,7 +200,7 @@
       if (lineStale(ses.mem.line)) ui.log(tx('<b>Đường trong game đã khác bộ nhớ</b> (có người sửa). Lần mở sau AI sẽ dò lại.', '<b>The line in the game differs from the memory</b> (someone changed it). The AI traces it again next time it opens it.'));
     }
     saveMem(); ui.update();
-    if (why === 'finish' && shareDue() && ses.mem) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
+    if (record && shareDue()) { await shareGood(ses.mem.line.start, m, d.game, ui.log); ui.update(); }
     if (ses.want && ses.aiDrive && !ses.paused) nextRide(why === 'finish' ? 1500 : 2500);
   }
 
